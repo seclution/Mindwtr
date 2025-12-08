@@ -2,6 +2,13 @@
 
 All notable changes to Focus GTD will be documented in this file.
 
+## [0.1.1] - 2024-12-07
+
+### Fixed
+- **Release Automation**: Fixed Android keystore generation and asset upload conflicts
+- **Calendar**: Fixed date visibility in dark mode
+- **Linux**: Added proper maintainer info for .deb packages
+
 ## [0.1.0] - 2024-12-07
 
 ### Added
