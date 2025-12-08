@@ -42,7 +42,7 @@ jobs:
             apps/desktop/dist/*.tar.gz
             apps/desktop/dist/*.deb
 
-  # Build Android APK using EAS
+  # Build Android APK using EAS (cloud)
   android:
     runs-on: ubuntu-latest
     name: Android APK Build
@@ -65,10 +65,20 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Build Android APK
+      - name: Build Android APK (EAS Cloud)
         run: |
           cd apps/mobile
-          eas build --platform android --profile preview --non-interactive --local
+          eas build --platform android --profile preview --non-interactive --wait
+        continue-on-error: true
+
+      - name: Download APK from EAS
+        run: |
+          cd apps/mobile
+          # Get the latest build URL and download
+          BUILD_URL=$(eas build:list --platform android --limit 1 --json --non-interactive | jq -r '.[0].artifacts.buildUrl // empty')
+          if [ -n "$BUILD_URL" ]; then
+            curl -L -o focus-gtd-v${{ github.ref_name }}.apk "$BUILD_URL"
+          fi
         continue-on-error: true
 
       - name: Upload Android APK
