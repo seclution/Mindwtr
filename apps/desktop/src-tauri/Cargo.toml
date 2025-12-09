@@ -1,6 +1,6 @@
 [package]
 name = "focus-gtd"
-version = "0.1.2"
+version = "0.1.5"
 description = "A complete Getting Things Done (GTD) productivity system"
 authors = ["DongDong"]
 license = "MIT"

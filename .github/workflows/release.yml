@@ -49,13 +49,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Locate and Move Linux artifacts
+        run: |
+          mkdir -p release-artifacts
+          find apps/desktop/src-tauri/target -name "*.AppImage" -exec cp {} release-artifacts/ \;
+          find apps/desktop/src-tauri/target -name "*.deb" -exec cp {} release-artifacts/ \;
+          ls -la release-artifacts/
+      
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
           name: desktop-linux
-          path: |
-            apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
-            apps/desktop/src-tauri/target/release/bundle/deb/*.deb
+          path: release-artifacts/*
+          if-no-files-found: error
 
   # Build Android APK using EAS Cloud
   android:
