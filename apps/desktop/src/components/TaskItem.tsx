@@ -1,15 +1,16 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import { format } from 'date-fns';
 import { Calendar as CalendarIcon, Tag, Trash2, ArrowRight, Repeat, Check, Plus, Clock, Timer } from 'lucide-react';
-import { Task, TaskStatus, TimeEstimate, getTaskAgeLabel, getTaskStaleness, getTaskUrgency } from '@focus-gtd/core';
+import { Task, TaskStatus, TimeEstimate, getTaskAgeLabel, getTaskStaleness, getTaskUrgency, getStatusColor, Project } from '@focus-gtd/core';
 import { useTaskStore } from '@focus-gtd/core';
 import { cn } from '../lib/utils';
 
 interface TaskItemProps {
     task: Task;
+    project?: Project;
 }
 
-export function TaskItem({ task }: TaskItemProps) {
+export const TaskItem = memo(function TaskItem({ task, project: propProject }: TaskItemProps) {
     const { updateTask, deleteTask, moveTask, projects } = useTaskStore();
     const [isEditing, setIsEditing] = useState(false);
     const [editTitle, setEditTitle] = useState(task.title);
@@ -55,28 +56,13 @@ export function TaskItem({ task }: TaskItemProps) {
         }
     };
 
-    // State Colors
-    const getStateColor = () => {
-        switch (task.status) {
-            case 'todo': return 'border-l-4 border-l-blue-300';
-            case 'next': return 'border-l-4 border-l-blue-500';
-            case 'in-progress': return 'border-l-4 border-l-green-500';
-            case 'waiting': return 'border-l-4 border-l-orange-400';
-            case 'someday': return 'border-l-4 border-l-purple-400';
-            case 'done': return 'border-l-4 border-l-gray-300 bg-muted/30';
-            default: return 'border-l-4 border-l-gray-400'; // Inbox
-        }
-    };
-
-
-
-    const project = projects.find(p => p.id === task.projectId);
+    const project = propProject || projects.find(p => p.id === task.projectId);
 
     return (
-        <div className={cn(
-            "group bg-card border border-border rounded-lg p-4 hover:shadow-md transition-all animate-in fade-in slide-in-from-bottom-2",
-            getStateColor()
-        )}>
+        <div
+            className="group bg-card border border-border rounded-lg p-4 hover:shadow-md transition-all animate-in fade-in slide-in-from-bottom-2 border-l-4"
+            style={{ borderLeftColor: getStatusColor(task.status).border }}
+        >
             <div className="flex items-start gap-3">
                 <input
                     type="checkbox"
@@ -341,11 +327,22 @@ export function TaskItem({ task }: TaskItemProps) {
                             </div>
                         </form>
                     ) : (
-                        <div className="group/content">
+                        <div
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Edit task: ${task.title}, ${task.status}. Press Enter to edit.`}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    setIsEditing(true);
+                                }
+                            }}
+                            onClick={() => setIsEditing(true)}
+                            className="group/content cursor-pointer rounded -ml-2 pl-2 pr-1 py-1 hover:bg-muted/40 focus:bg-muted/40 focus:ring-2 focus:ring-primary focus:outline-none transition-colors"
+                        >
                             <div
-                                onClick={() => setIsEditing(true)}
                                 className={cn(
-                                    "text-base font-medium cursor-pointer truncate hover:text-primary transition-colors",
+                                    "text-base font-medium truncate group-hover/content:text-primary transition-colors",
                                     task.status === 'done' && "line-through text-muted-foreground"
                                 )}
                             >
@@ -353,7 +350,7 @@ export function TaskItem({ task }: TaskItemProps) {
                             </div>
 
                             {task.description && (
-                                <p onClick={() => setIsEditing(true)} className="text-sm text-muted-foreground mt-1 line-clamp-2 cursor-pointer hover:text-foreground">
+                                <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
                                     {task.description}
                                 </p>
                             )}
@@ -464,4 +461,4 @@ export function TaskItem({ task }: TaskItemProps) {
             </div>
         </div >
     );
-}
+});

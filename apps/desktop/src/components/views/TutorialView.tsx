@@ -1,6 +1,17 @@
 import { CheckCircle2, Inbox, Layers, ListTodo, Heart } from 'lucide-react';
 import { useLanguage } from '../../contexts/language-context';
 
+function BoldText({ text, className }: { text: string; className?: string }) {
+    // Simple parser for <strong> tags in translations
+    const parts = text.split(/<\/?strong>/g);
+    return (
+        <p className={className}>
+            {parts.map((part, index) => (
+                index % 2 === 1 ? <strong key={index}>{part}</strong> : part
+            ))}
+        </p>
+    );
+}
 
 export function TutorialView() {
     const { t } = useLanguage();
@@ -25,7 +36,7 @@ export function TutorialView() {
                         {t('tutorial.capture')}
                     </h2>
                     <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
-                        <p className="mb-4 leading-relaxed" dangerouslySetInnerHTML={{ __html: t('tutorial.captureText') }} />
+                        <BoldText className="mb-4 leading-relaxed" text={t('tutorial.captureText')} />
                         <ul className="list-disc list-inside space-y-2 text-muted-foreground ml-4">
                             <li>{t('tutorial.captureList1')}</li>
                             <li>{t('tutorial.captureList2')}</li>
@@ -98,7 +109,7 @@ export function TutorialView() {
                         {t('tutorial.reflect')}
                     </h2>
                     <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
-                        <p className="mb-4 leading-relaxed" dangerouslySetInnerHTML={{ __html: t('tutorial.reflectText') }} />
+                        <BoldText className="mb-4 leading-relaxed" text={t('tutorial.reflectText')} />
                         <p className="text-muted-foreground mb-4">
                             {t('tutorial.reflectHint')}
                         </p>

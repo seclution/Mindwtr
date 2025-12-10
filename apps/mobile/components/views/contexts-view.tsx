@@ -1,10 +1,11 @@
 import { View, Text, ScrollView, Pressable, StyleSheet, TextInput } from 'react-native';
 import { useTaskStore, PRESET_CONTEXTS, sortTasks } from '@focus-gtd/core';
-import type { Task } from '@focus-gtd/core';
+import type { Task, TaskStatus } from '@focus-gtd/core';
 import { useState } from 'react';
 import { useTheme } from '../../contexts/theme-context';
 import { useLanguage } from '../../contexts/language-context';
 import { Colors } from '@/constants/theme';
+import { useThemeColors } from '@/hooks/use-theme-colors';
 import { TaskEditModal } from '../task-edit-modal';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SwipeableTaskItem } from '../swipeable-task-item';
@@ -18,14 +19,7 @@ export function ContextsView() {
   const [searchQuery, setSearchQuery] = useState('');
   const [editingTask, setEditingTask] = useState<Task | null>(null);
 
-  const tc = {
-    bg: isDark ? Colors.dark.background : Colors.light.background,
-    cardBg: isDark ? '#1F2937' : '#FFFFFF',
-    text: isDark ? Colors.dark.text : Colors.light.text,
-    secondaryText: isDark ? '#9CA3AF' : '#6B7280',
-    border: isDark ? '#374151' : '#E5E7EB',
-    inputBg: isDark ? '#374151' : '#F3F4F6',
-  };
+  const tc = useThemeColors();
 
   // Combine preset contexts with contexts from tasks
   const allContexts = Array.from(
@@ -47,8 +41,8 @@ export function ContextsView() {
   // Use standard sort
   const sortedTasks = sortTasks(filteredTasks);
 
-  const handleStatusChange = (taskId: string, newStatus: string) => {
-    updateTask(taskId, { status: newStatus as any });
+  const handleStatusChange = (taskId: string, newStatus: TaskStatus) => {
+    updateTask(taskId, { status: newStatus });
   };
 
   const handleDelete = (taskId: string) => {

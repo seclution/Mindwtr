@@ -1,13 +1,14 @@
 import React, { useCallback, useState } from 'react';
 import { useRouter } from 'expo-router';
 import { View, Text, FlatList, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
-import { useTaskStore, PRESET_CONTEXTS, Task } from '@focus-gtd/core';
+import { useTaskStore, PRESET_CONTEXTS, Task, TaskStatus, Project } from '@focus-gtd/core';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { TaskEditModal } from '@/components/task-edit-modal';
 import { TaskList } from '../../../components/task-list';
 import { useTheme } from '../../../contexts/theme-context';
 import { useLanguage } from '../../../contexts/language-context';
 import { Colors } from '@/constants/theme';
+import { useThemeColors } from '@/hooks/use-theme-colors';
 import { SwipeableTaskItem } from '@/components/swipeable-task-item';
 
 import { sortTasks } from '@focus-gtd/core';
@@ -22,20 +23,21 @@ export default function NextActionsScreen() {
   const [selectedContext, setSelectedContext] = useState<string | null>(null);
 
   // Theme colors
-  const tc = {
-    bg: isDark ? Colors.dark.background : Colors.light.background,
-    cardBg: isDark ? '#1F2937' : '#FFFFFF',
-    text: isDark ? Colors.dark.text : Colors.light.text,
-    secondaryText: isDark ? '#9CA3AF' : '#6B7280',
-    border: isDark ? '#374151' : '#E5E7EB',
-    filterBg: isDark ? '#374151' : '#F3F4F6',
-  };
+  // Theme colors
+  const tc = useThemeColors();
 
   // Get all unique contexts from tasks (merge with presets)
   const allContexts = Array.from(new Set([
     ...PRESET_CONTEXTS,
     ...tasks.flatMap(t => t.contexts || [])
   ])).sort();
+
+  const projectMap = React.useMemo(() => {
+    return projects.reduce((acc, project) => {
+      acc[project.id] = project;
+      return acc;
+    }, {} as Record<string, Project>);
+  }, [projects]);
 
   // For sequential projects, find the first (oldest) next task per project
   const sequentialProjectFirstTasks = React.useMemo(() => {
@@ -60,7 +62,7 @@ export default function NextActionsScreen() {
     if (selectedContext && !t.contexts?.includes(selectedContext)) return false;
     // Sequential project filter
     if (t.projectId) {
-      const project = projects.find(p => p.id === t.projectId);
+      const project = projectMap[t.projectId];
       if (project?.isSequential && !sequentialProjectFirstTasks.has(t.id)) return false;
     }
     return true;
@@ -145,7 +147,7 @@ export default function NextActionsScreen() {
       isDark={isDark}
       tc={tc}
       onPress={() => onEdit(item)}
-      onStatusChange={(status) => updateTask(item.id, { status: status as any })}
+      onStatusChange={(status) => updateTask(item.id, { status })}
       onDelete={() => deleteTask(item.id)}
     />
   ), [onEdit, tc, updateTask, deleteTask, isDark]);

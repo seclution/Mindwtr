@@ -9,6 +9,7 @@ import { SwipeableTaskItem } from './swipeable-task-item';
 import { useTheme } from '../contexts/theme-context';
 import { useLanguage } from '../contexts/language-context';
 import { Colors } from '@/constants/theme';
+import { useThemeColors, ThemeColors } from '@/hooks/use-theme-colors';
 
 export interface TaskListProps {
   statusFilter: TaskStatus | 'all';
@@ -28,14 +29,7 @@ export function TaskList({ statusFilter, title, allowAdd = true, projectId }: Ta
   const [refreshing, setRefreshing] = useState(false);
 
   // Dynamic colors based on theme
-  const themeColors = {
-    background: isDark ? Colors.dark.background : Colors.light.background,
-    text: isDark ? Colors.dark.text : Colors.light.text,
-    border: isDark ? '#374151' : '#e5e5e5',
-    inputBg: isDark ? '#1F2937' : '#f9f9f9',
-    cardBg: isDark ? '#1F2937' : '#f9f9f9',
-    placeholder: isDark ? '#9CA3AF' : '#666',
-  };
+  const themeColors = useThemeColors();
 
   // Memoize filtered tasks for performance
   const filteredTasks = useMemo(() => {
@@ -111,7 +105,7 @@ export function TaskList({ statusFilter, title, allowAdd = true, projectId }: Ta
     <SwipeableTaskItem
       task={item}
       isDark={isDark}
-      tc={themeColors as any}
+      tc={themeColors}
       onPress={() => handleEditTask(item)}
       onStatusChange={(status) => updateTask(item.id, { status: status as TaskStatus })}
       onDelete={() => deleteTask(item.id)}
@@ -119,10 +113,10 @@ export function TaskList({ statusFilter, title, allowAdd = true, projectId }: Ta
   );
 
   return (
-    <View style={[styles.container, { backgroundColor: themeColors.background }]}>
+    <View style={[styles.container, { backgroundColor: themeColors.bg }]}>
       <View style={[styles.header, { borderBottomColor: themeColors.border }]}>
-        <Text style={[styles.title, { color: themeColors.text }]}>{title}</Text>
-        <Text style={[styles.count, { color: themeColors.placeholder }]}>{filteredTasks.length} {t('common.tasks')}</Text>
+        <Text style={[styles.title, { color: themeColors.text }]} accessibilityRole="header">{title}</Text>
+        <Text style={[styles.count, { color: themeColors.secondaryText }]} accessibilityLabel={`${filteredTasks.length} tasks`}>{filteredTasks.length} {t('common.tasks')}</Text>
       </View>
 
       {allowAdd && (
@@ -130,16 +124,21 @@ export function TaskList({ statusFilter, title, allowAdd = true, projectId }: Ta
           <TextInput
             style={[styles.input, { backgroundColor: themeColors.inputBg, borderColor: themeColors.border, color: themeColors.text }]}
             placeholder={`Add task to ${title}... (/todo, /due:, /note:)`}
-            placeholderTextColor={themeColors.placeholder}
+            placeholderTextColor={themeColors.secondaryText}
             value={newTaskTitle}
             onChangeText={setNewTaskTitle}
             onSubmitEditing={handleAddTask}
             returnKeyType="done"
+            accessibilityLabel={`Input new task for ${title}`}
+            accessibilityHint="Type task title, then tap add button or enter"
           />
           <TouchableOpacity
             onPress={handleAddTask}
             style={[styles.addButton, !newTaskTitle.trim() && styles.addButtonDisabled]}
             disabled={!newTaskTitle.trim()}
+            accessibilityLabel="Add Task"
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !newTaskTitle.trim() }}
           >
             <Text style={styles.addButtonText}>+</Text>
           </TouchableOpacity>

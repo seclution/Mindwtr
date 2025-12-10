@@ -5,13 +5,12 @@ import { useTaskStore, Task, TaskStatus, PRESET_CONTEXTS } from '@focus-gtd/core
 import { TaskList } from '../../../components/task-list';
 import { useTheme } from '../../../contexts/theme-context';
 import { useLanguage } from '../../../contexts/language-context';
-import { Colors } from '@/constants/theme';
+import { useThemeColors } from '@/hooks/use-theme-colors';
 
 
 export default function InboxScreen() {
   const router = useRouter();
   const { tasks, updateTask, deleteTask } = useTaskStore();
-  const { isDark } = useTheme();
   const { t } = useLanguage();
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -20,13 +19,7 @@ export default function InboxScreen() {
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
   const [waitingNote, setWaitingNote] = useState('');
 
-  const tc = {
-    bg: isDark ? Colors.dark.background : Colors.light.background,
-    cardBg: isDark ? '#1F2937' : '#FFFFFF',
-    text: isDark ? Colors.dark.text : Colors.light.text,
-    secondaryText: isDark ? '#9CA3AF' : '#6B7280',
-    border: isDark ? '#374151' : '#E5E7EB',
-  };
+  const tc = useThemeColors();
 
   const inboxTasks = tasks.filter(t => t.status === 'inbox' && !t.deletedAt);
   const processingQueue = inboxTasks.filter(t => !skippedIds.has(t.id));

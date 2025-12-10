@@ -85,7 +85,8 @@ class FallbackURL {
         return this.href;
     }
     static createObjectURL() {
-        throw new Error('createObjectURL not supported in this environment');
+        console.warn('[Focus-GTD] URL.createObjectURL called but not supported by shim. Returning empty string to prevent crash.');
+        return '';
     }
     static revokeObjectURL() { }
     static canParse(url, base) {
@@ -119,6 +120,14 @@ const nativeURLSearchParamsWorks = (() => {
 const URLPoly = NativeURL || FallbackURL;
 // Use fallback if native lacks .keys()
 const URLSearchParamsPoly = nativeURLSearchParamsWorks ? NativeURLSearchParams : FallbackURLSearchParams;
+
+// Patch createObjectURL/revokeObjectURL if missing (e.g. strict Hermes)
+if (!URLPoly.createObjectURL) {
+    URLPoly.createObjectURL = FallbackURL.createObjectURL;
+}
+if (!URLPoly.revokeObjectURL) {
+    URLPoly.revokeObjectURL = FallbackURL.revokeObjectURL;
+}
 
 // Set globals at module load time (before exports)
 // This ensures URL is defined before any other module tries to use it

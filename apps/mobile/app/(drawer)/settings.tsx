@@ -16,6 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../../contexts/theme-context';
 import { useLanguage, Language } from '../../contexts/language-context';
 import { Colors } from '@/constants/theme';
+import { useThemeColors } from '@/hooks/use-theme-colors';
 import { useTaskStore, mergeAppData } from '@focus-gtd/core';
 import { mobileStorage } from '../../lib/storage-adapter';
 import { pickAndParseSyncFile, exportData, readSyncFile, writeSyncFile } from '../../lib/storage-file';
@@ -37,13 +38,7 @@ export default function SettingsPage() {
     const [currentScreen, setCurrentScreen] = useState<SettingsScreen>('main');
     const [syncPath, setSyncPath] = useState<string | null>(null);
 
-    const tc = {
-        background: isDark ? Colors.dark.background : Colors.light.background,
-        text: isDark ? Colors.dark.text : Colors.light.text,
-        border: isDark ? '#374151' : '#e5e5e5',
-        cardBg: isDark ? '#1F2937' : '#f9f9f9',
-        secondaryText: isDark ? '#9CA3AF' : '#666',
-    };
+    const tc = useThemeColors();
 
     // Load sync path on mount
     useEffect(() => {
@@ -62,7 +57,7 @@ export default function SettingsPage() {
             const result = await pickAndParseSyncFile();
             if (result) {
                 // Get the file URI that was picked
-                const fileUri = (result as any).__fileUri;
+                const fileUri = (result as { __fileUri: string }).__fileUri;
                 if (fileUri) {
                     await AsyncStorage.setItem(SYNC_PATH_KEY, fileUri);
                     setSyncPath(fileUri);
@@ -147,7 +142,7 @@ export default function SettingsPage() {
     // ============ APPEARANCE SCREEN ============
     if (currentScreen === 'appearance') {
         return (
-            <SafeAreaView style={[styles.container, { backgroundColor: tc.background }]} edges={['bottom']}>
+            <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
                 <SubHeader title={t('settings.appearance')} />
                 <ScrollView style={styles.scrollView}>
                     <View style={[styles.settingCard, { backgroundColor: tc.cardBg }]}>
@@ -186,7 +181,7 @@ export default function SettingsPage() {
     // ============ LANGUAGE SCREEN ============
     if (currentScreen === 'language') {
         return (
-            <SafeAreaView style={[styles.container, { backgroundColor: tc.background }]} edges={['bottom']}>
+            <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
                 <SubHeader title={t('settings.language')} />
                 <ScrollView style={styles.scrollView}>
                     <Text style={[styles.description, { color: tc.secondaryText }]}>{t('settings.selectLang')}</Text>
@@ -210,7 +205,7 @@ export default function SettingsPage() {
     // ============ SYNC SCREEN ============
     if (currentScreen === 'sync') {
         return (
-            <SafeAreaView style={[styles.container, { backgroundColor: tc.background }]} edges={['bottom']}>
+            <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
                 <SubHeader title={t('settings.dataSync')} />
                 <ScrollView style={styles.scrollView}>
                     {/* Step-by-step instructions */}
@@ -290,7 +285,7 @@ export default function SettingsPage() {
     // ============ ABOUT SCREEN ============
     if (currentScreen === 'about') {
         return (
-            <SafeAreaView style={[styles.container, { backgroundColor: tc.background }]} edges={['bottom']}>
+            <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
                 <SubHeader title={t('settings.about')} />
                 <ScrollView style={styles.scrollView}>
                     <View style={[styles.settingCard, { backgroundColor: tc.cardBg }]}>
@@ -326,7 +321,7 @@ export default function SettingsPage() {
 
     // ============ MAIN SETTINGS SCREEN ============
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: tc.background }]} edges={['bottom']}>
+        <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
             <ScrollView style={styles.scrollView}>
                 <View style={[styles.menuCard, { backgroundColor: tc.cardBg }]}>
                     <MenuItem title={t('settings.appearance')} onPress={() => setCurrentScreen('appearance')} />

@@ -1,9 +1,10 @@
 import { View, Text, ScrollView, Pressable, StyleSheet } from 'react-native';
 import { useTaskStore } from '@focus-gtd/core';
-import type { Task } from '@focus-gtd/core';
+import type { Task, TaskStatus } from '@focus-gtd/core';
 import { useTheme } from '../../contexts/theme-context';
 import { useLanguage } from '../../contexts/language-context';
 import { Colors } from '@/constants/theme';
+import { useThemeColors } from '@/hooks/use-theme-colors';
 import { SwipeableTaskItem } from '../swipeable-task-item';
 
 
@@ -13,13 +14,7 @@ export function WaitingView() {
   const { isDark } = useTheme();
   const { t } = useLanguage();
 
-  const tc = {
-    bg: isDark ? Colors.dark.background : Colors.light.background,
-    cardBg: isDark ? '#1F2937' : '#FFFFFF',
-    text: isDark ? Colors.dark.text : Colors.light.text,
-    secondaryText: isDark ? '#9CA3AF' : '#6B7280',
-    border: isDark ? '#374151' : '#E5E7EB',
-  };
+  const tc = useThemeColors();
 
   const waitingTasks = tasks
     .filter((t) => !t.deletedAt && t.status === 'waiting')
@@ -32,7 +27,7 @@ export function WaitingView() {
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
 
-  const handleStatusChange = (id: string, status: 'next' | 'done') => {
+  const handleStatusChange = (id: string, status: TaskStatus) => {
     updateTask(id, { status });
   };
 
@@ -67,7 +62,7 @@ export function WaitingView() {
               isDark={isDark}
               tc={tc}
               onPress={() => { }} // No detail view for now, or maybe expand?
-              onStatusChange={(status) => handleStatusChange(task.id, status as any)}
+              onStatusChange={(status) => handleStatusChange(task.id, status)}
               onDelete={() => deleteTask(task.id)}
             />
           ))

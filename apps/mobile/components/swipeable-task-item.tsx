@@ -1,19 +1,17 @@
 import { View, Text, Pressable, StyleSheet, Modal } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
-import { Task, getTaskAgeLabel, getTaskStaleness, getStatusColor } from '@focus-gtd/core';
+import { Task, getTaskAgeLabel, getTaskStaleness, getStatusColor, TaskStatus } from '@focus-gtd/core';
 import { useRef, useState } from 'react';
+import { ThemeColors } from '../hooks/use-theme-colors';
 
 export interface SwipeableTaskItemProps {
     task: Task;
     isDark: boolean;
     /** Theme colors object with cardBg, text, secondaryText */
-    tc: {
-        cardBg: string;
-        text: string;
-        secondaryText: string;
-    };
+    /** Theme colors object from useThemeColors hook */
+    tc: ThemeColors;
     onPress: () => void;
-    onStatusChange: (status: string) => void;
+    onStatusChange: (status: TaskStatus) => void;
     onDelete: () => void;
     /** Hide context tags (useful when viewing a specific context) */
     hideContexts?: boolean;
@@ -40,7 +38,7 @@ export function SwipeableTaskItem({
     const swipeableRef = useRef<Swipeable>(null);
 
     // Status-aware left swipe action
-    const getLeftAction = () => {
+    const getLeftAction = (): { label: string; color: string; action: TaskStatus } => {
         if (task.status === 'done') {
             return { label: '📦 Archive', color: getStatusColor('archived').text, action: 'archived' };
         } else if (task.status === 'next' || task.status === 'todo') {
@@ -66,6 +64,8 @@ export function SwipeableTaskItem({
                 swipeableRef.current?.close();
                 onStatusChange(leftAction.action);
             }}
+            accessibilityLabel={`${leftAction.label} action`}
+            accessibilityRole="button"
         >
             <Text style={styles.swipeActionText}>{leftAction.label}</Text>
         </Pressable>
@@ -78,12 +78,22 @@ export function SwipeableTaskItem({
                 swipeableRef.current?.close();
                 onDelete();
             }}
+            accessibilityLabel="Delete task"
+            accessibilityRole="button"
         >
             <Text style={styles.swipeActionText}>🗑️ Delete</Text>
         </Pressable>
     );
 
-    const quickStatusOptions = ['inbox', 'todo', 'next', 'in-progress', 'waiting', 'someday', 'done', 'archived'];
+    const quickStatusOptions: TaskStatus[] = ['inbox', 'todo', 'next', 'in-progress', 'waiting', 'someday', 'done', 'archived'];
+
+    const accessibilityLabel = [
+        task.title,
+        `Status: ${task.status}`,
+        task.dueDate ? `Due: ${new Date(task.dueDate).toLocaleDateString()}` : null,
+        task.contexts?.length ? `Contexts: ${task.contexts.join(', ')}` : null,
+        task.timeEstimate ? `Estimate: ${task.timeEstimate}` : null,
+    ].filter(Boolean).join(', ');
 
     return (
         <>
@@ -94,7 +104,13 @@ export function SwipeableTaskItem({
                 overshootLeft={false}
                 overshootRight={false}
             >
-                <Pressable style={[styles.taskItem, { backgroundColor: tc.cardBg }]} onPress={onPress}>
+                <Pressable
+                    style={[styles.taskItem, { backgroundColor: tc.cardBg }]}
+                    onPress={onPress}
+                    accessibilityLabel={accessibilityLabel}
+                    accessibilityHint="Double tap to edit task details. Swipe left to change status, right to delete."
+                    accessibilityRole="button"
+                >
                     <View style={styles.taskContent}>
                         <Text style={[styles.taskTitle, { color: tc.text }]} numberOfLines={2}>
                             {task.title}
@@ -155,8 +171,11 @@ export function SwipeableTaskItem({
                         }}
                         style={[
                             styles.statusBadge,
-                            { backgroundColor: getStatusColor(task.status as any).text }
+                            { backgroundColor: getStatusColor(task.status).text }
                         ]}
+                        accessibilityLabel={`Change status. Current status: ${task.status}`}
+                        accessibilityHint="Double tap to open status menu"
+                        accessibilityRole="button"
                     >
                         <Text style={[
                             styles.statusText,
@@ -179,7 +198,7 @@ export function SwipeableTaskItem({
                         <Text style={[styles.menuTitle, { color: tc.text }]}>Change Status</Text>
                         <View style={styles.menuGrid}>
                             {quickStatusOptions.map(status => {
-                                const colors = getStatusColor(status as any);
+                                const colors = getStatusColor(status as TaskStatus);
                                 return (
                                     <Pressable
                                         key={status}

@@ -12,7 +12,7 @@ vi.mock('../../store/store', () => ({
 
 // Mock TaskItem to simplify testing
 vi.mock('../TaskItem', () => ({
-    TaskItem: ({ task }: { task: any }) => <div data-testid="task-item">{task.title}</div>,
+    TaskItem: ({ task }: { task: import('@focus-gtd/core').Task }) => <div data-testid="task-item">{task.title}</div>,
 }));
 
 describe('ReviewView', () => {

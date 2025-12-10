@@ -4,6 +4,7 @@ import type { Task } from '@focus-gtd/core';
 import { useTheme } from '../../contexts/theme-context';
 import { useLanguage } from '../../contexts/language-context';
 import { Colors } from '@/constants/theme';
+import { useThemeColors, ThemeColors } from '@/hooks/use-theme-colors';
 import { Swipeable, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useRef } from 'react';
 
@@ -16,7 +17,7 @@ function ArchivedTaskItem({
 }: {
     task: Task;
     isDark: boolean;
-    tc: any;
+    tc: ThemeColors;
     onRestore: () => void;
     onDelete: () => void;
 }) {
@@ -79,13 +80,7 @@ export default function ArchivedScreen() {
     const { isDark } = useTheme();
     const { t } = useLanguage();
 
-    const tc = {
-        bg: isDark ? Colors.dark.background : Colors.light.background,
-        cardBg: isDark ? '#1F2937' : '#FFFFFF',
-        text: isDark ? Colors.dark.text : Colors.light.text,
-        secondaryText: isDark ? '#9CA3AF' : '#6B7280',
-        border: isDark ? '#374151' : '#E5E7EB',
-    };
+    const tc = useThemeColors();
 
     // Only show archived tasks (not soft-deleted)
     const archivedTasks = tasks.filter((t) => t.status === 'archived' && !t.deletedAt);

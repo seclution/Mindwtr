@@ -123,31 +123,36 @@ fn set_sync_path(app: tauri::AppHandle, sync_path: String) -> Result<serde_json:
 }
 
 #[tauri::command]
-fn sync_data(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let sync_path_str = get_sync_path(app.clone());
+fn read_sync_file(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let sync_path_str = get_sync_path(app);
     let sync_file = PathBuf::from(&sync_path_str).join("focus-gtd-sync.json");
-    let local_data = get_data(app.clone())?;
     
-    // Read sync file if exists
-    let _sync_data: Option<Value> = if sync_file.exists() {
-        let content = fs::read_to_string(&sync_file).map_err(|e| e.to_string())?;
-        Some(serde_json::from_str(&content).map_err(|e| e.to_string())?)
-    } else {
-        None
-    };
-    
-    // For now, just write local to sync (simple sync)
-    // TODO: Implement proper merge logic
+    if !sync_file.exists() {
+        // Return empty app data structure if file doesn't exist
+        return Ok(serde_json::json!({
+            "tasks": [],
+            "projects": [],
+            "settings": {}
+        }));
+    }
+
+    let content = fs::read_to_string(&sync_file).map_err(|e| e.to_string())?;
+    serde_json::from_str(&content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn write_sync_file(app: tauri::AppHandle, data: Value) -> Result<bool, String> {
+    let sync_path_str = get_sync_path(app);
+    let sync_file = PathBuf::from(&sync_path_str).join("focus-gtd-sync.json");
+
     if let Some(parent) = sync_file.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::write(&sync_file, serde_json::to_string_pretty(&local_data).unwrap())
+
+    fs::write(&sync_file, serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     
-    Ok(serde_json::json!({
-        "success": true,
-        "data": local_data
-    }))
+    Ok(true)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -174,7 +179,8 @@ pub fn run() {
             get_data_path_cmd,
             get_sync_path,
             set_sync_path,
-            sync_data
+            read_sync_file,
+            write_sync_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

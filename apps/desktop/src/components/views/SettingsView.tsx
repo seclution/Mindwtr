@@ -5,6 +5,7 @@ import { useLanguage, Language } from '../../contexts/language-context';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getVersion } from '@tauri-apps/api/app';
+import { mergeAppData, AppData, useTaskStore } from '@focus-gtd/core';
 
 type ThemeMode = 'system' | 'light' | 'dark';
 
@@ -81,14 +82,37 @@ export function SettingsView() {
 
         try {
             setIsSyncing(true);
-            const result = await invoke<{ success: boolean; data: any }>('sync_data');
-            if (result.success) {
-                showSaved();
-                alert('Sync completed successfully!');
-            }
+
+            // 1. Read Local Data
+            const localData = await invoke<AppData>('get_data');
+
+            // 2. Read Sync Data
+            const syncData = await invoke<AppData>('read_sync_file');
+
+            // 3. Merge Strategies
+            // mergeAppData uses Last-Write-Wins (LWW) based on updatedAt
+            const mergedData = mergeAppData(localData, syncData);
+
+            console.log('Sync Merge Stats:', {
+                localTasks: localData.tasks.length,
+                syncTasks: syncData.tasks.length,
+                mergedTasks: mergedData.tasks.length
+            });
+
+            // 4. Write back to Local
+            await invoke('save_data', { data: mergedData });
+
+            // 5. Write back to Sync
+            await invoke('write_sync_file', { data: mergedData });
+
+            // 6. Refresh UI
+            await useTaskStore.getState().fetchData();
+
+            showSaved();
+            alert('Sync completed successfully!');
         } catch (error) {
             console.error('Sync failed', error);
-            alert('Sync failed check console');
+            alert('Sync failed: ' + String(error));
         } finally {
             setIsSyncing(false);
         }

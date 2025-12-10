@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Plus, Play, X, Trash2, Moon, User, CheckCircle } from 'lucide-react';
-import { useTaskStore, TaskStatus, Task, PRESET_CONTEXTS, sortTasks } from '@focus-gtd/core';
+import { useTaskStore, TaskStatus, Task, PRESET_CONTEXTS, sortTasks, Project } from '@focus-gtd/core';
 import { TaskItem } from '../TaskItem';
 import { cn } from '../../lib/utils';
 import { useLanguage } from '../../contexts/language-context';
@@ -31,6 +31,13 @@ export function ListView({ title, statusFilter }: ListViewProps) {
         const taskContexts = tasks.flatMap(t => t.contexts || []);
         return Array.from(new Set([...PRESET_CONTEXTS, ...taskContexts])).sort();
     }, [tasks]);
+
+    const projectMap = useMemo(() => {
+        return projects.reduce((acc, project) => {
+            acc[project.id] = project;
+            return acc;
+        }, {} as Record<string, Project>);
+    }, [projects]);
 
     // For sequential projects, get only the first (oldest) task to show in Next view
     const sequentialProjectFirstTasks = useMemo(() => {
@@ -68,7 +75,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
 
             // Sequential project filter: for 'next' status, only show first task from sequential projects
             if (statusFilter === 'next' && t.projectId) {
-                const project = projects.find(p => p.id === t.projectId);
+                const project = projectMap[t.projectId];
                 if (project?.isSequential) {
                     // Only include if this is the first task
                     if (!sequentialProjectFirstTasks.has(t.id)) return false;
@@ -80,7 +87,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
         });
 
         return sortTasks(filtered);
-    }, [tasks, projects, statusFilter, selectedContext, sequentialProjectFirstTasks]);
+    }, [tasks, projects, statusFilter, selectedContext, sequentialProjectFirstTasks, projectMap]);
 
     const contextCounts = useMemo(() => {
         const counts: Record<string, number> = {};
@@ -549,7 +556,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                     </div>
                 ) : (
                     filteredTasks.map(task => (
-                        <TaskItem key={task.id} task={task} />
+                        <TaskItem key={task.id} task={task} project={task.projectId ? projectMap[task.projectId] : undefined} />
                     ))
                 )}
             </div>

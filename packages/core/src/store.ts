@@ -112,6 +112,10 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     isLoading: false,
     error: null,
 
+    /**
+     * Fetch all data from the configured storage adapter.
+     * hydration is handled here.
+     */
     fetchData: async () => {
         set({ isLoading: true, error: null });
         try {
@@ -126,6 +130,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         }
     },
 
+    /**
+     * Add a new task to the store and persist to storage.
+     * @param title Task title
+     * @param initialProps Optional initial properties
+     */
     addTask: async (title: string, initialProps?: Partial<Task>) => {
         const newTask: Task = {
             id: uuidv4(),
@@ -146,6 +155,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         );
     },
 
+    /**
+     * Update an existing task.
+     * @param id Task ID
+     * @param updates Properties to update
+     */
     updateTask: async (id: string, updates: Partial<Task>) => {
         const newTasks = get().tasks.map((task) =>
             task.id === id
@@ -159,6 +173,10 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         );
     },
 
+    /**
+     * Soft-delete a task by setting deletedAt.
+     * @param id Task ID
+     */
     deleteTask: async (id: string) => {
         // Soft-delete: set deletedAt instead of removing
         const now = new Date().toISOString();
@@ -177,6 +195,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         );
     },
 
+    /**
+     * Move a task to a different status.
+     * @param id Task ID
+     * @param newStatus New status
+     */
     moveTask: async (id: string, newStatus: TaskStatus) => {
         const newTasks = get().tasks.map((task) =>
             task.id === id
@@ -190,6 +213,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         );
     },
 
+    /**
+     * Add a new project.
+     * @param title Project title
+     * @param color Project color hex code
+     */
     addProject: async (title: string, color: string) => {
         const newProject: Project = {
             id: uuidv4(),
@@ -207,6 +235,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         );
     },
 
+    /**
+     * Update an existing project.
+     * @param id Project ID
+     * @param updates Properties to update
+     */
     updateProject: async (id: string, updates: Partial<Project>) => {
         const newProjects = get().projects.map((project) =>
             project.id === id ? { ...project, ...updates, updatedAt: new Date().toISOString() } : project
@@ -218,6 +251,10 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         );
     },
 
+    /**
+     * Soft-delete a project and all its tasks.
+     * @param id Project ID
+     */
     deleteProject: async (id: string) => {
         // Soft-delete: set deletedAt instead of removing
         const now = new Date().toISOString();
@@ -243,6 +280,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         );
     },
 
+    /**
+     * Toggle the focus status of a project.
+     * Enforces a maximum of 5 focused projects.
+     * @param id Project ID
+     */
     toggleProjectFocus: async (id: string) => {
         const projects = get().projects;
         const project = projects.find(p => p.id === id);
@@ -269,6 +311,10 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         );
     },
 
+    /**
+     * Update application settings.
+     * @param updates Settings to update
+     */
     updateSettings: async (updates: Partial<AppData['settings']>) => {
         const newSettings = { ...get().settings, ...updates };
         set({ settings: newSettings });

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTaskStore } from '@focus-gtd/core';
 import { TaskItem } from '../TaskItem';
-import { CheckSquare, Calendar, Layers, Archive, ArrowRight, Check, RefreshCw } from 'lucide-react';
+import { CheckSquare, Calendar, Layers, Archive, ArrowRight, Check, RefreshCw, type LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useLanguage } from '../../contexts/language-context';
 
@@ -13,7 +13,7 @@ export function ReviewView() {
     const { tasks, projects } = useTaskStore();
     const { t } = useLanguage();
 
-    const steps: { id: ReviewStep; title: string; description: string; icon: any }[] = [
+    const steps: { id: ReviewStep; title: string; description: string; icon: LucideIcon }[] = [
         { id: 'intro', title: t('review.title'), description: t('review.intro'), icon: RefreshCw },
         { id: 'inbox', title: t('review.inboxStep'), description: t('review.inboxStepDesc'), icon: CheckSquare },
         { id: 'calendar', title: t('review.calendarStep'), description: t('review.calendarStepDesc'), icon: Calendar },
@@ -126,7 +126,7 @@ export function ReviewView() {
                 const activeProjects = projects.filter(p => p.status === 'active');
                 return (
                     <div className="space-y-6">
-                        <p className="text-muted-foreground" dangerouslySetInnerHTML={{ __html: t('review.projectsHint') }} />
+                        <p className="text-muted-foreground">{t('review.projectsHint')}</p>
                         <div className="space-y-4">
                             {activeProjects.map(project => {
                                 const projectTasks = tasks.filter(task => task.projectId === project.id && task.status !== 'done');

@@ -5,7 +5,7 @@ import { useState } from 'react';
 import type { Task, TaskStatus } from '@focus-gtd/core';
 import { useTheme } from '../../../contexts/theme-context';
 import { useLanguage } from '../../../contexts/language-context';
-import { Colors } from '@/constants/theme';
+import { useThemeColors } from '@/hooks/use-theme-colors';
 import { checkReviewTime, ReviewModal } from '../../../components/review-modal';
 
 const STATUS_OPTIONS: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'done'];
@@ -54,14 +54,8 @@ export default function ReviewScreen() {
   const STATUS_LABELS = getStatusLabels(language as 'en' | 'zh');
 
   // Theme-aware colors
-  const tc = {
-    bg: isDark ? Colors.dark.background : Colors.light.background,
-    cardBg: isDark ? '#1F2937' : '#FFFFFF',
-    text: isDark ? Colors.dark.text : Colors.light.text,
-    secondaryText: isDark ? '#9CA3AF' : '#6B7280',
-    border: isDark ? '#374151' : '#E5E7EB',
-    filterBg: isDark ? '#374151' : '#F3F4F6',
-  };
+  // Theme-aware colors
+  const tc = useThemeColors();
 
   // Filter out archived and deleted tasks first, then apply status filter
   const activeTasks = tasks.filter((t) => t.status !== 'archived' && !t.deletedAt);
@@ -119,7 +113,7 @@ export default function ReviewScreen() {
               setEditingTask(task);
               setIsModalVisible(true);
             }}
-            onStatusChange={(status) => updateTask(task.id, { status: status as any })}
+            onStatusChange={(status) => updateTask(task.id, { status: status as TaskStatus })}
             onDelete={() => deleteTask(task.id)}
           />
         ))}

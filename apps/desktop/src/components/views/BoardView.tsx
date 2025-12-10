@@ -21,7 +21,12 @@ function DroppableColumn({ id, label, tasks }: { id: TaskStatus; label: string; 
                 {label}
                 <span className="text-xs bg-muted px-2 py-0.5 rounded-full text-muted-foreground">{tasks.length}</span>
             </h3>
-            <div className="flex-1 space-y-3 overflow-y-auto min-h-[100px]">
+            <div
+                className="flex-1 space-y-3 overflow-y-auto min-h-[100px] focus:outline-none focus:ring-2 focus:ring-primary/50 rounded-md px-1"
+                tabIndex={0}
+                role="list"
+                aria-label={`${label} tasks list`}
+            >
                 {tasks.map((task) => (
                     <DraggableTask key={task.id} task={task} />
                 ))}

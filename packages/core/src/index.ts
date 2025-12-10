@@ -4,4 +4,5 @@ export * from './store';
 export * from './sync';
 export * from './task-utils';
 export * from './contexts';
+export * from './i18n';
 export { generateUUID } from './uuid';

@@ -5,13 +5,14 @@ import { useTaskStore, Task, Project } from '@focus-gtd/core';
 import { useTheme } from '../../../contexts/theme-context';
 import { useLanguage } from '../../../contexts/language-context';
 import { Colors } from '@/constants/theme';
+import { useThemeColors, ThemeColors } from '@/hooks/use-theme-colors';
 import { SwipeableTaskItem } from '../../../components/swipeable-task-item';
 
 function TaskCard({ task, onPress, onToggleFocus, tc, focusedCount }: {
   task: Task;
   onPress: () => void;
   onToggleFocus?: () => void;
-  tc: any;
+  tc: ThemeColors;
   focusedCount?: number;
 }) {
   const getStatusColor = (status: string) => {
@@ -106,13 +107,8 @@ export default function AgendaScreen() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
   // Theme colors
-  const tc = {
-    bg: isDark ? Colors.dark.background : Colors.light.background,
-    cardBg: isDark ? '#1F2937' : '#FFFFFF',
-    text: isDark ? Colors.dark.text : Colors.light.text,
-    secondaryText: isDark ? '#9CA3AF' : '#6B7280',
-    border: isDark ? '#374151' : '#E5E7EB',
-  };
+  // Theme colors
+  const tc = useThemeColors();
 
   const sections = useMemo(() => {
     const activeTasks = tasks.filter(t => t.status !== 'done' && t.status !== 'archived' && !t.deletedAt);

@@ -2,7 +2,7 @@
 
 import { Text } from 'react-native';
 import { SymbolViewProps } from 'expo-symbols';
-import { OpaqueColorValue, type StyleProp, type TextStyle } from 'react-native';
+import { type StyleProp, type TextStyle } from 'react-native';
 
 type IconMapping = Partial<Record<SymbolViewProps['name'], string>>;
 type IconSymbolName = keyof typeof MAPPING;
@@ -37,9 +37,9 @@ export function IconSymbol({
 }: {
   name: IconSymbolName;
   size?: number;
-  color: string | OpaqueColorValue;
+  color: string;
   style?: StyleProp<TextStyle>;
-  weight?: any;
+  weight?: SymbolViewProps['weight'];
 }) {
   return <Text style={[{ fontSize: size, color }, style]}>{MAPPING[name]}</Text>;
 }

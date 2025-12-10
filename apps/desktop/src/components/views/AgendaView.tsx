@@ -1,8 +1,8 @@
 import { useMemo } from 'react';
-import { useTaskStore, Task, getTaskAgeLabel, getTaskStaleness } from '@focus-gtd/core';
+import { useTaskStore, Task, getTaskAgeLabel, getTaskStaleness, type TaskStatus } from '@focus-gtd/core';
 import { useLanguage } from '../../contexts/language-context';
 import { cn } from '../../lib/utils';
-import { Clock, Star, Calendar, AlertCircle, PlayCircle, ArrowRight } from 'lucide-react';
+import { Clock, Star, Calendar, AlertCircle, PlayCircle, ArrowRight, type LucideIcon } from 'lucide-react';
 
 export function AgendaView() {
     const { tasks, updateTask } = useTaskStore();
@@ -54,7 +54,7 @@ export function AgendaView() {
     };
 
     const handleStatusChange = (taskId: string, status: string) => {
-        updateTask(taskId, { status: status as any });
+        updateTask(taskId, { status: status as TaskStatus });
     };
 
     const TaskCard = ({ task, showFocusToggle = true }: { task: Task; showFocusToggle?: boolean }) => {
@@ -155,7 +155,7 @@ export function AgendaView() {
 
     const Section = ({ title, icon: Icon, tasks, color }: {
         title: string;
-        icon: any;
+        icon: LucideIcon;
         tasks: Task[];
         color: string;
     }) => {

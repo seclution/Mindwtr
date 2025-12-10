@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useTaskStore } from '@focus-gtd/core';
+import { useTaskStore, Task } from '@focus-gtd/core';
 import { TaskItem } from '../TaskItem';
 import { Plus, Folder, Trash2, ListOrdered, ChevronRight, ChevronDown } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -14,6 +14,20 @@ export function ProjectsView() {
     const [newProjectTitle, setNewProjectTitle] = useState('');
     const [newProjectColor, setNewProjectColor] = useState('#3b82f6'); // Default blue
     const [notesExpanded, setNotesExpanded] = useState(false);
+
+    // Group tasks by project to avoid O(N*M) filtering
+    const tasksByProject = projects.reduce((acc, project) => {
+        acc[project.id] = [];
+        return acc;
+    }, {} as Record<string, Task[]>);
+
+    tasks.forEach(task => {
+        if (task.projectId && !task.deletedAt && task.status !== 'done') {
+            if (tasksByProject[task.projectId]) {
+                tasksByProject[task.projectId].push(task);
+            }
+        }
+    });
 
     const handleCreateProject = (e: React.FormEvent) => {
         e.preventDefault();
@@ -89,7 +103,7 @@ export function ProjectsView() {
                             return a.title.localeCompare(b.title);
                         })
                         .map(project => {
-                            const projTasks = tasks.filter(t => t.projectId === project.id && t.status !== 'done' && !t.deletedAt);
+                            const projTasks = tasksByProject[project.id] || [];
                             const nextAction = projTasks.find(t => t.status === 'todo') || projTasks.find(t => t.status === 'next');
                             const focusedCount = projects.filter(p => p.isFocused).length;
 
@@ -250,7 +264,7 @@ export function ProjectsView() {
                         <div className="flex-1 overflow-y-auto space-y-2 pr-2">
                             {projectTasks.length > 0 ? (
                                 projectTasks.map(task => (
-                                    <TaskItem key={task.id} task={task} />
+                                    <TaskItem key={task.id} task={task} project={selectedProject} />
                                 ))
                             ) : (
                                 <div className="text-center text-muted-foreground py-12">

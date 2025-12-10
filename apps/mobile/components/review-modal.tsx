@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { View, Text, Modal, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { useTaskStore } from '@focus-gtd/core';
-import type { Task } from '@focus-gtd/core';
+import type { Task, TaskStatus } from '@focus-gtd/core';
 import { useTheme } from '../contexts/theme-context';
 import { useLanguage } from '../contexts/language-context';
 import { Colors } from '@/constants/theme';
 import { SwipeableTaskItem } from './swipeable-task-item';
 import { TaskEditModal } from './task-edit-modal';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useThemeColors } from '@/hooks/use-theme-colors';
 
 type ReviewStep = 'intro' | 'inbox' | 'waiting' | 'projects' | 'someday' | 'completed';
 
@@ -19,13 +21,11 @@ interface ReviewModalProps {
 // Helper to check review time (kept for backward compatibility)
 export const checkReviewTime = () => {
     try {
-        const lastReview = localStorage?.getItem?.('lastWeeklyReview');
-        if (!lastReview) return true;
+        // Check mobile specific storage or simple default true for now to avoid async issues in sync helper
+        // Ideally this should be async but for UI logic often simple check is enough
+        // For mobile we might check this differently or in a useEffect, but let's default to true if unsure
+        return true;
 
-        const lastDate = new Date(lastReview);
-        const now = new Date();
-        const daysSince = (now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24);
-        return daysSince >= 7;
     } catch {
         return true;
     }
@@ -114,13 +114,7 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
 
     const labels = getReviewLabels(language);
 
-    const tc = {
-        bg: isDark ? Colors.dark.background : Colors.light.background,
-        cardBg: isDark ? '#1F2937' : '#FFFFFF',
-        text: isDark ? Colors.dark.text : Colors.light.text,
-        secondaryText: isDark ? '#9CA3AF' : '#6B7280',
-        border: isDark ? '#374151' : '#E5E7EB',
-    };
+    const tc = useThemeColors();
 
     const steps: { id: ReviewStep; title: string; icon: string }[] = [
         { id: 'intro', title: labels.weeklyReview, icon: '🔄' },
@@ -157,11 +151,20 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
     };
 
     const handleStatusChange = (taskId: string, status: string) => {
-        updateTask(taskId, { status: status as any });
+        updateTask(taskId, { status: status as TaskStatus });
     };
 
     const handleDelete = (taskId: string) => {
         deleteTask(taskId);
+    };
+
+    const handleFinish = async () => {
+        try {
+            await AsyncStorage.setItem('lastWeeklyReview', new Date().toISOString());
+        } catch (e) {
+            console.error('Failed to save review time', e);
+        }
+        handleClose();
     };
 
     const inboxTasks = tasks.filter(t => t.status === 'inbox' && !t.deletedAt);
@@ -354,7 +357,7 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                         <Text style={[styles.description, { color: tc.secondaryText }]}>
                             {labels.completeDesc}
                         </Text>
-                        <TouchableOpacity style={styles.primaryButton} onPress={handleClose}>
+                        <TouchableOpacity style={styles.primaryButton} onPress={handleFinish}>
                             <Text style={styles.primaryButtonText}>
                                 {labels.finish}
                             </Text>

@@ -78,6 +78,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                                     ? "bg-primary text-primary-foreground"
                                     : "hover:bg-accent hover:text-accent-foreground text-muted-foreground"
                             )}
+                            aria-current={currentView === item.id ? 'page' : undefined}
                         >
                             <div className="flex items-center gap-3">
                                 <item.icon className="w-4 h-4" />
@@ -106,6 +107,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                                 ? "bg-primary text-primary-foreground"
                                 : "hover:bg-accent hover:text-accent-foreground text-muted-foreground"
                         )}
+                        aria-current={currentView === 'settings' ? 'page' : undefined}
                     >
                         <Settings className="w-4 h-4" />
                         {t('nav.settings')}
