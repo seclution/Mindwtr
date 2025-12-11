@@ -148,8 +148,6 @@ jobs:
           path: apps/mobile/android-app.apk
           if-no-files-found: error
 
-          if-no-files-found: error
-
   # Optional iOS build (only when manually triggered with build_ios=true)
   ios:
     runs-on: ubuntu-latest
