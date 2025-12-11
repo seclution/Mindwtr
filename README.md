@@ -88,7 +88,7 @@ Download the disk image (`.dmg`) from [GitHub Releases](https://github.com/dongd
 Download the APK from [GitHub Releases](https://github.com/dongdongbh/Focus-GTD/releases).
 
 **iOS:**
-Coming soon via TestFlight.
+iOS builds require an Apple Developer account ($99/year). Currently available as simulator builds only.
 
 ## Data Storage
 
