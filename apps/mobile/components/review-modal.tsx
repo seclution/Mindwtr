@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, Modal, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
-import { useTaskStore } from '@mindwtr/core';
+import { useTaskStore, isDueForReview } from '@mindwtr/core';
 import type { Task, TaskStatus } from '@mindwtr/core';
 import { useTheme } from '../contexts/theme-context';
 import { useLanguage } from '../contexts/language-context';
@@ -161,7 +161,16 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
     const inboxTasks = tasks.filter(t => t.status === 'inbox' && !t.deletedAt);
     const waitingTasks = tasks.filter(t => t.status === 'waiting' && !t.deletedAt);
     const somedayTasks = tasks.filter(t => t.status === 'someday' && !t.deletedAt);
+    const waitingDue = waitingTasks.filter(t => isDueForReview(t.reviewAt));
+    const waitingFuture = waitingTasks.filter(t => !isDueForReview(t.reviewAt));
+    const orderedWaitingTasks = [...waitingDue, ...waitingFuture];
+    const somedayDue = somedayTasks.filter(t => isDueForReview(t.reviewAt));
+    const somedayFuture = somedayTasks.filter(t => !isDueForReview(t.reviewAt));
+    const orderedSomedayTasks = [...somedayDue, ...somedayFuture];
     const activeProjects = projects.filter(p => p.status === 'active');
+    const dueProjects = activeProjects.filter(p => isDueForReview(p.reviewAt));
+    const futureProjects = activeProjects.filter(p => !isDueForReview(p.reviewAt));
+    const orderedProjects = [...dueProjects, ...futureProjects];
 
     const renderTaskList = (taskList: Task[]) => (
         <ScrollView style={styles.taskList}>
@@ -242,7 +251,7 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                                 </Text>
                             </View>
                         ) : (
-                            renderTaskList(waitingTasks)
+                            renderTaskList(orderedWaitingTasks)
                         )}
                     </View>
                 );
@@ -264,8 +273,8 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                             </View>
                         ) : (
                             <ScrollView style={styles.taskList}>
-                                {activeProjects.map(project => {
-                                    const projectTasks = tasks.filter(task => task.projectId === project.id && task.status !== 'done' && !task.deletedAt);
+	                                {orderedProjects.map(project => {
+                                    const projectTasks = tasks.filter(task => task.projectId === project.id && task.status !== 'done' && task.status !== 'archived' && !task.deletedAt);
                                     // A project has next action if it has tasks in 'next' OR 'todo' (todo = identified next action for project)
                                     const hasNextAction = projectTasks.some(task => task.status === 'next' || task.status === 'todo');
                                     const isExpanded = expandedProject === project.id;
@@ -333,7 +342,7 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                                 </Text>
                             </View>
                         ) : (
-                            renderTaskList(somedayTasks)
+                            renderTaskList(orderedSomedayTasks)
                         )}
                     </View>
                 );

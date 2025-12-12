@@ -10,15 +10,17 @@
 bun install                   # install all workspace deps
 bun desktop:dev               # run Tauri desktop app in dev
 bun desktop:build             # production desktop bundle
-bun run --filter gtd-todo-app lint   # desktop lint (ESLint)
-bun run --filter gtd-todo-app test   # desktop unit/component tests (Vitest)
+bun run --filter mindwtr lint        # desktop lint (ESLint)
+bun run --filter mindwtr test        # desktop unit/component tests (Vitest)
+bun run --filter @mindwtr/core test  # core unit tests (Vitest)
 bun mobile:start              # start Expo dev server
 bun mobile:android | ios      # launch Expo on emulator/simulator
+bun run --filter mobile test         # mobile unit tests (Vitest)
 ```
 Run commands from the repo root. Tauri builds require Rust toolchain + system webview libs; Expo needs Android/iOS tooling or Expo Go.
 
 ## Coding Style & Naming Conventions
-- TypeScript-first; prefer functional React components with hooks. Use 4-space indent and keep imports sorted logically (external, workspace, relative).
+- TypeScript-first; prefer functional React components with hooks. Use 4-space indent in core/desktop; mobile generally follows 2-space React Native style—match the local file’s conventions. Keep imports sorted logically (external, workspace, relative).
 - Components and context providers use `PascalCase`, hooks `useSomething`, utility modules kebab-case (e.g., `storage-adapter.ts`). Tests mirror the module name with `.test.tsx`.
 - Styling: Tailwind CSS in desktop, NativeWind in mobile. Keep utility classes readable (group by layout, spacing, color).
 - Lint with project configs before pushing; avoid disabling rules unless justified inline.
@@ -32,5 +34,9 @@ Run commands from the repo root. Tauri builds require Rust toolchain + system we
 - PRs should include: concise summary, linked issue (if any), test evidence (commands run + results), and screenshots/recordings for UI changes. Note platform impact (desktop/mobile/both) and any migration or data considerations.
 
 ## Environment & Configuration Tips
-- Desktop data persists under `~/.config/tech.dongdongbh.mindwtr/` (platform equivalents on macOS/Windows); avoid committing sample data.
+- Desktop uses Tauri `app_config_dir` and `app_data_dir`:
+  - Linux config: `~/.config/tech.dongdongbh.mindwtr/config.json`
+  - Linux data: `~/.local/share/tech.dongdongbh.mindwtr/data.json`
+  - Paths differ on macOS/Windows via Tauri defaults.
+  Avoid committing sample data.
 - Set Android SDK paths when working on mobile (`ANDROID_HOME`, `PATH` updates). Keep API keys or signing material out of the repo; use local env files or CI secrets.

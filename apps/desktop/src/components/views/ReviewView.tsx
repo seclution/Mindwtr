@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useTaskStore } from '@mindwtr/core';
+import { useTaskStore, isDueForReview } from '@mindwtr/core';
 import { TaskItem } from '../TaskItem';
 import { CheckSquare, Calendar, Layers, Archive, ArrowRight, Check, RefreshCw, type LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -105,6 +105,8 @@ export function ReviewView() {
 
             case 'waiting':
                 const waitingTasks = tasks.filter(t => t.status === 'waiting');
+                const waitingDue = waitingTasks.filter(t => isDueForReview(t.reviewAt));
+                const waitingFuture = waitingTasks.filter(t => !isDueForReview(t.reviewAt));
                 return (
                     <div className="space-y-4">
                         <p className="text-muted-foreground">
@@ -116,7 +118,21 @@ export function ReviewView() {
                                     <p>{t('review.waitingEmpty')}</p>
                                 </div>
                             ) : (
-                                waitingTasks.map(task => <TaskItem key={task.id} task={task} />)
+                                <>
+                                    {waitingDue.length > 0 && waitingDue.map(task => (
+                                        <TaskItem key={task.id} task={task} />
+                                    ))}
+                                    {waitingFuture.length > 0 && (
+                                        <div className="pt-4">
+                                            <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-2">
+                                                Not due yet
+                                            </h4>
+                                            {waitingFuture.map(task => (
+                                                <TaskItem key={task.id} task={task} />
+                                            ))}
+                                        </div>
+                                    )}
+                                </>
                             )}
                         </div>
                     </div>
@@ -124,13 +140,16 @@ export function ReviewView() {
 
             case 'projects':
                 const activeProjects = projects.filter(p => p.status === 'active');
+                const dueProjects = activeProjects.filter(p => isDueForReview(p.reviewAt));
+                const futureProjects = activeProjects.filter(p => !isDueForReview(p.reviewAt));
+                const orderedProjects = [...dueProjects, ...futureProjects];
                 return (
                     <div className="space-y-6">
                         <p className="text-muted-foreground">{t('review.projectsHint')}</p>
                         <div className="space-y-4">
-                            {activeProjects.map(project => {
-                                const projectTasks = tasks.filter(task => task.projectId === project.id && task.status !== 'done');
-                                const hasNextAction = projectTasks.some(task => task.status === 'next');
+                            {orderedProjects.map(project => {
+                                const projectTasks = tasks.filter(task => task.projectId === project.id && task.status !== 'done' && task.status !== 'archived');
+                                const hasNextAction = projectTasks.some(task => task.status === 'next' || task.status === 'todo');
 
                                 return (
                                     <div key={project.id} className="border border-border rounded-lg p-4">
@@ -166,6 +185,8 @@ export function ReviewView() {
 
             case 'someday':
                 const somedayTasks = tasks.filter(t => t.status === 'someday');
+                const somedayDue = somedayTasks.filter(t => isDueForReview(t.reviewAt));
+                const somedayFuture = somedayTasks.filter(t => !isDueForReview(t.reviewAt));
                 return (
                     <div className="space-y-4">
                         <p className="text-muted-foreground">
@@ -177,7 +198,21 @@ export function ReviewView() {
                                     <p>{t('review.listEmpty')}</p>
                                 </div>
                             ) : (
-                                somedayTasks.map(task => <TaskItem key={task.id} task={task} />)
+                                <>
+                                    {somedayDue.length > 0 && somedayDue.map(task => (
+                                        <TaskItem key={task.id} task={task} />
+                                    ))}
+                                    {somedayFuture.length > 0 && (
+                                        <div className="pt-4">
+                                            <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-2">
+                                                Not due yet
+                                            </h4>
+                                            {somedayFuture.map(task => (
+                                                <TaskItem key={task.id} task={task} />
+                                            ))}
+                                        </div>
+                                    )}
+                                </>
                             )}
                         </div>
                     </div>

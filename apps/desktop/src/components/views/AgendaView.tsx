@@ -1,12 +1,12 @@
 import { useMemo } from 'react';
-import { useTaskStore, Task, getTaskAgeLabel, getTaskStaleness, type TaskStatus, safeFormatDate, safeParseDate } from '@mindwtr/core';
+import { useTaskStore, Task, getTaskAgeLabel, getTaskStaleness, type TaskStatus, safeFormatDate, safeParseDate, isDueForReview } from '@mindwtr/core';
 import { useLanguage } from '../../contexts/language-context';
 import { cn } from '../../lib/utils';
 import { Clock, Star, Calendar, AlertCircle, PlayCircle, ArrowRight, type LucideIcon } from 'lucide-react';
 
 export function AgendaView() {
     const { tasks, updateTask } = useTaskStore();
-    const { t } = useLanguage();
+    const { t, language } = useLanguage();
 
     // Filter active tasks
     const activeTasks = useMemo(() =>
@@ -43,7 +43,13 @@ export function AgendaView() {
             t.status === 'next' && !t.isFocusedToday
         ).slice(0, 5);
 
-        return { inProgress, overdue, dueToday, nextActions };
+        const reviewDue = activeTasks.filter(t =>
+            (t.status === 'waiting' || t.status === 'someday') &&
+            isDueForReview(t.reviewAt, now) &&
+            !t.isFocusedToday
+        );
+
+        return { inProgress, overdue, dueToday, nextActions, reviewDue };
     }, [activeTasks]);
 
     const handleToggleFocus = (taskId: string) => {
@@ -63,7 +69,7 @@ export function AgendaView() {
 
     const TaskCard = ({ task, showFocusToggle = true }: { task: Task; showFocusToggle?: boolean }) => {
         const canFocus = task.isFocusedToday || focusedCount < 3;
-        const ageLabel = getTaskAgeLabel(task.createdAt);
+        const ageLabel = getTaskAgeLabel(task.createdAt, language);
         const staleness = getTaskStaleness(task.createdAt);
 
         return (
@@ -92,7 +98,7 @@ export function AgendaView() {
                                     task.status === 'todo' && "bg-green-500",
                                     task.status === 'waiting' && "bg-orange-500"
                                 )}>
-                                    {task.status}
+                                    {t(`status.${task.status}`)}
                                 </span>
                             )}
 
@@ -135,7 +141,13 @@ export function AgendaView() {
                                             ? "text-muted-foreground hover:text-yellow-500 hover:bg-muted"
                                             : "text-muted-foreground/30 cursor-not-allowed"
                                 )}
-                                title={task.isFocusedToday ? "Remove from focus" : focusedCount >= 3 ? "Max 3 focus items" : "Add to today's focus"}
+                                title={
+                                    task.isFocusedToday
+                                        ? t('agenda.removeFromFocus')
+                                        : focusedCount >= 3
+                                            ? t('agenda.maxFocusItems')
+                                            : t('agenda.addToFocus')
+                                }
                             >
                                 <Star className={cn("w-4 h-4", task.isFocusedToday && "fill-current")} />
                             </button>
@@ -146,10 +158,10 @@ export function AgendaView() {
                             onChange={(e) => handleStatusChange(task.id, e.target.value)}
                             className="text-xs px-2 py-1 rounded bg-muted border border-border"
                         >
-                            <option value="todo">Todo</option>
-                            <option value="next">Next</option>
-                            <option value="in-progress">In Progress</option>
-                            <option value="done">Done</option>
+                            <option value="todo">{t('status.todo')}</option>
+                            <option value="next">{t('status.next')}</option>
+                            <option value="in-progress">{t('status.in-progress')}</option>
+                            <option value="done">{t('status.done')}</option>
                         </select>
                     </div>
                 </div>
@@ -213,7 +225,7 @@ export function AgendaView() {
                     </div>
                 ) : (
                     <p className="text-muted-foreground text-center py-4">
-                        ⭐ Click the star on any task below to add it to today's focus (max 3)
+                        ⭐ {t('agenda.focusHint')}
                     </p>
                 )}
             </div>
@@ -246,6 +258,13 @@ export function AgendaView() {
                     icon={ArrowRight}
                     tasks={sections.nextActions}
                     color="text-blue-600"
+                />
+
+                <Section
+                    title={t('agenda.reviewDue') || 'Review Due'}
+                    icon={Clock}
+                    tasks={sections.reviewDue}
+                    color="text-purple-600"
                 />
             </div>
 

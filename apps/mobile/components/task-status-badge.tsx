@@ -10,26 +10,19 @@ import {
     Pressable
 } from 'react-native';
 import { TaskStatus, getStatusColor } from '@mindwtr/core';
+import { useLanguage } from '../contexts/language-context';
 
 interface TaskStatusBadgeProps {
     status: TaskStatus;
     onUpdate: (status: TaskStatus) => void;
 }
 
-const STATUS_LABELS: Record<TaskStatus, string> = {
-    inbox: 'Inbox',
-    todo: 'Todo',
-    next: 'Next',
-    'in-progress': 'In Progress',
-    waiting: 'Waiting',
-    someday: 'Someday',
-    done: 'Done',
-    archived: 'Archived',
-};
-
 export function TaskStatusBadge({ status, onUpdate }: TaskStatusBadgeProps) {
     const [modalVisible, setModalVisible] = useState(false);
     const colors = getStatusColor(status);
+    const { t } = useLanguage();
+
+    const getStatusLabel = (s: TaskStatus) => t(`status.${s}`);
 
     const handlePress = () => {
         // Determine relevant options based on current status
@@ -37,11 +30,11 @@ export function TaskStatusBadge({ status, onUpdate }: TaskStatusBadgeProps) {
         const options: TaskStatus[] = ['todo', 'next', 'in-progress', 'waiting', 'done', 'archived'];
 
         if (Platform.OS === 'ios') {
-            const labels = options.map(s => STATUS_LABELS[s]);
+            const labels = options.map(s => getStatusLabel(s));
             const cancelIndex = labels.length;
             ActionSheetIOS.showActionSheetWithOptions(
                 {
-                    options: [...labels, 'Cancel'],
+                    options: [...labels, t('common.cancel')],
                     cancelButtonIndex: cancelIndex,
                 },
                 (buttonIndex) => {
@@ -75,7 +68,7 @@ export function TaskStatusBadge({ status, onUpdate }: TaskStatusBadgeProps) {
                     styles.text,
                     { color: colors.text }
                 ]}>
-                    {STATUS_LABELS[status] || status}
+                    {getStatusLabel(status)}
                 </Text>
             </TouchableOpacity>
 
@@ -93,7 +86,7 @@ export function TaskStatusBadge({ status, onUpdate }: TaskStatusBadgeProps) {
                         style={styles.modalContent}
                         onPress={(e) => e.stopPropagation()}
                     >
-                        <Text style={styles.modalTitle}>Change Status</Text>
+                        <Text style={styles.modalTitle}>{t('taskStatus.changeStatus')}</Text>
                         <ScrollView contentContainerStyle={styles.optionsList}>
                             {ANDROID_OPTIONS.map((opt) => {
                                 const optColors = getStatusColor(opt);
@@ -111,7 +104,7 @@ export function TaskStatusBadge({ status, onUpdate }: TaskStatusBadgeProps) {
                                             styles.optionText,
                                             opt === status && styles.optionTextActive
                                         ]}>
-                                            {STATUS_LABELS[opt]}
+                                            {getStatusLabel(opt)}
                                         </Text>
                                     </Pressable>
                                 );
@@ -121,7 +114,7 @@ export function TaskStatusBadge({ status, onUpdate }: TaskStatusBadgeProps) {
                             style={styles.cancelButton}
                             onPress={() => setModalVisible(false)}
                         >
-                            <Text style={styles.cancelButtonText}>Cancel</Text>
+                            <Text style={styles.cancelButtonText}>{t('common.cancel')}</Text>
                         </Pressable>
                     </Pressable>
                 </Pressable>

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { generateUUID as uuidv4 } from './uuid';
 import { Task, TaskStatus, AppData, Project } from './types';
 import { StorageAdapter, noopStorage } from './storage';
+import { createNextRecurringTask } from './recurrence';
 
 let storage: StorageAdapter = noopStorage;
 
@@ -182,14 +183,53 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
      */
     updateTask: async (id: string, updates: Partial<Task>) => {
         const now = new Date().toISOString();
-        // Update in full data
+        const oldTask = get()._allTasks.find((t) => t.id === id);
+
+        if (!oldTask) {
+            const newAllTasks = get()._allTasks.map((task) =>
+                task.id === id ? { ...task, ...updates, updatedAt: now } : task
+            );
+            const newVisibleTasks = newAllTasks.filter((t) => !t.deletedAt);
+            set({ tasks: newVisibleTasks, _allTasks: newAllTasks });
+            debouncedSave(
+                { tasks: newAllTasks, projects: get()._allProjects, settings: get().settings },
+                (msg) => set({ error: msg })
+            );
+            return;
+        }
+
+        const incomingStatus = updates.status ?? oldTask.status;
+        const statusChanged = incomingStatus !== oldTask.status;
+
+        let finalUpdates: Partial<Task> = updates;
+        let nextRecurringTask: Task | null = null;
+
+        if (statusChanged && (incomingStatus === 'done' || incomingStatus === 'archived')) {
+            finalUpdates = {
+                ...updates,
+                status: incomingStatus,
+                completedAt: now,
+                isFocusedToday: false,
+            };
+            nextRecurringTask = createNextRecurringTask(oldTask, now, oldTask.status);
+        } else if (statusChanged && (oldTask.status === 'done' || oldTask.status === 'archived')) {
+            // If un-completing, clear completedAt
+            finalUpdates = {
+                ...updates,
+                status: incomingStatus,
+                completedAt: undefined,
+            };
+        }
+
         const newAllTasks = get()._allTasks.map((task) =>
-            task.id === id ? { ...task, ...updates, updatedAt: now } : task
+            task.id === id ? { ...task, ...finalUpdates, updatedAt: now } : task
         );
-        // Update visible tasks
-        const newVisibleTasks = get().tasks.map((task) =>
-            task.id === id ? { ...task, ...updates, updatedAt: now } : task
-        );
+
+        if (nextRecurringTask) {
+            newAllTasks.push(nextRecurringTask);
+        }
+
+        const newVisibleTasks = newAllTasks.filter((t) => !t.deletedAt);
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, settings: get().settings },
@@ -223,20 +263,8 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
      * @param newStatus New status
      */
     moveTask: async (id: string, newStatus: TaskStatus) => {
-        const now = new Date().toISOString();
-        // Update in full data
-        const newAllTasks = get()._allTasks.map((task) =>
-            task.id === id ? { ...task, status: newStatus, updatedAt: now } : task
-        );
-        // Update visible tasks
-        const newVisibleTasks = get().tasks.map((task) =>
-            task.id === id ? { ...task, status: newStatus, updatedAt: now } : task
-        );
-        set({ tasks: newVisibleTasks, _allTasks: newAllTasks });
-        debouncedSave(
-            { tasks: newAllTasks, projects: get()._allProjects, settings: get().settings },
-            (msg) => set({ error: msg })
-        );
+        // Delegate to updateTask to ensure recurrence/metadata logic is applied
+        await get().updateTask(id, { status: newStatus });
     },
 
     /**
@@ -269,15 +297,58 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
      */
     updateProject: async (id: string, updates: Partial<Project>) => {
         const now = new Date().toISOString();
-        const newAllProjects = get()._allProjects.map((project) =>
-            project.id === id ? { ...project, ...updates, updatedAt: now } : project
+        const allProjects = get()._allProjects;
+        const oldProject = allProjects.find(p => p.id === id);
+
+        const incomingStatus = updates.status ?? oldProject?.status;
+        const statusChanged = !!oldProject && !!incomingStatus && incomingStatus !== oldProject.status;
+
+        let newAllTasks = get()._allTasks;
+
+        if (statusChanged && (incomingStatus === 'completed' || incomingStatus === 'archived')) {
+            const taskStatus = incomingStatus === 'completed' ? 'done' : 'archived';
+            newAllTasks = newAllTasks.map(task => {
+                if (
+                    task.projectId === id &&
+                    !task.deletedAt &&
+                    task.status !== 'done' &&
+                    task.status !== 'archived'
+                ) {
+                    return {
+                        ...task,
+                        status: taskStatus,
+                        completedAt: now,
+                        isFocusedToday: false,
+                        updatedAt: now,
+                    };
+                }
+                return task;
+            });
+        }
+
+        const finalProjectUpdates: Partial<Project> = {
+            ...updates,
+            ...(statusChanged && (incomingStatus === 'completed' || incomingStatus === 'archived')
+                ? { isFocused: false }
+                : {}),
+        };
+
+        const newAllProjects = allProjects.map(project =>
+            project.id === id ? { ...project, ...finalProjectUpdates, updatedAt: now } : project
         );
-        const newVisibleProjects = get().projects.map((project) =>
-            project.id === id ? { ...project, ...updates, updatedAt: now } : project
-        );
-        set({ projects: newVisibleProjects, _allProjects: newAllProjects });
+
+        const newVisibleProjects = newAllProjects.filter(p => !p.deletedAt);
+        const newVisibleTasks = newAllTasks.filter(t => !t.deletedAt);
+
+        set({
+            projects: newVisibleProjects,
+            _allProjects: newAllProjects,
+            tasks: newVisibleTasks,
+            _allTasks: newAllTasks,
+        });
+
         debouncedSave(
-            { tasks: get()._allTasks, projects: newAllProjects, settings: get().settings },
+            { tasks: newAllTasks, projects: newAllProjects, settings: get().settings },
             (msg) => set({ error: msg })
         );
     },
@@ -358,4 +429,3 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         );
     },
 }));
-

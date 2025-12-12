@@ -3,6 +3,7 @@ import { useTaskStore, safeParseDate } from '@mindwtr/core';
 import type { Task } from '@mindwtr/core';
 import { useState } from 'react';
 import { useTheme } from '../../contexts/theme-context';
+import { useLanguage } from '../../contexts/language-context';
 import { Colors } from '@/constants/theme';
 
 // Simple date utilities (avoiding date-fns dependency)
@@ -29,6 +30,7 @@ function isToday(date: Date): boolean {
 export function CalendarView() {
   const { tasks, addTask } = useTaskStore();
   const { isDark } = useTheme();
+  const { t, language } = useLanguage();
   const today = new Date();
   const [currentMonth, setCurrentMonth] = useState(today.getMonth());
   const [currentYear, setCurrentYear] = useState(today.getFullYear());
@@ -47,11 +49,15 @@ export function CalendarView() {
 
   const daysInMonth = getDaysInMonth(currentYear, currentMonth);
   const firstDay = getFirstDayOfMonth(currentYear, currentMonth);
-  const monthNames = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-  ];
-  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const locale = language === 'zh' ? 'zh-CN' : 'en-US';
+  const monthLabel = new Date(currentYear, currentMonth, 1).toLocaleDateString(locale, {
+    year: 'numeric',
+    month: 'long',
+  });
+  const dayNames = Array.from({ length: 7 }, (_, i) => {
+    const base = new Date(2021, 7, 1 + i); // Aug 1, 2021 is a Sunday
+    return base.toLocaleDateString(locale, { weekday: 'short' });
+  });
 
   const getTasksForDay = (day: number): Task[] => {
     const date = new Date(currentYear, currentMonth, day);
@@ -109,7 +115,7 @@ export function CalendarView() {
           <Text style={[styles.navButtonText]}>‹</Text>
         </Pressable>
         <Text style={[styles.title, { color: tc.text }]}>
-          {monthNames[currentMonth]} {currentYear}
+          {monthLabel}
         </Text>
         <Pressable onPress={handleNextMonth} style={styles.navButton}>
           <Text style={[styles.navButtonText]}>›</Text>
@@ -174,7 +180,7 @@ export function CalendarView() {
         {selectedDate && (
           <View style={[styles.selectedDateSection, { backgroundColor: tc.cardBg }]}>
             <Text style={[styles.selectedDateTitle, { color: tc.text }]}>
-              {selectedDate.toLocaleDateString('en-US', {
+              {selectedDate.toLocaleDateString(locale, {
                 weekday: 'long',
                 year: 'numeric',
                 month: 'long',
@@ -187,7 +193,7 @@ export function CalendarView() {
                 style={[styles.input, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
                 value={newTaskTitle}
                 onChangeText={setNewTaskTitle}
-                placeholder="Add new task..."
+                placeholder={t('calendar.addTask')}
                 placeholderTextColor="#9CA3AF"
               />
               <Pressable
@@ -195,7 +201,7 @@ export function CalendarView() {
                 onPress={handleAddTask}
                 disabled={!newTaskTitle.trim()}
               >
-                <Text style={styles.addButtonText}>Add</Text>
+                <Text style={styles.addButtonText}>{t('common.add')}</Text>
               </Pressable>
             </View>
 
@@ -209,7 +215,7 @@ export function CalendarView() {
                     <Text style={[styles.taskItemTime, { color: tc.secondaryText }]}>
                       {(() => {
                         const date = safeParseDate(task.startTime);
-                        return date ? date.toLocaleTimeString('en-US', {
+                        return date ? date.toLocaleTimeString(locale, {
                           hour: '2-digit',
                           minute: '2-digit',
                         }) : '';
@@ -219,7 +225,7 @@ export function CalendarView() {
                 </View>
               ))}
               {getTasksForDay(selectedDate.getDate()).length === 0 && (
-                <Text style={[styles.noTasks, { color: tc.secondaryText }]}>No tasks for this day</Text>
+                <Text style={[styles.noTasks, { color: tc.secondaryText }]}>{t('calendar.noTasks')}</Text>
               )}
             </View>
           </View>

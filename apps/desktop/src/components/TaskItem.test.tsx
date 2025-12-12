@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { TaskItem } from '../components/TaskItem';
 import { Task } from '@mindwtr/core';
+import { LanguageProvider } from '../contexts/language-context';
 
 // Mock store
 const mocks = vi.hoisted(() => ({
@@ -35,18 +36,30 @@ const mockTask: Task = {
 
 describe('TaskItem', () => {
     it('renders task title', () => {
-        render(<TaskItem task={mockTask} />);
+        render(
+            <LanguageProvider>
+                <TaskItem task={mockTask} />
+            </LanguageProvider>
+        );
         expect(screen.getByText('Test Task')).toBeInTheDocument();
     });
 
     it('enters edit mode on click', () => {
-        render(<TaskItem task={mockTask} />);
+        render(
+            <LanguageProvider>
+                <TaskItem task={mockTask} />
+            </LanguageProvider>
+        );
         fireEvent.click(screen.getByText('Test Task'));
         expect(screen.getByDisplayValue('Test Task')).toBeInTheDocument();
     });
 
     it('calls moveTask when checkbox is clicked', () => {
-        render(<TaskItem task={mockTask} />);
+        render(
+            <LanguageProvider>
+                <TaskItem task={mockTask} />
+            </LanguageProvider>
+        );
         const checkbox = screen.getByRole('checkbox');
         fireEvent.click(checkbox);
         expect(mocks.moveTask).toHaveBeenCalledWith('1', 'done');

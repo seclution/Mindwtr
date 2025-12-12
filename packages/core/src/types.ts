@@ -10,6 +10,7 @@ export interface Project {
     isSequential?: boolean; // If true, only first incomplete task shows in Next Actions
     isFocused?: boolean; // If true, this project is a priority focus (max 5 allowed)
     supportNotes?: string;
+    reviewAt?: string; // Tickler/review date (ISO string). If set, project is due for review at/after this time.
     createdAt: string;
     updatedAt: string;
     deletedAt?: string; // Soft-delete: if set, this item is considered deleted
@@ -36,6 +37,8 @@ export interface Task {
     projectId?: string;
     isFocusedToday?: boolean; // Marked as today's priority (Top 3 focus)
     timeEstimate?: TimeEstimate; // Estimated time to complete
+    reviewAt?: string; // Tickler/review date (ISO string). If set, task is due for review at/after this time.
+    completedAt?: string; // ISO timestamp when task was last completed/archived.
     createdAt: string;
     updatedAt: string;
     deletedAt?: string; // Soft-delete: if set, this item is considered deleted

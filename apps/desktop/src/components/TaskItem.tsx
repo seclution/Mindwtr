@@ -1,10 +1,18 @@
 import { useState, memo } from 'react';
 
 import { Calendar as CalendarIcon, Tag, Trash2, ArrowRight, Repeat, Check, Plus, Clock, Timer } from 'lucide-react';
-import { Task, TaskStatus, TimeEstimate, getTaskAgeLabel, getTaskStaleness, getTaskUrgency, getStatusColor, Project, safeFormatDate } from '@mindwtr/core';
+import { Task, TaskStatus, TimeEstimate, getTaskAgeLabel, getTaskStaleness, getTaskUrgency, getStatusColor, Project, safeFormatDate, safeParseDate } from '@mindwtr/core';
 import { useTaskStore } from '@mindwtr/core';
 import { cn } from '../lib/utils';
+import { useLanguage } from '../contexts/language-context';
 
+// Convert stored ISO or datetime-local strings into datetime-local input values.
+function toDateTimeLocalValue(dateStr: string | undefined): string {
+    if (!dateStr) return '';
+    const parsed = safeParseDate(dateStr);
+    if (!parsed) return dateStr;
+    return safeFormatDate(parsed, "yyyy-MM-dd'T'HH:mm", dateStr);
+}
 
 interface TaskItemProps {
     task: Task;
@@ -13,10 +21,11 @@ interface TaskItemProps {
 
 export const TaskItem = memo(function TaskItem({ task, project: propProject }: TaskItemProps) {
     const { updateTask, deleteTask, moveTask, projects, tasks } = useTaskStore();
+    const { t, language } = useLanguage();
     const [isEditing, setIsEditing] = useState(false);
     const [editTitle, setEditTitle] = useState(task.title);
-    const [editDueDate, setEditDueDate] = useState(task.dueDate || '');
-    const [editStartTime, setEditStartTime] = useState(task.startTime || '');
+    const [editDueDate, setEditDueDate] = useState(toDateTimeLocalValue(task.dueDate));
+    const [editStartTime, setEditStartTime] = useState(toDateTimeLocalValue(task.startTime));
     const [editProjectId, setEditProjectId] = useState(task.projectId || '');
     const [editContexts, setEditContexts] = useState(task.contexts?.join(', ') || '');
     const [editTags, setEditTags] = useState(task.tags?.join(', ') || '');
@@ -24,6 +33,9 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
     const [editLocation, setEditLocation] = useState(task.location || '');
     const [editRecurrence, setEditRecurrence] = useState(task.recurrence || '');
     const [editTimeEstimate, setEditTimeEstimate] = useState<TimeEstimate | ''>(task.timeEstimate || '');
+    const [editReviewAt, setEditReviewAt] = useState(toDateTimeLocalValue(task.reviewAt));
+
+    const ageLabel = getTaskAgeLabel(task.createdAt, language);
 
     const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         moveTask(task.id, e.target.value as TaskStatus);
@@ -42,7 +54,8 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
                 description: editDescription || undefined,
                 location: editLocation || undefined,
                 recurrence: editRecurrence || undefined,
-                timeEstimate: editTimeEstimate || undefined
+                timeEstimate: editTimeEstimate || undefined,
+                reviewAt: editReviewAt || undefined,
             });
             setIsEditing(false);
         }
@@ -85,22 +98,22 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
                                 value={editTitle}
                                 onChange={(e) => setEditTitle(e.target.value)}
                                 className="w-full bg-transparent border-b border-primary/50 p-1 text-base font-medium focus:ring-0 focus:border-primary outline-none"
-                                placeholder="Task title"
+                                placeholder={t('taskEdit.titleLabel')}
                             />
                             <div className="flex flex-col gap-1">
-                                <label className="text-xs text-muted-foreground font-medium">Description</label>
+                                <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.descriptionLabel')}</label>
                                 <textarea
                                     aria-label="Task description"
                                     value={editDescription}
                                     onChange={(e) => setEditDescription(e.target.value)}
                                     className="text-xs bg-muted/50 border border-border rounded px-2 py-1 min-h-[60px] resize-y"
-                                    placeholder="Add notes..."
+                                    placeholder={t('taskEdit.descriptionPlaceholder')}
                                 />
                             </div>
-                            <div className="flex flex-wrap gap-4">
-                                <div className="flex flex-col gap-1">
-                                    <label className="text-xs text-muted-foreground font-medium">Start Time</label>
-                                    <input
+	                            <div className="flex flex-wrap gap-4">
+	                                <div className="flex flex-col gap-1">
+	                                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.startDateLabel')}</label>
+	                                    <input
                                         type="datetime-local"
                                         aria-label="Start time"
                                         value={editStartTime}
@@ -108,93 +121,103 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
                                         className="text-xs bg-muted/50 border border-border rounded px-2 py-1"
                                     />
                                 </div>
-                                <div className="flex flex-col gap-1">
-                                    <label className="text-xs text-muted-foreground font-medium">Deadline</label>
-                                    <input
-                                        type="datetime-local"
-                                        aria-label="Deadline"
-                                        value={editDueDate}
-                                        onChange={(e) => setEditDueDate(e.target.value)}
-                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1"
-                                    />
-                                </div>
-                                <div className="flex flex-col gap-1">
-                                    <label className="text-xs text-muted-foreground font-medium">Status</label>
-                                    <select
+		                                <div className="flex flex-col gap-1">
+		                                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.dueDateLabel')}</label>
+		                                    <input
+	                                        type="datetime-local"
+	                                        aria-label="Deadline"
+	                                        value={editDueDate}
+	                                        onChange={(e) => setEditDueDate(e.target.value)}
+	                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1"
+	                                    />
+	                                </div>
+		                                <div className="flex flex-col gap-1">
+		                                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.reviewDateLabel')}</label>
+		                                    <input
+	                                        type="datetime-local"
+	                                        aria-label="Review date"
+	                                        value={editReviewAt}
+	                                        onChange={(e) => setEditReviewAt(e.target.value)}
+	                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1"
+	                                    />
+	                                </div>
+		                                <div className="flex flex-col gap-1">
+		                                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.statusLabel')}</label>
+		                                    <select
                                         value={task.status}
                                         aria-label="Status"
                                         onChange={handleStatusChange}
                                         className="text-xs bg-muted/50 border border-border rounded px-2 py-1"
-                                    >
-                                        <option value="inbox">Inbox</option>
-                                        <option value="todo">Todo</option>
-                                        <option value="next">Next</option>
-                                        <option value="in-progress">In Progress</option>
-                                        <option value="waiting">Waiting</option>
-                                        <option value="someday">Someday</option>
-                                        <option value="done">Done</option>
-                                        <option value="archived">Archived</option>
-                                    </select>
-                                </div>
-                                <div className="flex flex-col gap-1">
-                                    <label className="text-xs text-muted-foreground font-medium">Project</label>
-                                    <select
+		                                    >
+		                                        <option value="inbox">{t('status.inbox')}</option>
+		                                        <option value="todo">{t('status.todo')}</option>
+		                                        <option value="next">{t('status.next')}</option>
+		                                        <option value="in-progress">{t('status.in-progress')}</option>
+		                                        <option value="waiting">{t('status.waiting')}</option>
+		                                        <option value="someday">{t('status.someday')}</option>
+		                                        <option value="done">{t('status.done')}</option>
+		                                        <option value="archived">{t('status.archived')}</option>
+		                                    </select>
+		                                </div>
+		                                <div className="flex flex-col gap-1">
+		                                    <label className="text-xs text-muted-foreground font-medium">{t('projects.title')}</label>
+		                                    <select
                                         value={editProjectId}
                                         aria-label="Project"
                                         onChange={(e) => setEditProjectId(e.target.value)}
-                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1"
-                                    >
-                                        <option value="">No Project</option>
-                                        {projects.map(p => (
-                                            <option key={p.id} value={p.id}>{p.title}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div className="flex flex-col gap-1">
-                                    <label className="text-xs text-muted-foreground font-medium">Location</label>
-                                    <input
+		                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1"
+		                                    >
+		                                        <option value="">{t('taskEdit.noProjectOption')}</option>
+		                                        {projects.map(p => (
+		                                            <option key={p.id} value={p.id}>{p.title}</option>
+		                                        ))}
+		                                    </select>
+		                                </div>
+		                                <div className="flex flex-col gap-1">
+		                                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.locationLabel')}</label>
+		                                    <input
                                         type="text"
                                         aria-label="Location"
                                         value={editLocation}
                                         onChange={(e) => setEditLocation(e.target.value)}
-                                        placeholder="e.g. Office"
-                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1"
-                                    />
-                                </div>
-                                <div className="flex flex-col gap-1 w-full">
-                                    <label className="text-xs text-muted-foreground font-medium">Recurrence</label>
-                                    <select
+		                                        placeholder={t('taskEdit.locationPlaceholder')}
+		                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1"
+		                                    />
+		                                </div>
+		                                <div className="flex flex-col gap-1 w-full">
+		                                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.recurrenceLabel')}</label>
+		                                    <select
                                         value={editRecurrence}
                                         aria-label="Recurrence"
-                                        onChange={(e) => setEditRecurrence(e.target.value)}
-                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1 w-full"
-                                    >
-                                        <option value="">None</option>
-                                        <option value="daily">Daily</option>
-                                        <option value="weekly">Weekly</option>
-                                        <option value="monthly">Monthly</option>
-                                        <option value="yearly">Yearly</option>
-                                    </select>
-                                </div>
-                                <div className="flex flex-col gap-1 w-full">
-                                    <label className="text-xs text-muted-foreground font-medium">Time Estimate</label>
-                                    <select
+		                                        onChange={(e) => setEditRecurrence(e.target.value)}
+		                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1 w-full"
+		                                    >
+		                                        <option value="">{t('recurrence.none')}</option>
+		                                        <option value="daily">{t('recurrence.daily')}</option>
+		                                        <option value="weekly">{t('recurrence.weekly')}</option>
+		                                        <option value="monthly">{t('recurrence.monthly')}</option>
+		                                        <option value="yearly">{t('recurrence.yearly')}</option>
+		                                    </select>
+		                                </div>
+		                                <div className="flex flex-col gap-1 w-full">
+		                                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.timeEstimateLabel')}</label>
+		                                    <select
                                         value={editTimeEstimate}
                                         aria-label="Time estimate"
-                                        onChange={(e) => setEditTimeEstimate(e.target.value as TimeEstimate | '')}
-                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1 w-full"
-                                    >
-                                        <option value="">No estimate</option>
-                                        <option value="5min">5 minutes</option>
-                                        <option value="15min">15 minutes</option>
-                                        <option value="30min">30 minutes</option>
-                                        <option value="1hr">1 hour</option>
-                                        <option value="2hr+">2+ hours</option>
-                                    </select>
-                                </div>
-                                <div className="flex flex-col gap-1 w-full">
-                                    <label className="text-xs text-muted-foreground font-medium">Contexts (comma separated)</label>
-                                    <input
+		                                        onChange={(e) => setEditTimeEstimate(e.target.value as TimeEstimate | '')}
+		                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1 w-full"
+		                                    >
+		                                        <option value="">{t('common.none')}</option>
+		                                        <option value="5min">5m</option>
+		                                        <option value="15min">15m</option>
+		                                        <option value="30min">30m</option>
+		                                        <option value="1hr">1h</option>
+		                                        <option value="2hr+">2h+</option>
+		                                    </select>
+		                                </div>
+		                                <div className="flex flex-col gap-1 w-full">
+		                                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.contextsLabel')}</label>
+		                                    <input
                                         type="text"
                                         aria-label="Contexts"
                                         value={editContexts}
@@ -233,7 +256,7 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
                                     </div>
                                 </div>
                                 <div className="flex flex-col gap-1 w-full">
-                                    <label className="text-xs text-muted-foreground font-medium">Tags (comma separated)</label>
+                                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.tagsLabel')}</label>
                                     <input
                                         type="text"
                                         aria-label="Tags"
@@ -292,7 +315,7 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
                                     </div>
                                 </div>
                                 <div className="flex flex-col gap-2 w-full pt-2 border-t border-border/50">
-                                    <label className="text-xs text-muted-foreground font-medium">Checklist</label>
+                                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.checklist')}</label>
                                     <div className="space-y-2">
                                         {(task.checklist || []).map((item, index) => (
                                             <div key={item.id || index} className="flex items-center gap-2 group/item">
@@ -326,7 +349,7 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
                                                         "flex-1 bg-transparent text-sm focus:outline-none border-b border-transparent focus:border-primary/50 px-1",
                                                         item.isCompleted && "text-muted-foreground line-through"
                                                     )}
-                                                    placeholder="Item name"
+                                                    placeholder={t('taskEdit.itemNamePlaceholder')}
                                                 />
                                                 <button
                                                     type="button"
@@ -355,7 +378,7 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
                                             className="text-xs text-blue-500 hover:text-blue-600 font-medium flex items-center gap-1"
                                         >
                                             <Plus className="w-3 h-3" />
-                                            Add Item
+                                            {t('taskEdit.addItem')}
                                         </button>
                                     </div>
                                 </div>
@@ -380,14 +403,14 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
                                     type="submit"
                                     className="text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded hover:bg-primary/90"
                                 >
-                                    Save
+                                    {t('common.save')}
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => setIsEditing(false)}
                                     className="text-xs bg-muted text-muted-foreground px-3 py-1.5 rounded hover:bg-muted/80"
                                 >
-                                    Cancel
+                                    {t('common.cancel')}
                                 </button>
                             </div>
                         </form>
@@ -428,26 +451,26 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
                                     </div>
                                 )}
                                 {task.startTime && (
-                                    <div className="flex items-center gap-1 text-blue-500/80" title="Start Time">
+                                    <div className="flex items-center gap-1 text-blue-500/80" title={t('taskEdit.startDateLabel')}>
                                         <ArrowRight className="w-3 h-3" />
                                         {safeFormatDate(task.startTime, 'MMM d, HH:mm')}
                                     </div>
                                 )}
                                 {task.dueDate && (
-                                    <div className={cn("flex items-center gap-1", getUrgencyColor())} title="Deadline">
+                                    <div className={cn("flex items-center gap-1", getUrgencyColor())} title={t('taskEdit.dueDateLabel')}>
                                         <CalendarIcon className="w-3 h-3" />
                                         {safeFormatDate(task.dueDate, 'MMM d, HH:mm')}
                                     </div>
                                 )}
                                 {task.location && (
-                                    <div className="flex items-center gap-1 text-muted-foreground" title="Location">
+                                    <div className="flex items-center gap-1 text-muted-foreground" title={t('taskEdit.locationLabel')}>
                                         <span className="font-medium">📍 {task.location}</span>
                                     </div>
                                 )}
                                 {task.recurrence && (
-                                    <div className="flex items-center gap-1 text-purple-600" title="Recurrence">
+                                    <div className="flex items-center gap-1 text-purple-600" title={t('taskEdit.recurrenceLabel')}>
                                         <Repeat className="w-3 h-3" />
-                                        <span className="capitalize">{task.recurrence}</span>
+                                        <span>{t(`recurrence.${task.recurrence}`)}</span>
                                     </div>
                                 )}
                                 {task.contexts?.length > 0 && (
@@ -466,7 +489,7 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
                                     </div>
                                 )}
                                 {/* Task Age Indicator */}
-                                {task.status !== 'done' && getTaskAgeLabel(task.createdAt) && (
+                                {task.status !== 'done' && task.status !== 'archived' && ageLabel && (
                                     <div className={cn(
                                         "flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full",
                                         getTaskStaleness(task.createdAt) === 'fresh' && 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
@@ -475,7 +498,7 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
                                         getTaskStaleness(task.createdAt) === 'very-stale' && 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
                                     )} title="Task age">
                                         <Clock className="w-3 h-3" />
-                                        {getTaskAgeLabel(task.createdAt)}
+                                        {ageLabel}
                                     </div>
                                 )}
                                 {/* Time Estimate Badge */}
@@ -505,14 +528,14 @@ export const TaskItem = memo(function TaskItem({ task, project: propProject }: T
                             onChange={handleStatusChange}
                             className="text-xs px-2 py-1 rounded cursor-pointer bg-white text-black border border-slate-400 hover:bg-slate-100"
                         >
-                            <option value="inbox">Inbox</option>
-                            <option value="todo">Todo</option>
-                            <option value="next">Next</option>
-                            <option value="in-progress">In Progress</option>
-                            <option value="someday">Someday</option>
-                            <option value="waiting">Waiting</option>
-                            <option value="done">Done</option>
-                            <option value="archived">Archived</option>
+                            <option value="inbox">{t('status.inbox')}</option>
+                            <option value="todo">{t('status.todo')}</option>
+                            <option value="next">{t('status.next')}</option>
+                            <option value="in-progress">{t('status.in-progress')}</option>
+                            <option value="someday">{t('status.someday')}</option>
+                            <option value="waiting">{t('status.waiting')}</option>
+                            <option value="done">{t('status.done')}</option>
+                            <option value="archived">{t('status.archived')}</option>
                         </select>
 
                         <button

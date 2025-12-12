@@ -37,21 +37,22 @@ export function SwipeableTaskItem({
     hideContexts = false
 }: SwipeableTaskItemProps) {
     const swipeableRef = useRef<Swipeable>(null);
+    const { t, language } = useLanguage();
 
     // Status-aware left swipe action
     const getLeftAction = (): { label: string; color: string; action: TaskStatus } => {
         if (task.status === 'done') {
-            return { label: '📦 Archive', color: getStatusColor('archived').text, action: 'archived' };
+            return { label: `📦 ${t('projects.archive')}`, color: getStatusColor('archived').text, action: 'archived' };
         } else if (task.status === 'next' || task.status === 'todo') {
-            return { label: '▶️ Start', color: getStatusColor('in-progress').text, action: 'in-progress' };
+            return { label: `▶️ ${t('taskEdit.start')}`, color: getStatusColor('in-progress').text, action: 'in-progress' };
         } else if (task.status === 'in-progress') {
-            return { label: '✓ Done', color: getStatusColor('done').text, action: 'done' };
+            return { label: `✓ ${t('common.done')}`, color: getStatusColor('done').text, action: 'done' };
         } else if (task.status === 'waiting' || task.status === 'someday') {
-            return { label: '▶️ Next', color: getStatusColor('next').text, action: 'next' };
+            return { label: `▶️ ${t('status.next')}`, color: getStatusColor('next').text, action: 'next' };
         } else if (task.status === 'inbox') {
-            return { label: '✓ Done', color: getStatusColor('done').text, action: 'done' };
+            return { label: `✓ ${t('common.done')}`, color: getStatusColor('done').text, action: 'done' };
         } else {
-            return { label: '✓ Done', color: getStatusColor('done').text, action: 'done' };
+            return { label: `✓ ${t('common.done')}`, color: getStatusColor('done').text, action: 'done' };
         }
     };
 
@@ -82,7 +83,7 @@ export function SwipeableTaskItem({
             accessibilityLabel="Delete task"
             accessibilityRole="button"
         >
-            <Text style={styles.swipeActionText}>🗑️ Delete</Text>
+            <Text style={styles.swipeActionText}>🗑️ {t('common.delete')}</Text>
         </Pressable>
     );
 
@@ -123,7 +124,7 @@ export function SwipeableTaskItem({
                         )}
                         {task.dueDate && (
                             <Text style={styles.taskDueDate}>
-                                Due: {safeFormatDate(task.dueDate, 'P')}
+                                {t('taskEdit.dueDateLabel')}: {safeFormatDate(task.dueDate, 'P')}
                             </Text>
                         )}
                         {!hideContexts && task.contexts && task.contexts.length > 0 && (
@@ -136,7 +137,7 @@ export function SwipeableTaskItem({
                             </View>
                         )}
                         {/* Task Age Indicator */}
-                        {task.status !== 'done' && getTaskAgeLabel(task.createdAt) && (
+                        {task.status !== 'done' && task.status !== 'archived' && getTaskAgeLabel(task.createdAt, language) && (
                             <View style={[
                                 styles.ageBadge,
                                 getTaskStaleness(task.createdAt) === 'fresh' && styles.ageFresh,
@@ -150,7 +151,7 @@ export function SwipeableTaskItem({
                                     getTaskStaleness(task.createdAt) === 'aging' && styles.ageTextAging,
                                     getTaskStaleness(task.createdAt) === 'stale' && styles.ageTextStale,
                                     getTaskStaleness(task.createdAt) === 'very-stale' && styles.ageTextVeryStale,
-                                ]}>⏱ {getTaskAgeLabel(task.createdAt)}</Text>
+                                ]}>⏱ {getTaskAgeLabel(task.createdAt, language)}</Text>
                             </View>
                         )}
                         {/* Time Estimate Badge */}

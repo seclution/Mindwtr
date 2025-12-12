@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, Modal, StyleSheet, TouchableOpacity, ScrollView, Platform, KeyboardAvoidingView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Task, TaskStatus, TimeEstimate, useTaskStore, generateUUID, PRESET_TAGS } from '@mindwtr/core';
+import { Task, TaskStatus, TimeEstimate, useTaskStore, generateUUID, PRESET_TAGS, RecurrenceRule, RECURRENCE_RULES } from '@mindwtr/core';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import { useLanguage } from '../contexts/language-context';
 
 interface TaskEditModalProps {
     visible: boolean;
@@ -13,19 +14,12 @@ interface TaskEditModalProps {
 }
 
 const STATUS_OPTIONS: TaskStatus[] = ['inbox', 'todo', 'next', 'in-progress', 'waiting', 'someday', 'done', 'archived'];
-const TIME_ESTIMATE_OPTIONS: { value: TimeEstimate | ''; label: string }[] = [
-    { value: '', label: 'None' },
-    { value: '5min', label: '5m' },
-    { value: '15min', label: '15m' },
-    { value: '30min', label: '30m' },
-    { value: '1hr', label: '1h' },
-    { value: '2hr+', label: '2h+' },
-];
 
 export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: TaskEditModalProps) {
     const { tasks } = useTaskStore();
+    const { t } = useLanguage();
     const [editedTask, setEditedTask] = useState<Partial<Task>>({});
-    const [showDatePicker, setShowDatePicker] = useState<'start' | 'due' | null>(null);
+    const [showDatePicker, setShowDatePicker] = useState<'start' | 'due' | 'review' | null>(null);
     const [focusMode, setFocusMode] = useState(false);
 
     // Compute most frequent tags from all tasks
@@ -95,16 +89,35 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
         if (selectedDate && currentMode) {
             if (currentMode === 'start') {
                 setEditedTask(prev => ({ ...prev, startTime: selectedDate.toISOString() }));
-            } else {
+            } else if (currentMode === 'due') {
                 setEditedTask(prev => ({ ...prev, dueDate: selectedDate.toISOString() }));
+            } else {
+                setEditedTask(prev => ({ ...prev, reviewAt: selectedDate.toISOString() }));
             }
         }
     };
 
     const formatDate = (dateStr?: string) => {
-        if (!dateStr) return 'Not set';
+        if (!dateStr) return t('common.notSet');
         return new Date(dateStr).toLocaleDateString();
     };
+
+    const timeEstimateOptions: { value: TimeEstimate | ''; label: string }[] = [
+        { value: '', label: t('common.none') },
+        { value: '5min', label: '5m' },
+        { value: '15min', label: '15m' },
+        { value: '30min', label: '30m' },
+        { value: '1hr', label: '1h' },
+        { value: '2hr+', label: '2h+' },
+    ];
+
+    const recurrenceOptions: { value: RecurrenceRule | ''; label: string }[] = [
+        { value: '', label: t('recurrence.none') },
+        ...RECURRENCE_RULES.map((rule) => ({
+            value: rule,
+            label: t(`recurrence.${rule}`),
+        })),
+    ];
 
     const toggleContext = (tag: string) => {
         const current = editedTask.contexts || [];
@@ -124,9 +137,9 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
             <SafeAreaView style={styles.container} edges={['top']}>
                 <View style={styles.header}>
                     <TouchableOpacity onPress={() => { if (focusMode) setFocusMode(false); else onClose(); }}>
-                        <Text style={styles.headerBtn}>{focusMode ? '← Back' : 'Cancel'}</Text>
+                        <Text style={styles.headerBtn}>{focusMode ? t('common.back') : t('common.cancel')}</Text>
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>{focusMode ? editedTask.title || 'Checklist' : 'Edit Task'}</Text>
+                    <Text style={styles.headerTitle}>{focusMode ? editedTask.title || t('taskEdit.checklist') : t('taskEdit.editTask')}</Text>
                     <View style={styles.headerRight}>
                         {!focusMode && (editedTask.status === 'next' || editedTask.status === 'todo') && (
                             <TouchableOpacity
@@ -136,11 +149,11 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                                 }}
                                 style={styles.startBtn}
                             >
-                                <Text style={styles.startBtnText}>▶ Start</Text>
+                                <Text style={styles.startBtnText}>▶ {t('taskEdit.start')}</Text>
                             </TouchableOpacity>
                         )}
                         <TouchableOpacity onPress={handleSave}>
-                            <Text style={[styles.headerBtn, styles.saveBtn]}>Save</Text>
+                            <Text style={[styles.headerBtn, styles.saveBtn]}>{t('common.save')}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -148,12 +161,12 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                 {/* Focus Mode Banner - Conditional */}
                 {!focusMode && editedTask.checklist && editedTask.checklist.length > 0 && (
                     <View style={{ padding: 16, backgroundColor: '#f0f9ff', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e0f2fe' }}>
-                        <Text style={{ fontSize: 14, color: '#0369a1' }}>Shopping list?</Text>
+                        <Text style={{ fontSize: 14, color: '#0369a1' }}>{t('taskEdit.shoppingListPrompt')}</Text>
                         <TouchableOpacity
                             style={{ backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: '#0ea5e9' }}
                             onPress={() => setFocusMode(true)}
                         >
-                            <Text style={{ fontSize: 13, fontWeight: '600', color: '#0284c7' }}>Open Checklist Mode</Text>
+                            <Text style={{ fontSize: 13, fontWeight: '600', color: '#0284c7' }}>{t('taskEdit.openChecklistMode')}</Text>
                         </TouchableOpacity>
                     </View>
                 )}
@@ -188,7 +201,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                                             );
                                             setEditedTask(prev => ({ ...prev, checklist: newChecklist }));
                                         }}
-                                        placeholder="Item name"
+                                        placeholder={t('taskEdit.itemNamePlaceholder')}
                                     />
                                     <TouchableOpacity
                                         onPress={() => {
@@ -215,7 +228,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                                     }));
                                 }}
                             >
-                                <Text style={[styles.addChecklistText, { fontSize: 17 }]}>+ Add Item</Text>
+                                <Text style={[styles.addChecklistText, { fontSize: 17 }]}>+ {t('taskEdit.addItem')}</Text>
                             </TouchableOpacity>
                         </View>
                     </ScrollView>
@@ -228,7 +241,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                     >
                         <ScrollView style={styles.content}>
                             <View style={styles.formGroup}>
-                                <Text style={styles.label}>Title</Text>
+                                <Text style={styles.label}>{t('taskEdit.titleLabel')}</Text>
                                 <TextInput
                                     style={styles.input}
                                     value={editedTask.title}
@@ -237,7 +250,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                             </View>
 
                             <View style={styles.formGroup}>
-                                <Text style={styles.label}>Status</Text>
+                                <Text style={styles.label}>{t('taskEdit.statusLabel')}</Text>
                                 <View style={styles.statusContainer}>
                                     {STATUS_OPTIONS.map(status => (
                                         <TouchableOpacity
@@ -252,7 +265,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                                                 styles.statusText,
                                                 editedTask.status === status && styles.statusTextActive
                                             ]}>
-                                                {status}
+                                                {t(`status.${status}`)}
                                             </Text>
                                         </TouchableOpacity>
                                     ))}
@@ -260,7 +273,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                             </View>
 
                             <View style={styles.formGroup}>
-                                <Text style={styles.label}>Contexts (comma separated)</Text>
+                                <Text style={styles.label}>{t('taskEdit.contextsLabel')}</Text>
                                 <TextInput
                                     style={styles.input}
                                     value={editedTask.contexts?.join(', ')}
@@ -296,7 +309,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                             </View>
 
                             <View style={styles.formGroup}>
-                                <Text style={styles.label}>Tags (comma separated)</Text>
+                                <Text style={styles.label}>{t('taskEdit.tagsLabel')}</Text>
                                 <TextInput
                                     style={styles.input}
                                     value={editedTask.tags?.join(', ')}
@@ -340,42 +353,66 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                                 </View>
                             </View>
 
-                            <View style={styles.formGroup}>
-                                <Text style={styles.label}>Time Estimate</Text>
-                                <View style={styles.statusContainer}>
-                                    {TIME_ESTIMATE_OPTIONS.map(opt => (
-                                        <TouchableOpacity
-                                            key={opt.value || 'none'}
-                                            style={[
-                                                styles.statusChip,
-                                                editedTask.timeEstimate === opt.value && styles.statusChipActive,
-                                                !opt.value && !editedTask.timeEstimate && styles.statusChipActive
-                                            ]}
-                                            onPress={() => setEditedTask(prev => ({ ...prev, timeEstimate: opt.value || undefined }))}
-                                        >
-                                            <Text style={[
-                                                styles.statusText,
-                                                (editedTask.timeEstimate === opt.value || (!opt.value && !editedTask.timeEstimate)) && styles.statusTextActive
-                                            ]}>
-                                                {opt.label}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    ))}
-                                </View>
-                            </View>
+	                            <View style={styles.formGroup}>
+	                                <Text style={styles.label}>{t('taskEdit.timeEstimateLabel')}</Text>
+	                                <View style={styles.statusContainer}>
+	                                    {timeEstimateOptions.map(opt => (
+	                                        <TouchableOpacity
+	                                            key={opt.value || 'none'}
+	                                            style={[
+	                                                styles.statusChip,
+	                                                editedTask.timeEstimate === opt.value && styles.statusChipActive,
+	                                                !opt.value && !editedTask.timeEstimate && styles.statusChipActive
+	                                            ]}
+	                                            onPress={() => setEditedTask(prev => ({ ...prev, timeEstimate: opt.value || undefined }))}
+	                                        >
+	                                            <Text style={[
+	                                                styles.statusText,
+	                                                (editedTask.timeEstimate === opt.value || (!opt.value && !editedTask.timeEstimate)) && styles.statusTextActive
+	                                            ]}>
+	                                                {opt.label}
+	                                            </Text>
+	                                        </TouchableOpacity>
+	                                    ))}
+	                                </View>
+	                            </View>
 
-                            <View style={styles.formGroup}>
-                                <Text style={styles.label}>Description</Text>
-                                <TextInput
-                                    style={[styles.input, styles.textArea]}
+	                            <View style={styles.formGroup}>
+	                                <Text style={styles.label}>{t('taskEdit.recurrenceLabel')}</Text>
+	                                <View style={styles.statusContainer}>
+	                                    {recurrenceOptions.map(opt => (
+	                                        <TouchableOpacity
+	                                            key={opt.value || 'none'}
+	                                            style={[
+	                                                styles.statusChip,
+	                                                editedTask.recurrence === opt.value && styles.statusChipActive,
+	                                                !opt.value && !editedTask.recurrence && styles.statusChipActive
+	                                            ]}
+	                                            onPress={() => setEditedTask(prev => ({ ...prev, recurrence: opt.value || undefined }))}
+	                                        >
+	                                            <Text style={[
+	                                                styles.statusText,
+	                                                (editedTask.recurrence === opt.value || (!opt.value && !editedTask.recurrence)) && styles.statusTextActive
+	                                            ]}>
+	                                                {opt.label}
+	                                            </Text>
+	                                        </TouchableOpacity>
+	                                    ))}
+	                                </View>
+	                            </View>
+
+	                            <View style={styles.formGroup}>
+	                                <Text style={styles.label}>{t('taskEdit.descriptionLabel')}</Text>
+	                                <TextInput
+	                                    style={[styles.input, styles.textArea]}
                                     value={editedTask.description || ''}
                                     onChangeText={(text) => setEditedTask(prev => ({ ...prev, description: text }))}
                                     multiline
                                 />
-                            </View>
+	                            </View>
 
                             <View style={styles.formGroup}>
-                                <Text style={styles.label}>Checklist</Text>
+                                <Text style={styles.label}>{t('taskEdit.checklist')}</Text>
                                 <View style={styles.checklistContainer}>
                                     {editedTask.checklist?.map((item, index) => (
                                         <View key={item.id || index} style={styles.checklistItem}>
@@ -401,7 +438,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                                                     );
                                                     setEditedTask(prev => ({ ...prev, checklist: newChecklist }));
                                                 }}
-                                                placeholder="Item name"
+                                                placeholder={t('taskEdit.itemNamePlaceholder')}
                                             />
                                             <TouchableOpacity
                                                 onPress={() => {
@@ -428,41 +465,84 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                                             }));
                                         }}
                                     >
-                                        <Text style={styles.addChecklistText}>+ Add Item</Text>
+                                        <Text style={styles.addChecklistText}>+ {t('taskEdit.addItem')}</Text>
                                     </TouchableOpacity>
                                 </View>
                             </View>
 
-                            <View style={styles.row}>
-                                <View style={[styles.formGroup, styles.flex1]}>
-                                    <Text style={styles.label}>Start Date</Text>
-                                    <TouchableOpacity style={styles.dateBtn} onPress={() => setShowDatePicker('start')}>
-                                        <Text>{formatDate(editedTask.startTime)}</Text>
-                                    </TouchableOpacity>
-                                </View>
-                                <View style={[styles.formGroup, styles.flex1]}>
-                                    <Text style={styles.label}>Due Date</Text>
-                                    <TouchableOpacity style={styles.dateBtn} onPress={() => setShowDatePicker('due')}>
-                                        <Text>{formatDate(editedTask.dueDate)}</Text>
-                                    </TouchableOpacity>
-                                </View>
-                            </View>
+	                            <View style={styles.row}>
+	                                <View style={[styles.formGroup, styles.flex1]}>
+	                                    <Text style={styles.label}>{t('taskEdit.startDateLabel')}</Text>
+	                                    <View style={styles.dateRow}>
+	                                        <TouchableOpacity style={[styles.dateBtn, styles.flex1]} onPress={() => setShowDatePicker('start')}>
+	                                            <Text>{formatDate(editedTask.startTime)}</Text>
+	                                        </TouchableOpacity>
+	                                        {!!editedTask.startTime && (
+	                                            <TouchableOpacity
+	                                                style={styles.clearDateBtn}
+	                                                onPress={() => setEditedTask(prev => ({ ...prev, startTime: undefined }))}
+	                                            >
+	                                                <Text style={styles.clearDateText}>{t('common.clear')}</Text>
+	                                            </TouchableOpacity>
+	                                        )}
+	                                    </View>
+	                                </View>
+	                                <View style={[styles.formGroup, styles.flex1]}>
+	                                    <Text style={styles.label}>{t('taskEdit.dueDateLabel')}</Text>
+	                                    <View style={styles.dateRow}>
+	                                        <TouchableOpacity style={[styles.dateBtn, styles.flex1]} onPress={() => setShowDatePicker('due')}>
+	                                            <Text>{formatDate(editedTask.dueDate)}</Text>
+	                                        </TouchableOpacity>
+	                                        {!!editedTask.dueDate && (
+	                                            <TouchableOpacity
+	                                                style={styles.clearDateBtn}
+	                                                onPress={() => setEditedTask(prev => ({ ...prev, dueDate: undefined }))}
+	                                            >
+	                                                <Text style={styles.clearDateText}>{t('common.clear')}</Text>
+	                                            </TouchableOpacity>
+	                                        )}
+	                                    </View>
+	                                </View>
+	                            </View>
+
+	                            <View style={styles.row}>
+	                                <View style={[styles.formGroup, styles.flex1]}>
+	                                    <Text style={styles.label}>{t('taskEdit.reviewDateLabel')}</Text>
+	                                    <View style={styles.dateRow}>
+	                                        <TouchableOpacity style={[styles.dateBtn, styles.flex1]} onPress={() => setShowDatePicker('review')}>
+	                                            <Text>{formatDate(editedTask.reviewAt)}</Text>
+	                                        </TouchableOpacity>
+	                                        {!!editedTask.reviewAt && (
+	                                            <TouchableOpacity
+	                                                style={styles.clearDateBtn}
+	                                                onPress={() => setEditedTask(prev => ({ ...prev, reviewAt: undefined }))}
+	                                            >
+	                                                <Text style={styles.clearDateText}>{t('common.clear')}</Text>
+	                                            </TouchableOpacity>
+	                                        )}
+	                                    </View>
+	                                </View>
+	                            </View>
 
                             {/* Add extra padding at bottom for scrolling past keyboard */}
                             <View style={{ height: 100 }} />
 
-                            {showDatePicker && (
-                                <DateTimePicker
-                                    value={new Date(
-                                        (showDatePicker === 'start' ? editedTask.startTime : editedTask.dueDate) || Date.now()
-                                    )}
-                                    mode="date"
-                                    display="default"
-                                    onChange={onDateChange}
-                                />
-                            )}
+	                            {showDatePicker && (
+	                                <DateTimePicker
+	                                    value={new Date(
+	                                        (showDatePicker === 'start'
+	                                            ? editedTask.startTime
+	                                            : showDatePicker === 'due'
+	                                                ? editedTask.dueDate
+	                                                : editedTask.reviewAt) || Date.now()
+	                                    )}
+	                                    mode="date"
+	                                    display="default"
+	                                    onChange={onDateChange}
+	                                />
+	                            )}
 
-                        </ScrollView>
+	                        </ScrollView>
                     </KeyboardAvoidingView>
                 )}
             </SafeAreaView>
@@ -496,15 +576,27 @@ const styles = StyleSheet.create({
         borderColor: '#e5e5e5',
     },
     textArea: { minHeight: 100, textAlignVertical: 'top' },
-    row: { flexDirection: 'row', gap: 12 },
-    flex1: { flex: 1 },
-    dateBtn: {
-        backgroundColor: '#fff',
-        padding: 12,
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: '#e5e5e5',
-    },
+	    row: { flexDirection: 'row', gap: 12 },
+	    flex1: { flex: 1 },
+	    dateRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+	    dateBtn: {
+	        backgroundColor: '#fff',
+	        padding: 12,
+	        borderRadius: 10,
+	        borderWidth: 1,
+	        borderColor: '#e5e5e5',
+	    },
+	    clearDateBtn: {
+	        paddingHorizontal: 10,
+	        paddingVertical: 8,
+	        borderRadius: 8,
+	        backgroundColor: '#e5e5e5',
+	    },
+	    clearDateText: {
+	        fontSize: 12,
+	        color: '#333',
+	        fontWeight: '600',
+	    },
     statusContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     statusChip: {
         paddingHorizontal: 12,

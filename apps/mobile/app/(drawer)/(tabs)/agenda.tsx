@@ -1,7 +1,7 @@
 import { View, Text, SectionList, Pressable, StyleSheet } from 'react-native';
 import { useMemo, useState, useCallback } from 'react';
 
-import { useTaskStore, Task, safeFormatDate, safeParseDate } from '@mindwtr/core';
+import { useTaskStore, Task, safeFormatDate, safeParseDate, isDueForReview } from '@mindwtr/core';
 
 import { useLanguage } from '../../../contexts/language-context';
 
@@ -111,11 +111,11 @@ export default function AgendaScreen() {
   // Theme colors
   const tc = useThemeColors();
 
-  const sections = useMemo(() => {
-    const activeTasks = tasks.filter(t => t.status !== 'done' && t.status !== 'archived' && !t.deletedAt);
+    const sections = useMemo(() => {
+        const activeTasks = tasks.filter(t => t.status !== 'done' && t.status !== 'archived' && !t.deletedAt);
 
-    // Today's Focus: tasks marked as isFocusedToday
-    const focusedTasks = activeTasks.filter(t => t.isFocusedToday);
+        // Today's Focus: tasks marked as isFocusedToday
+        const focusedTasks = activeTasks.filter(t => t.isFocusedToday);
 
     const inProgressTasks = activeTasks.filter(t => t.status === 'in-progress' && !t.isFocusedToday);
     const overdueTasks = activeTasks.filter(t => {
@@ -128,6 +128,11 @@ export default function AgendaScreen() {
         t.status !== 'in-progress' && !t.isFocusedToday;
     });
     const nextTasks = activeTasks.filter(t => t.status === 'next' && !t.isFocusedToday).slice(0, 5);
+    const reviewDueTasks = activeTasks.filter(t =>
+      (t.status === 'waiting' || t.status === 'someday') &&
+      isDueForReview(t.reviewAt, new Date()) &&
+      !t.isFocusedToday
+    );
     const upcomingTasks = activeTasks
       .filter(t => {
         const dd = safeParseDate(t.dueDate);
@@ -147,6 +152,7 @@ export default function AgendaScreen() {
     if (overdueTasks.length > 0) result.push({ title: `🔴 ${t('agenda.overdue')}`, data: overdueTasks });
     if (todayTasks.length > 0) result.push({ title: `🟡 ${t('agenda.dueToday')}`, data: todayTasks });
     if (nextTasks.length > 0) result.push({ title: `▶️ ${t('agenda.nextActions')}`, data: nextTasks });
+    if (reviewDueTasks.length > 0) result.push({ title: `⏰ ${t('agenda.reviewDue') || 'Review Due'}`, data: reviewDueTasks });
     if (upcomingTasks.length > 0) result.push({ title: `📆 ${t('agenda.upcoming')}`, data: upcomingTasks });
 
     return result;

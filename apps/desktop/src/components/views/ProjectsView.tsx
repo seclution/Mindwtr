@@ -1,10 +1,17 @@
 import { useState } from 'react';
-import { useTaskStore, Task } from '@mindwtr/core';
+import { useTaskStore, Task, safeFormatDate, safeParseDate } from '@mindwtr/core';
 import { TaskItem } from '../TaskItem';
-import { Plus, Folder, Trash2, ListOrdered, ChevronRight, ChevronDown } from 'lucide-react';
+import { Plus, Folder, Trash2, ListOrdered, ChevronRight, ChevronDown, CheckCircle, Archive as ArchiveIcon, RotateCcw } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useLanguage } from '../../contexts/language-context';
 import { confirm } from '@tauri-apps/plugin-dialog';
+
+function toDateTimeLocalValue(dateStr: string | undefined): string {
+    if (!dateStr) return '';
+    const parsed = safeParseDate(dateStr);
+    if (!parsed) return dateStr;
+    return safeFormatDate(parsed, "yyyy-MM-dd'T'HH:mm", dateStr);
+}
 
 export function ProjectsView() {
     const { projects, tasks, addProject, updateProject, deleteProject, addTask, toggleProjectFocus } = useTaskStore();
@@ -22,7 +29,7 @@ export function ProjectsView() {
     }, {} as Record<string, Task[]>);
 
     tasks.forEach(task => {
-        if (task.projectId && !task.deletedAt && task.status !== 'done') {
+        if (task.projectId && !task.deletedAt && task.status !== 'done' && task.status !== 'archived') {
             if (tasksByProject[task.projectId]) {
                 tasksByProject[task.projectId].push(task);
             }
@@ -40,7 +47,7 @@ export function ProjectsView() {
 
     const selectedProject = projects.find(p => p.id === selectedProjectId);
     const projectTasks = selectedProjectId
-        ? tasks.filter(t => t.projectId === selectedProjectId && t.status !== 'done' && !t.deletedAt)
+        ? tasks.filter(t => t.projectId === selectedProjectId && t.status !== 'done' && t.status !== 'archived' && !t.deletedAt)
         : [];
 
     return (
@@ -163,7 +170,7 @@ export function ProjectsView() {
                                             </span>
                                         ) : projTasks.length > 0 ? (
                                             <span className="text-xs text-amber-600 dark:text-amber-400">
-                                                ⚠️ No next action
+                                                ⚠️ {t('projects.noNextAction')}
                                             </span>
                                         ) : null}
                                     </div>
@@ -199,11 +206,60 @@ export function ProjectsView() {
                                             ? "bg-primary text-primary-foreground"
                                             : "bg-muted hover:bg-muted/80 text-muted-foreground"
                                     )}
-                                    title={selectedProject.isSequential ? "Sequential: Only first task shows in Next Actions" : "Parallel: All tasks show in Next Actions"}
+                                    title={selectedProject.isSequential ? t('projects.sequentialTooltip') : t('projects.parallelTooltip')}
                                 >
                                     <ListOrdered className="w-4 h-4" />
-                                    {selectedProject.isSequential ? 'Sequential' : 'Parallel'}
+                                    {selectedProject.isSequential ? t('projects.sequential') : t('projects.parallel')}
                                 </button>
+                                {selectedProject.status === 'active' ? (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={async (e) => {
+                                                e.stopPropagation();
+                                                e.preventDefault();
+                                                const confirmed = await confirm(t('projects.completeConfirm'), {
+                                                    title: t('projects.title'),
+                                                    kind: 'warning'
+                                                });
+                                                if (confirmed) {
+                                                    updateProject(selectedProject.id, { status: 'completed' });
+                                                }
+                                            }}
+                                            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium bg-green-500/10 text-green-700 dark:text-green-400 hover:bg-green-500/20 transition-colors"
+                                        >
+                                            <CheckCircle className="w-4 h-4" />
+                                            {t('projects.complete')}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={async (e) => {
+                                                e.stopPropagation();
+                                                e.preventDefault();
+                                                const confirmed = await confirm(t('projects.archiveConfirm'), {
+                                                    title: t('projects.title'),
+                                                    kind: 'warning'
+                                                });
+                                                if (confirmed) {
+                                                    updateProject(selectedProject.id, { status: 'archived' });
+                                                }
+                                            }}
+                                            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium bg-muted hover:bg-muted/80 text-muted-foreground transition-colors"
+                                        >
+                                            <ArchiveIcon className="w-4 h-4" />
+                                            {t('projects.archive')}
+                                        </button>
+                                    </>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={() => updateProject(selectedProject.id, { status: 'active' })}
+                                        className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                                    >
+                                        <RotateCcw className="w-4 h-4" />
+                                        {t('projects.reactivate')}
+                                    </button>
+                                )}
                                 <button
                                     type="button"
                                     onClick={async (e) => {
@@ -225,28 +281,44 @@ export function ProjectsView() {
                             </div>
                         </header>
 
-                        <div className="mb-6 border rounded-lg overflow-hidden bg-card">
-                            <button
-                                onClick={() => setNotesExpanded(!notesExpanded)}
-                                className="w-full flex items-center gap-2 p-2 bg-muted/30 hover:bg-muted/50 transition-colors text-sm font-medium"
-                            >
-                                {notesExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                                Project Notes
-                            </button>
-                            {notesExpanded && (
-                                <div className="p-0">
-                                    <textarea
-                                        className="w-full min-h-[120px] p-3 text-sm bg-transparent border-none resize-y focus:outline-none focus:bg-accent/5"
-                                        placeholder="Add context, plans, or reference notes for this project..."
-                                        defaultValue={selectedProject.supportNotes || ''}
-                                        onBlur={(e) => updateProject(selectedProject.id, { supportNotes: e.target.value })}
-                                    />
-                                </div>
-                            )}
-                        </div>
+	                        <div className="mb-6 border rounded-lg overflow-hidden bg-card">
+	                            <button
+	                                onClick={() => setNotesExpanded(!notesExpanded)}
+	                                className="w-full flex items-center gap-2 p-2 bg-muted/30 hover:bg-muted/50 transition-colors text-sm font-medium"
+	                            >
+		                                {notesExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+		                                {t('project.notes')}
+		                            </button>
+		                            {notesExpanded && (
+		                                <div className="p-0">
+		                                    <textarea
+		                                        className="w-full min-h-[120px] p-3 text-sm bg-transparent border-none resize-y focus:outline-none focus:bg-accent/5"
+		                                        placeholder={t('projects.notesPlaceholder')}
+		                                        defaultValue={selectedProject.supportNotes || ''}
+		                                        onBlur={(e) => updateProject(selectedProject.id, { supportNotes: e.target.value })}
+		                                    />
+		                                </div>
+		                            )}
+	                        </div>
 
-                        <div className="mb-6">
-                            <form
+		                        <div className="mb-6 bg-card border border-border rounded-lg p-3 space-y-2">
+		                            <label className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
+		                                {t('projects.reviewAt')}
+		                            </label>
+	                            <input
+	                                key={selectedProject.id}
+	                                type="datetime-local"
+	                                defaultValue={toDateTimeLocalValue(selectedProject.reviewAt)}
+	                                onBlur={(e) => updateProject(selectedProject.id, { reviewAt: e.target.value || undefined })}
+	                                className="w-full text-sm bg-muted/50 border border-border rounded px-2 py-1"
+		                            />
+		                            <p className="text-xs text-muted-foreground">
+		                                {t('projects.reviewAtHint')}
+		                            </p>
+		                        </div>
+
+	                        <div className="mb-6">
+	                            <form
                                 onSubmit={(e) => {
                                     e.preventDefault();
                                     const form = e.target as HTMLFormElement;
@@ -297,4 +369,3 @@ export function ProjectsView() {
         </div>
     );
 }
-

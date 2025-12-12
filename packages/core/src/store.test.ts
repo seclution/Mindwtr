@@ -78,4 +78,58 @@ describe('TaskStore', () => {
         expect(projects[0].title).toBe('New Project');
         expect(projects[0].color).toBe('#ff0000');
     });
+
+    it('should complete a project and mark its active tasks done', () => {
+        const { addProject, addTask, updateProject } = useTaskStore.getState();
+        addProject('My Project', '#00ff00');
+
+        const project = useTaskStore.getState().projects[0];
+        addTask('Task 1', { status: 'next', projectId: project.id });
+        addTask('Task 2', { status: 'waiting', projectId: project.id });
+
+        updateProject(project.id, { status: 'completed' });
+
+        const projectTasks = useTaskStore.getState()._allTasks.filter(t => t.projectId === project.id && !t.deletedAt);
+        expect(projectTasks).toHaveLength(2);
+        expect(projectTasks.every(t => t.status === 'done')).toBe(true);
+    });
+
+    it('should archive a project and archive its active tasks', () => {
+        const { addProject, addTask, updateProject } = useTaskStore.getState();
+        addProject('Archived Project', '#123456');
+
+        const project = useTaskStore.getState().projects[0];
+        addTask('Task 1', { status: 'todo', projectId: project.id });
+        addTask('Task 2', { status: 'in-progress', projectId: project.id });
+
+        updateProject(project.id, { status: 'archived' });
+
+        const projectTasks = useTaskStore.getState()._allTasks.filter(t => t.projectId === project.id && !t.deletedAt);
+        expect(projectTasks).toHaveLength(2);
+        expect(projectTasks.every(t => t.status === 'archived')).toBe(true);
+    });
+
+    it('should roll a recurring task when completed', () => {
+        const { addTask, moveTask } = useTaskStore.getState();
+        addTask('Daily Task', {
+            status: 'next',
+            recurrence: 'daily',
+            dueDate: '2023-01-01T09:00',
+        });
+
+        const original = useTaskStore.getState().tasks[0];
+        moveTask(original.id, 'done');
+
+        const state = useTaskStore.getState();
+        expect(state._allTasks).toHaveLength(2);
+
+        const completed = state._allTasks.find(t => t.id === original.id)!;
+        expect(completed.status).toBe('done');
+        expect(completed.completedAt).toBeTruthy();
+
+        const nextInstance = state._allTasks.find(t => t.id !== original.id)!;
+        expect(nextInstance.status).toBe('next');
+        expect(nextInstance.recurrence).toBe('daily');
+        expect(nextInstance.dueDate).toBe('2023-01-02T09:00');
+    });
 });

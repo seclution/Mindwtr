@@ -232,10 +232,10 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                     <span className="text-amber-500 text-xl">⚠️</span>
                     <div>
                         <p className="font-medium text-amber-700 dark:text-amber-400">
-                            {nextCount} items in Next Actions
+                            {nextCount} {t('next.warningCount')}
                         </p>
                         <p className="text-sm text-amber-600 dark:text-amber-500 mt-1">
-                            Consider focusing on fewer projects. GTD recommends keeping Next Actions to 10-15 items for clarity.
+                            {t('next.warningHint')}
                         </p>
                     </div>
                 </div>
@@ -283,7 +283,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                                     {t('process.yesActionable')}
                                 </button>
                             </div>
-                            <p className="text-xs text-muted-foreground text-center pt-2">If not actionable:</p>
+                            <p className="text-xs text-muted-foreground text-center pt-2">{t('process.ifNotActionable')}</p>
                             <div className="flex gap-3">
                                 <button
                                     onClick={() => handleNotActionable('trash')}
@@ -349,14 +349,14 @@ export function ListView({ title, statusFilter }: ListViewProps) {
 
                     {processingStep === 'waiting-note' && (
                         <div className="space-y-4">
-                            <p className="text-center font-medium">👤 {t('process.waitingFor') || 'Who/what are you waiting for?'}</p>
+                            <p className="text-center font-medium">👤 {t('process.waitingFor')}</p>
                             <p className="text-center text-sm text-muted-foreground">
-                                {t('process.waitingForDesc') || 'Add a note to remember what you\'re waiting on'}
+                                {t('process.waitingForDesc')}
                             </p>
                             <textarea
                                 value={waitingNote}
                                 onChange={(e) => setWaitingNote(e.target.value)}
-                                placeholder="e.g., Waiting for John to review the document..."
+                                placeholder={t('process.waitingPlaceholder')}
                                 className="w-full bg-muted border border-border rounded-lg px-3 py-3 text-sm focus:ring-2 focus:ring-primary resize-none"
                                 rows={3}
                             />
@@ -365,13 +365,13 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                                     onClick={handleConfirmWaiting}
                                     className="flex-1 py-3 bg-muted text-muted-foreground rounded-lg font-medium hover:bg-muted/80"
                                 >
-                                    Skip
+                                    {t('common.skip')}
                                 </button>
                                 <button
                                     onClick={handleConfirmWaiting}
                                     className="flex-1 py-3 bg-orange-500 text-white rounded-lg font-medium hover:bg-orange-600"
                                 >
-                                    ✓ Done
+                                    ✓ {t('common.done')}
                                 </button>
                             </div>
                         </div>
@@ -381,13 +381,13 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                         <div className="space-y-4">
                             <p className="text-center font-medium">{t('process.context')}</p>
                             <p className="text-center text-sm text-muted-foreground">
-                                {t('process.contextDesc')} (Select multiple or none)
+                                {t('process.contextDesc')} {t('process.selectMultipleHint')}
                             </p>
 
                             {/* Selected contexts display */}
                             {selectedContexts.length > 0 && (
                                 <div className="flex flex-wrap gap-2 justify-center p-3 bg-primary/10 rounded-lg">
-                                    <span className="text-xs text-primary font-medium">Selected:</span>
+                                    <span className="text-xs text-primary font-medium">{t('process.selectedLabel')}</span>
                                     {selectedContexts.map(ctx => (
                                         <span key={ctx} className="px-2 py-1 bg-primary text-primary-foreground rounded-full text-xs">
                                             {ctx}
@@ -400,7 +400,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                             <div className="flex gap-2">
                                 <input
                                     type="text"
-                                    placeholder={t('process.newContextPlaceholder') || 'Add new context...'}
+                                    placeholder={t('process.newContextPlaceholder')}
                                     value={customContext}
                                     onChange={(e) => setCustomContext(e.target.value)}
                                     className="flex-1 bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary"
@@ -443,17 +443,17 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                                 className="w-full py-3 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90"
                             >
                                 {selectedContexts.length > 0
-                                    ? `Next → (${selectedContexts.length} context${selectedContexts.length > 1 ? 's' : ''} selected)`
-                                    : 'Next → (No context)'}
+                                    ? `${t('process.next')} → (${selectedContexts.length})`
+                                    : `${t('process.next')} → (${t('process.noContext')})`}
                             </button>
                         </div>
                     )}
 
                     {processingStep === 'project' && (
                         <div className="space-y-4">
-                            <p className="text-center font-medium">{t('process.project') || 'Assign to a project?'}</p>
+                            <p className="text-center font-medium">{t('process.project')}</p>
                             <p className="text-center text-sm text-muted-foreground">
-                                {t('process.projectDesc') || 'Optional - link this task to a project'}
+                                {t('process.projectDesc')}
                             </p>
 
                             {/* No project option */}
@@ -461,7 +461,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                                 onClick={() => handleSetProject(null)}
                                 className="w-full py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700"
                             >
-                                ✓ Done - No project needed
+                                ✓ {t('process.noProject')}
                             </button>
 
                             {/* Project list */}
@@ -527,14 +527,14 @@ export function ListView({ title, statusFilter }: ListViewProps) {
 
             {/* Only show add task for inbox/next/todo - other views are read-only */}
             {['inbox', 'next', 'todo'].includes(statusFilter) && (
-                <form onSubmit={handleAddTask} className="relative">
-                    <input
-                        type="text"
-                        placeholder={`Add a task to ${title}...`}
-                        value={newTaskTitle}
-                        onChange={(e) => setNewTaskTitle(e.target.value)}
-                        className="w-full bg-card border border-border rounded-lg py-3 pl-4 pr-12 shadow-sm focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
-                    />
+	                <form onSubmit={handleAddTask} className="relative">
+	                    <input
+	                        type="text"
+	                        placeholder={`${t('nav.addTask')}...`}
+	                        value={newTaskTitle}
+	                        onChange={(e) => setNewTaskTitle(e.target.value)}
+	                        className="w-full bg-card border border-border rounded-lg py-3 pl-4 pr-12 shadow-sm focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
+	                    />
                     <button
                         type="submit"
                         disabled={!newTaskTitle.trim()}

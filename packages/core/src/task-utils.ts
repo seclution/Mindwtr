@@ -3,6 +3,7 @@
  */
 
 import { Task, TaskStatus } from './types';
+import type { Language } from './i18n';
 
 /**
  * Status sorting order for task list display
@@ -83,10 +84,19 @@ export function getTaskAgeDays(createdAt: string): number {
  * Get a human-readable age string for a task
  * Returns null for tasks < 1 day old (to avoid clutter)
  */
-export function getTaskAgeLabel(createdAt: string): string | null {
+export function getTaskAgeLabel(createdAt: string, lang: Language = 'en'): string | null {
     const days = getTaskAgeDays(createdAt);
 
     if (days < 1) return null;
+    if (lang === 'zh') {
+        if (days === 1) return '1天前';
+        if (days < 7) return `${days}天前`;
+        if (days < 14) return '1周前';
+        if (days < 30) return `${Math.floor(days / 7)}周前`;
+        if (days < 60) return '1个月前';
+        return `${Math.floor(days / 30)}个月前`;
+    }
+
     if (days === 1) return '1 day old';
     if (days < 7) return `${days} days old`;
     if (days < 14) return '1 week old';

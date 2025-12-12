@@ -13,10 +13,12 @@ import { AgendaView } from './components/views/AgendaView';
 import { useTaskStore, flushPendingSave } from '@mindwtr/core';
 import { GlobalSearch } from './components/GlobalSearch';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { useLanguage } from './contexts/language-context';
 
 function App() {
     const [currentView, setCurrentView] = useState('inbox');
     const { fetchData } = useTaskStore();
+    const { t } = useLanguage();
 
     useEffect(() => {
         fetchData();
@@ -32,17 +34,17 @@ function App() {
     const renderView = () => {
         switch (currentView) {
             case 'inbox':
-                return <ListView title="Inbox" statusFilter="inbox" />;
+                return <ListView title={t('list.inbox')} statusFilter="inbox" />;
             case 'agenda':
                 return <AgendaView />;
             case 'next':
-                return <ListView title="Next Actions" statusFilter="next" />;
+                return <ListView title={t('list.next')} statusFilter="next" />;
             case 'someday':
-                return <ListView title="Someday/Maybe" statusFilter="someday" />;
+                return <ListView title={t('list.someday')} statusFilter="someday" />;
             case 'waiting':
-                return <ListView title="Waiting For" statusFilter="waiting" />;
+                return <ListView title={t('list.waiting')} statusFilter="waiting" />;
             case 'done':
-                return <ListView title="Completed" statusFilter="done" />;
+                return <ListView title={t('list.done')} statusFilter="done" />;
             case 'calendar':
                 return <CalendarView />;
             case 'board':
@@ -60,7 +62,7 @@ function App() {
             case 'archived':
                 return <ArchiveView />;
             default:
-                return <ListView title="Inbox" statusFilter="inbox" />;
+                return <ListView title={t('list.inbox')} statusFilter="inbox" />;
         }
     };
 

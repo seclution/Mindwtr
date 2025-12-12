@@ -5,5 +5,8 @@ export * from './sync';
 export * from './task-utils';
 export * from './contexts';
 export * from './i18n';
+export * from './recurrence';
+export * from './review-utils';
+export * from './project-utils';
 export { generateUUID } from './uuid';
 export * from './date';

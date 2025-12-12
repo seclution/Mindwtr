@@ -156,7 +156,7 @@ export default function InboxScreen() {
             </TouchableOpacity>
             <View style={styles.progressContainer}>
               <Text style={[styles.progressText, { color: tc.secondaryText }]}>
-                {processedCount + 1} of {totalCount}
+                {processedCount + 1}/{totalCount}
               </Text>
               <View style={[styles.progressBar, { backgroundColor: tc.border }]}>
                 <View
@@ -168,7 +168,7 @@ export default function InboxScreen() {
               </View>
             </View>
             <TouchableOpacity onPress={handleSkip}>
-              <Text style={styles.skipBtn}>Skip →</Text>
+              <Text style={styles.skipBtn}>{t('inbox.skip')} →</Text>
             </TouchableOpacity>
           </View>
 
@@ -200,7 +200,7 @@ export default function InboxScreen() {
                     style={[styles.bigButton, styles.buttonPrimary]}
                     onPress={handleActionable}
                   >
-                    <Text style={styles.bigButtonText}>✅ Yes, it{"'"}s actionable</Text>
+                    <Text style={styles.bigButtonText}>✅ {t('inbox.yesActionable')}</Text>
                   </TouchableOpacity>
 
                   <View style={styles.buttonRow}>
@@ -208,13 +208,13 @@ export default function InboxScreen() {
                       style={[styles.button, { backgroundColor: '#EF4444' }]}
                       onPress={() => handleNotActionable('trash')}
                     >
-                      <Text style={styles.buttonPrimaryText}>🗑️ Trash</Text>
+                      <Text style={styles.buttonPrimaryText}>🗑️ {t('inbox.trash')}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[styles.button, { backgroundColor: '#8B5CF6' }]}
                       onPress={() => handleNotActionable('someday')}
                     >
-                      <Text style={styles.buttonPrimaryText}>💭 Someday</Text>
+                      <Text style={styles.buttonPrimaryText}>💭 {t('inbox.someday')}</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -235,14 +235,14 @@ export default function InboxScreen() {
                     style={[styles.bigButton, styles.buttonSuccess]}
                     onPress={handleTwoMinYes}
                   >
-                    <Text style={styles.bigButtonText}>✅ Done it!</Text>
+                    <Text style={styles.bigButtonText}>✅ {t('inbox.doneIt')}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.bigButton, { backgroundColor: tc.border }]}
                     onPress={handleTwoMinNo}
                   >
                     <Text style={[styles.bigButtonText, { color: tc.text }]}>
-                      Takes longer than 2 min
+                      {t('inbox.takesLonger')}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -257,36 +257,36 @@ export default function InboxScreen() {
 
                 <View style={styles.buttonColumn}>
                   <TouchableOpacity
-                    style={[styles.bigButton, styles.buttonPrimary]}
-                    onPress={() => handleDecision('defer')}
-                  >
-                    <Text style={styles.bigButtonText}>📋 I{"'"}ll do it (Add to Todo)</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.bigButton, { backgroundColor: '#F59E0B' }]}
-                    onPress={() => handleDecision('delegate')}
-                  >
-                    <Text style={styles.bigButtonText}>👤 Someone else (Waiting)</Text>
-                  </TouchableOpacity>
+	                    style={[styles.bigButton, styles.buttonPrimary]}
+	                    onPress={() => handleDecision('defer')}
+	                  >
+	                    <Text style={styles.bigButtonText}>📋 {t('inbox.illDoIt')}</Text>
+	                  </TouchableOpacity>
+	                  <TouchableOpacity
+	                    style={[styles.bigButton, { backgroundColor: '#F59E0B' }]}
+	                    onPress={() => handleDecision('delegate')}
+	                  >
+	                    <Text style={styles.bigButtonText}>👤 {t('inbox.delegate')}</Text>
+	                  </TouchableOpacity>
                 </View>
               </View>
             )}
 
-            {processingStep === 'waiting-note' && (
-              <View style={styles.stepContent}>
-                <Text style={[styles.stepQuestion, { color: tc.text }]}>
-                  👤 Who/what are you waiting for?
-                </Text>
-                <Text style={[styles.stepHint, { color: tc.secondaryText }]}>
-                  Add a note to remember what you{"'"}re waiting on
-                </Text>
+	            {processingStep === 'waiting-note' && (
+	              <View style={styles.stepContent}>
+	                <Text style={[styles.stepQuestion, { color: tc.text }]}>
+	                  👤 {t('inbox.waitingQuestion')}
+	                </Text>
+	                <Text style={[styles.stepHint, { color: tc.secondaryText }]}>
+	                  {t('inbox.waitingHint')}
+	                </Text>
 
-                <TextInput
-                  style={[styles.waitingInput, { borderColor: tc.border, color: tc.text }]}
-                  placeholder="e.g., Waiting for John to review..."
-                  placeholderTextColor={tc.secondaryText}
-                  value={waitingNote}
-                  onChangeText={setWaitingNote}
+	                <TextInput
+	                  style={[styles.waitingInput, { borderColor: tc.border, color: tc.text }]}
+	                  placeholder={t('inbox.waitingPlaceholder')}
+	                  placeholderTextColor={tc.secondaryText}
+	                  value={waitingNote}
+	                  onChangeText={setWaitingNote}
                   multiline
                   numberOfLines={3}
                 />
@@ -295,31 +295,31 @@ export default function InboxScreen() {
                   <TouchableOpacity
                     style={[styles.button, { backgroundColor: tc.border }]}
                     onPress={handleConfirmWaitingMobile}
-                  >
-                    <Text style={[styles.buttonText, { color: tc.text }]}>Skip</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.button, { backgroundColor: '#F59E0B' }]}
-                    onPress={handleConfirmWaitingMobile}
-                  >
-                    <Text style={styles.buttonPrimaryText}>✓ Done</Text>
-                  </TouchableOpacity>
+	                  >
+	                    <Text style={[styles.buttonText, { color: tc.text }]}>{t('inbox.skip')}</Text>
+	                  </TouchableOpacity>
+	                  <TouchableOpacity
+	                    style={[styles.button, { backgroundColor: '#F59E0B' }]}
+	                    onPress={handleConfirmWaitingMobile}
+	                  >
+	                    <Text style={styles.buttonPrimaryText}>✓ {t('common.done')}</Text>
+	                  </TouchableOpacity>
                 </View>
               </View>
             )}
 
-            {processingStep === 'context' && (
-              <View style={styles.stepContent}>
-                <Text style={[styles.stepQuestion, { color: tc.text }]}>
-                  {t('inbox.whereDoIt')} (Select multiple or none)
-                </Text>
+	            {processingStep === 'context' && (
+	              <View style={styles.stepContent}>
+	                <Text style={[styles.stepQuestion, { color: tc.text }]}>
+	                  {t('inbox.whereDoIt')} {t('inbox.selectMultipleHint')}
+	                </Text>
 
                 {/* Selected contexts display */}
-                {selectedContexts.length > 0 && (
-                  <View style={[styles.selectedContextsContainer, { backgroundColor: '#3B82F620' }]}>
-                    <Text style={{ fontSize: 12, color: '#3B82F6', marginBottom: 4 }}>Selected:</Text>
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-                      {selectedContexts.map(ctx => (
+	                {selectedContexts.length > 0 && (
+	                  <View style={[styles.selectedContextsContainer, { backgroundColor: '#3B82F620' }]}>
+	                    <Text style={{ fontSize: 12, color: '#3B82F6', marginBottom: 4 }}>{t('inbox.selectedLabel')}</Text>
+	                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+	                      {selectedContexts.map(ctx => (
                         <View key={ctx} style={{ backgroundColor: '#3B82F6', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
                           <Text style={{ color: '#FFF', fontSize: 12 }}>{ctx}</Text>
                         </View>
@@ -330,11 +330,11 @@ export default function InboxScreen() {
 
                 {/* Custom context input */}
                 <View style={styles.customContextContainer}>
-                  <TextInput
-                    style={[styles.contextInput, { borderColor: tc.border, color: tc.text }]}
-                    placeholder="Add new context..."
-                    placeholderTextColor={tc.secondaryText}
-                    value={newContext}
+	                  <TextInput
+	                    style={[styles.contextInput, { borderColor: tc.border, color: tc.text }]}
+	                    placeholder={t('inbox.addContextPlaceholder')}
+	                    placeholderTextColor={tc.secondaryText}
+	                    value={newContext}
                     onChangeText={setNewContext}
                     onSubmitEditing={addCustomContextMobile}
                   />
@@ -373,28 +373,28 @@ export default function InboxScreen() {
                   style={[styles.bigButton, styles.buttonPrimary, { marginTop: 16 }]}
                   onPress={handleConfirmContextsMobile}
                 >
-                  <Text style={styles.bigButtonText}>
-                    {selectedContexts.length > 0
-                      ? `Done (${selectedContexts.length} context${selectedContexts.length > 1 ? 's' : ''} selected)`
-                      : 'Done - No context needed'}
-                  </Text>
+	                  <Text style={styles.bigButtonText}>
+	                    {selectedContexts.length > 0
+	                      ? `${t('common.done')} (${selectedContexts.length})`
+	                      : t('common.done')}
+	                  </Text>
                 </TouchableOpacity>
               </View>
             )}
 
-            {processingStep === 'project' && (
-              <View style={styles.stepContent}>
-                <Text style={[styles.stepQuestion, { color: tc.text }]}>
-                  📁 Assign to a project? (Optional)
-                </Text>
+	            {processingStep === 'project' && (
+	              <View style={styles.stepContent}>
+	                <Text style={[styles.stepQuestion, { color: tc.text }]}>
+	                  📁 {t('inbox.assignProjectQuestion')}
+	                </Text>
 
                 <ScrollView style={{ maxHeight: 300 }}>
                   <TouchableOpacity
                     style={[styles.projectChip, { backgroundColor: '#10B981' }]}
                     onPress={() => handleSetProject(null)}
-                  >
-                    <Text style={styles.projectChipText}>✓ No project - Done!</Text>
-                  </TouchableOpacity>
+	                  >
+	                    <Text style={styles.projectChipText}>✓ {t('inbox.noProject')}</Text>
+	                  </TouchableOpacity>
                   {projects.map(proj => (
                     <TouchableOpacity
                       key={proj.id}
@@ -423,7 +423,7 @@ export default function InboxScreen() {
             onPress={startProcessing}
           >
             <Text style={styles.processButtonText}>
-              ▷ Process Inbox ({inboxTasks.length})
+              ▷ {t('inbox.processButton')} ({inboxTasks.length})
             </Text>
           </TouchableOpacity>
         </View>

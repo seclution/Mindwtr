@@ -143,8 +143,8 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
                             <div className="flex-1 flex flex-col overflow-hidden">
                                 <span className="truncate font-medium">{result.item.title}</span>
                                 <span className="truncate text-xs text-muted-foreground">
-                                    {result.type === 'project' ? 'Project' : 'Task'}
-                                    {result.type === 'task' && (result.item as Task).projectId ? ` • In Project` : ''}
+                                    {result.type === 'project' ? t('search.resultProject') : t('search.resultTask')}
+                                    {result.type === 'task' && (result.item as Task).projectId ? ` • ${t('search.inProjectSuffix')}` : ''}
                                 </span>
                             </div>
 
