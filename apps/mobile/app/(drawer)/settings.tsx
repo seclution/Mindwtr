@@ -11,6 +11,7 @@ import {
     Alert,
     ActivityIndicator,
     BackHandler,
+    Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -38,6 +39,7 @@ export default function SettingsPage() {
     const [isSyncing, setIsSyncing] = useState(false);
     const [currentScreen, setCurrentScreen] = useState<SettingsScreen>('main');
     const [syncPath, setSyncPath] = useState<string | null>(null);
+    const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
 
     const tc = useThemeColors();
 
@@ -66,6 +68,85 @@ export default function SettingsPage() {
     const toggleDarkMode = () => setThemeMode(isDark ? 'light' : 'dark');
     const toggleSystemMode = (useSystem: boolean) => setThemeMode(useSystem ? 'system' : (isDark ? 'dark' : 'light'));
     const openLink = (url: string) => Linking.openURL(url);
+
+    const GITHUB_RELEASES_API = 'https://api.github.com/repos/dongdongbh/Mindwtr/releases/latest';
+    const GITHUB_RELEASES_URL = 'https://github.com/dongdongbh/Mindwtr/releases/latest';
+
+    const handleCheckUpdates = async () => {
+        setIsCheckingUpdate(true);
+        try {
+            const response = await fetch(GITHUB_RELEASES_API, {
+                headers: {
+                    'Accept': 'application/vnd.github.v3+json',
+                    'User-Agent': 'Mindwtr-App'
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`GitHub API error: ${response.status}`);
+            }
+
+            const release = await response.json();
+            const latestVersion = release.tag_name?.replace(/^v/, '') || '0.0.0';
+            const currentVersion = Constants.expoConfig?.version || '0.0.0';
+
+            // Compare versions
+            const compareVersions = (v1: string, v2: string): number => {
+                const parts1 = v1.split('.').map(Number);
+                const parts2 = v2.split('.').map(Number);
+                for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+                    const p1 = parts1[i] || 0;
+                    const p2 = parts2[i] || 0;
+                    if (p1 > p2) return 1;
+                    if (p1 < p2) return -1;
+                }
+                return 0;
+            };
+
+            const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
+
+            if (hasUpdate) {
+                // Find APK download URL
+                let downloadUrl = GITHUB_RELEASES_URL;
+                if (Platform.OS === 'android' && release.assets) {
+                    const apkAsset = release.assets.find((a: { name: string }) => a.name.endsWith('.apk'));
+                    if (apkAsset) {
+                        downloadUrl = apkAsset.browser_download_url;
+                    }
+                }
+
+                const changelog = release.body || (language === 'zh' ? '暂无更新日志' : 'No changelog available');
+
+                Alert.alert(
+                    language === 'zh' ? '有可用更新' : 'Update Available',
+                    `v${currentVersion} → v${latestVersion}\n\n${language === 'zh' ? '更新日志' : 'Changelog'}:\n${changelog.substring(0, 500)}${changelog.length > 500 ? '...' : ''}`,
+                    [
+                        {
+                            text: language === 'zh' ? '稍后' : 'Later',
+                            style: 'cancel'
+                        },
+                        {
+                            text: language === 'zh' ? '下载' : 'Download',
+                            onPress: () => Linking.openURL(downloadUrl)
+                        }
+                    ]
+                );
+            } else {
+                Alert.alert(
+                    language === 'zh' ? '已是最新' : 'Up to Date',
+                    language === 'zh' ? '您正在使用最新版本！' : 'You are using the latest version!'
+                );
+            }
+        } catch (error) {
+            console.error('Update check failed:', error);
+            Alert.alert(
+                language === 'zh' ? '错误' : 'Error',
+                language === 'zh' ? '检查更新失败' : 'Failed to check for updates'
+            );
+        } finally {
+            setIsCheckingUpdate(false);
+        }
+    };
 
     // Set sync directory by picking a file (we'll use the file's directory)
     const handleSetSyncPath = async () => {
@@ -327,6 +408,22 @@ export default function SettingsPage() {
                         >
                             <Text style={[styles.settingLabel, { color: tc.text }]}>GitHub</Text>
                             <Text style={styles.linkText}>Mindwtr</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
+                            onPress={handleCheckUpdates}
+                            disabled={isCheckingUpdate}
+                        >
+                            <Text style={[styles.settingLabel, { color: tc.text }]}>
+                                {language === 'zh' ? '检查更新' : 'Check for Updates'}
+                            </Text>
+                            {isCheckingUpdate ? (
+                                <ActivityIndicator size="small" color="#3B82F6" />
+                            ) : (
+                                <Text style={styles.linkText}>
+                                    {language === 'zh' ? '点击检查' : 'Tap to check'}
+                                </Text>
+                            )}
                         </TouchableOpacity>
                     </View>
                 </ScrollView>

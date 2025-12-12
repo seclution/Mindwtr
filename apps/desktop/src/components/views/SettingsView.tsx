@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Moon, Sun, Monitor, Globe, Check, ExternalLink } from 'lucide-react';
+import { Moon, Sun, Monitor, Globe, Check, ExternalLink, RefreshCw } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useLanguage, Language } from '../../contexts/language-context';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getVersion } from '@tauri-apps/api/app';
 import { SyncService } from '../../lib/sync-service';
+import { checkForUpdates, UpdateInfo, GITHUB_RELEASES_URL } from '../../lib/update-service';
 
 type ThemeMode = 'system' | 'light' | 'dark';
 
@@ -20,6 +21,12 @@ export function SettingsView() {
     const { language, setLanguage } = useLanguage();
     const [saved, setSaved] = useState(false);
     const [appVersion, setAppVersion] = useState('0.1.0');
+
+    // Update check state
+    const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+    const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+    const [updateError, setUpdateError] = useState<string | null>(null);
+    const [showUpdateModal, setShowUpdateModal] = useState(false);
 
     // Sync state
     const [syncPath, setSyncPath] = useState<string>('');
@@ -127,6 +134,13 @@ export function SettingsView() {
             website: 'Website',
             github: 'GitHub',
             license: 'License',
+            checkForUpdates: 'Check for Updates',
+            checking: 'Checking...',
+            upToDate: 'You are using the latest version!',
+            updateAvailable: 'Update Available',
+            newVersionAvailable: 'A new version is available',
+            download: 'Download',
+            checkFailed: 'Failed to check for updates',
             system: 'System',
             light: 'Light',
             dark: 'Dark',
@@ -161,6 +175,13 @@ export function SettingsView() {
             website: '网站',
             github: 'GitHub',
             license: '许可证',
+            checkForUpdates: '检查更新',
+            checking: '检查中...',
+            upToDate: '您正在使用最新版本！',
+            updateAvailable: '有可用更新',
+            newVersionAvailable: '有新版本可用',
+            download: '下载',
+            checkFailed: '检查更新失败',
             system: '系统',
             light: '浅色',
             dark: '深色',
@@ -190,6 +211,42 @@ export function SettingsView() {
 
     const openLink = (url: string) => {
         window.open(url, '_blank');
+    };
+
+    const handleCheckUpdates = async () => {
+        setIsCheckingUpdate(true);
+        setUpdateInfo(null);
+        setUpdateError(null);
+        setShowUpdateModal(false);
+
+        try {
+            const info = await checkForUpdates(appVersion);
+            setUpdateInfo(info);
+
+            if (info.hasUpdate) {
+                // Show update modal with changelog
+                setShowUpdateModal(true);
+            } else {
+                alert(t.upToDate);
+            }
+        } catch (error) {
+            console.error('Update check failed:', error);
+            setUpdateError(String(error));
+            alert(t.checkFailed);
+        } finally {
+            setIsCheckingUpdate(false);
+        }
+    };
+
+    const handleDownloadUpdate = () => {
+        if (updateInfo?.downloadUrl) {
+            window.open(updateInfo.downloadUrl, '_blank');
+        } else if (updateInfo?.releaseUrl) {
+            window.open(updateInfo.releaseUrl, '_blank');
+        } else {
+            window.open(GITHUB_RELEASES_URL, '_blank');
+        }
+        setShowUpdateModal(false);
     };
 
     return (
@@ -400,6 +457,30 @@ export function SettingsView() {
                                 <ExternalLink className="w-3 h-3" />
                             </button>
                         </div>
+                        <div className="border-t border-border/50"></div>
+                        {/* Check for Updates */}
+                        <div className="flex justify-between items-center">
+                            <span className="text-muted-foreground">{t.checkForUpdates}</span>
+                            <button
+                                onClick={handleCheckUpdates}
+                                disabled={isCheckingUpdate}
+                                className={cn(
+                                    "flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
+                                    isCheckingUpdate
+                                        ? "bg-muted text-muted-foreground cursor-not-allowed"
+                                        : "bg-primary text-primary-foreground hover:bg-primary/90"
+                                )}
+                            >
+                                <RefreshCw className={cn("w-4 h-4", isCheckingUpdate && "animate-spin")} />
+                                {isCheckingUpdate ? t.checking : t.checkForUpdates}
+                            </button>
+                        </div>
+                        {updateError && (
+                            <>
+                                <div className="border-t border-border/50"></div>
+                                <div className="text-red-500 text-sm">{t.checkFailed}</div>
+                            </>
+                        )}
                     </div>
                 </section>
             </div>
@@ -407,6 +488,43 @@ export function SettingsView() {
             {saved && (
                 <div className="fixed bottom-8 right-8 bg-primary text-primary-foreground px-4 py-2 rounded-lg shadow-lg animate-in fade-in slide-in-from-bottom-2">
                     {t.saved}
+                </div>
+            )}
+
+            {/* Update Modal */}
+            {showUpdateModal && updateInfo && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-card border border-border rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] flex flex-col">
+                        <div className="p-6 border-b border-border">
+                            <h3 className="text-xl font-semibold text-green-500 flex items-center gap-2">
+                                {t.updateAvailable}
+                            </h3>
+                            <p className="text-muted-foreground mt-1">
+                                v{updateInfo.currentVersion} → v{updateInfo.latestVersion}
+                            </p>
+                        </div>
+                        <div className="p-6 overflow-y-auto flex-1">
+                            <h4 className="font-medium mb-2">{language === 'zh' ? '更新日志' : 'Changelog'}</h4>
+                            <div className="bg-muted/50 rounded-md p-4 text-sm whitespace-pre-wrap max-h-60 overflow-y-auto">
+                                {updateInfo.releaseNotes || (language === 'zh' ? '暂无更新日志' : 'No changelog available')}
+                            </div>
+                        </div>
+                        <div className="p-6 border-t border-border flex gap-3 justify-end">
+                            <button
+                                onClick={() => setShowUpdateModal(false)}
+                                className="px-4 py-2 rounded-md text-sm font-medium bg-muted hover:bg-muted/80 transition-colors"
+                            >
+                                {language === 'zh' ? '稍后' : 'Later'}
+                            </button>
+                            <button
+                                onClick={handleDownloadUpdate}
+                                className="px-4 py-2 rounded-md text-sm font-medium bg-green-600 text-white hover:bg-green-700 transition-colors flex items-center gap-2"
+                            >
+                                <ExternalLink className="w-4 h-4" />
+                                {t.download}
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
