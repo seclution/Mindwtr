@@ -4,6 +4,7 @@
 
 @layer base {
   :root {
+    color-scheme: light;
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
 
@@ -36,6 +37,7 @@
   }
 
   .dark {
+    color-scheme: dark;
     /* VS Code Dark Modern style - softer dark instead of near-black */
     --background: 220 13% 13%;        /* #1e1e2e - main background */
     --foreground: 220 13% 91%;        /* #e4e4e7 - text color */
