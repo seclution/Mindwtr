@@ -290,7 +290,7 @@ rm -rf .expo node_modules/.cache
 
 ```bash
 # Reinstall dependencies
-cd /path/to/Focus-GTD
+cd /path/to/Mindwtr
 rm -rf node_modules apps/mobile/node_modules
 bun install
 ```

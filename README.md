@@ -9,9 +9,9 @@ A complete Getting Things Done (GTD) productivity system for desktop and mobile.
 *New to GTD? Read [GTD in 15 minutes](https://hamberg.no/gtd) for a quick introduction.*
 
 [![CI](https://github.com/dongdongbh/Mindwtr/actions/workflows/ci.yml/badge.svg)](https://github.com/dongdongbh/Mindwtr/actions/workflows/ci.yml)
-[![GitHub stars](https://img.shields.io/github/stars/dongdongbh/Focus-GTD?style=social)](https://github.com/dongdongbh/Mindwtr/stargazers)
-[![GitHub license](https://img.shields.io/github/license/dongdongbh/Focus-GTD)](LICENSE)
-[![GitHub last commit](https://img.shields.io/github/last-commit/dongdongbh/Focus-GTD)](https://github.com/dongdongbh/Mindwtr/commits/main)
+[![GitHub stars](https://img.shields.io/github/stars/dongdongbh/Mindwtr?style=social)](https://github.com/dongdongbh/Mindwtr/stargazers)
+[![GitHub license](https://img.shields.io/github/license/dongdongbh/Mindwtr)](LICENSE)
+[![GitHub last commit](https://img.shields.io/github/last-commit/dongdongbh/Mindwtr)](https://github.com/dongdongbh/Mindwtr/commits/main)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/dongdongbh/Mindwtr/pulls)
 [![Sponsor](https://img.shields.io/static/v1?label=Sponsor&message=%E2%9D%A4&logo=GitHub&color=%23fe8e86)](https://github.com/sponsors/dongdongbh)
 
@@ -121,6 +121,8 @@ Tasks and projects are stored locally on your device:
 - **Desktop config (Linux)**: `~/.config/mindwtr/config.toml` (sync + app settings)
 - **Mobile**: Device storage (AsyncStorage)
 
+Desktop settings show the exact paths for your OS (Settings → Sync → Local Data). If you used very early builds, data may exist under legacy Tauri directories like `~/.config/tech.dongdongbh.mindwtr/` and `~/.local/share/tech.dongdongbh.mindwtr/` and will be migrated automatically.
+
 Sync via File (Dropbox, etc.), WebDAV (Nextcloud, etc.), or Cloud can be configured in Settings.
 
 ## Documentation
@@ -128,6 +130,9 @@ Sync via File (Dropbox, etc.), WebDAV (Nextcloud, etc.), or Cloud can be configu
 - 📚 [Wiki](https://github.com/dongdongbh/Mindwtr/wiki) - Complete user guide
 - 🚀 [Getting Started](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started)
 - 💡 [GTD Best Practices](https://github.com/dongdongbh/Mindwtr/wiki/GTD-Best-Practices)
+- ☁️ [Cloud Sync (Self‑Hosted)](docs/cloud-sync.md)
+- 🔌 [Local API Server](docs/api.md)
+- 🌐 [Web / PWA](docs/pwa.md)
 
 ## Development
 

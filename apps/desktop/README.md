@@ -92,14 +92,15 @@ bun run build
 Tasks are saved to:
 - **Linux data**: `~/.local/share/mindwtr/data.json`
 - **Linux config**: `~/.config/mindwtr/config.toml`
-- **macOS**: `~/Library/Application Support/mindwtr/` (data.json + config.toml)
-- **Windows**: `%APPDATA%/mindwtr/` (data.json + config.toml)
+
+Desktop Settings → Sync → Local Data shows the exact paths for your OS. If you used very early builds, data may exist under legacy Tauri directories like `~/.config/tech.dongdongbh.mindwtr/` and `~/.local/share/tech.dongdongbh.mindwtr/` and will be migrated automatically.
 
 ## Sync
 
 Configure sync in Settings:
 - **File Sync** - Dropbox, Google Drive, Syncthing, etc.
 - **WebDAV** - Nextcloud, ownCloud, self-hosted servers
+- **Cloud** - Self-hosted cloud backend (see `../../docs/cloud-sync.md`)
 
 ## Testing
 

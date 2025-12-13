@@ -54,5 +54,9 @@ Default sync folder: `~/Sync/mindwtr/`
 
 ## Additional Documentation
 
+- [Cloud Sync (Self‑Hosted)](cloud-sync.md) - Run and deploy the cloud backend
+- [Local API Server](api.md) - REST API for automation and scripting
+- [Web / PWA](pwa.md) - Build and host the desktop web/PWA
 - [Mobile URL Polyfill](mobile-url-polyfill.md) - Critical polyfill documentation
+- [Desktop Keybindings](desktop-keybindings.md) - Vim/Emacs presets and shortcuts
 - [GTD Best Practices](gtd-best-practices.md) - GTD methodology reference

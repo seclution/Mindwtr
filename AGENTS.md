@@ -44,6 +44,7 @@ Run commands from the repo root. Tauri builds require Rust toolchain + system we
 - Desktop stores config and data separately:
   - Linux config: `~/.config/mindwtr/config.toml`
   - Linux data: `~/.local/share/mindwtr/data.json`
-  - macOS/Windows: platform application data directory under `mindwtr/` (data.json + config.toml).
+  - Legacy Tauri dirs (older builds): `~/.config/tech.dongdongbh.mindwtr/` and `~/.local/share/tech.dongdongbh.mindwtr/` (auto-migrated if present)
+  - macOS/Windows: platform config/data directories under `mindwtr/` (see Desktop Settings → Sync → Local Data for the exact paths)
   Avoid committing sample data.
 - Set Android SDK paths when working on mobile (`ANDROID_HOME`, `PATH` updates). Keep API keys or signing material out of the repo; use local env files or CI secrets.
