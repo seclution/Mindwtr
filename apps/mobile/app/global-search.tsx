@@ -10,7 +10,7 @@ import { Search, X, Folder, CheckCircle, ChevronRight } from 'lucide-react-nativ
 const PRIMARY_TINT = '#3B82F6';
 
 export default function SearchScreen() {
-    const { tasks, projects, settings, updateSettings } = useTaskStore();
+    const { _allTasks, projects, settings, updateSettings } = useTaskStore();
     const { isDark } = useTheme();
     const { t } = useLanguage();
     const router = useRouter();
@@ -37,7 +37,7 @@ export default function SearchScreen() {
     const trimmedQuery = query.trim();
     const { tasks: taskResults, projects: projectResults } = trimmedQuery === ''
         ? { tasks: [] as Task[], projects: [] as Project[] }
-        : searchAll(tasks, projects, trimmedQuery);
+        : searchAll(_allTasks, projects, trimmedQuery);
     const results = trimmedQuery === '' ? [] : [
         ...projectResults.map(p => ({ type: 'project' as const, item: p })),
         ...taskResults.map(t => ({ type: 'task' as const, item: t })),
@@ -88,6 +88,7 @@ export default function SearchScreen() {
                 else if (status === 'next') router.push('/next');
                 else if (status === 'waiting') router.push('/waiting');
                 else if (status === 'someday') router.push('/someday');
+                else if (status === 'archived') router.push('/archived');
                 else router.push('/next');
             }
         }

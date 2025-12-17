@@ -27,6 +27,7 @@ const STATUS_SET: Set<TaskStatus> = new Set([
     'waiting',
     'someday',
     'done',
+    'archived',
 ]);
 
 const DATE_FIELDS = new Set(['due', 'start', 'review', 'created']);

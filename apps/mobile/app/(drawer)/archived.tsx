@@ -6,7 +6,7 @@ import { useLanguage } from '../../contexts/language-context';
 
 import { useThemeColors, ThemeColors } from '@/hooks/use-theme-colors';
 import { Swipeable, GestureHandlerRootView } from 'react-native-gesture-handler';
-import { useMemo, useRef } from 'react';
+import { useRef } from 'react';
 
 function ArchivedTaskItem({
     task,
@@ -76,25 +76,13 @@ function ArchivedTaskItem({
 }
 
 export default function ArchivedScreen() {
-    const { tasks, updateTask, deleteTask } = useTaskStore();
+    const { _allTasks, updateTask, deleteTask } = useTaskStore();
     const { isDark } = useTheme();
     const { t } = useLanguage();
 
     const tc = useThemeColors();
 
-    // Show completed tasks older than 7 days (not soft-deleted)
-    const cutoff = useMemo(() => {
-        const date = new Date();
-        date.setDate(date.getDate() - 7);
-        return date;
-    }, []);
-
-    const archivedTasks = tasks.filter((task) => {
-        if (task.deletedAt) return false;
-        if (task.status !== 'done') return false;
-        const completedAt = task.completedAt ? new Date(task.completedAt) : (task.updatedAt ? new Date(task.updatedAt) : null);
-        return completedAt ? completedAt < cutoff : false;
-    });
+    const archivedTasks = _allTasks.filter((task) => task.status === 'archived' && !task.deletedAt);
 
     const handleRestore = (taskId: string) => {
         updateTask(taskId, { status: 'inbox' });

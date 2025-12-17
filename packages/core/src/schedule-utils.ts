@@ -8,7 +8,7 @@ import type { Task } from './types';
  */
 export function getNextScheduledAt(task: Task, now: Date = new Date()): Date | null {
     if (task.deletedAt) return null;
-    if (task.status === 'done') return null;
+    if (task.status === 'done' || task.status === 'archived') return null;
 
     const candidates: Date[] = [];
     const start = safeParseDate(task.startTime);

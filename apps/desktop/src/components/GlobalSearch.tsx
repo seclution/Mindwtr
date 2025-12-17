@@ -13,7 +13,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
     const [query, setQuery] = useState('');
     const [selectedIndex, setSelectedIndex] = useState(0);
     const inputRef = useRef<HTMLInputElement>(null);
-    const { tasks, projects, settings, updateSettings } = useTaskStore();
+    const { _allTasks, projects, settings, updateSettings } = useTaskStore();
     const { t } = useLanguage();
 
     // Toggle search with Cmd+K / Ctrl+K
@@ -44,7 +44,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
     const trimmedQuery = query.trim();
     const { tasks: taskResults, projects: projectResults } = trimmedQuery === ''
         ? { tasks: [] as Task[], projects: [] as Project[] }
-        : searchAll(tasks, projects, trimmedQuery);
+        : searchAll(_allTasks, projects, trimmedQuery);
 
     const results = trimmedQuery === '' ? [] : [
         ...projectResults.map(p => ({ type: 'project' as const, item: p })),
@@ -82,7 +82,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
                 'waiting': 'waiting',
                 'someday': 'someday',
                 'done': 'done',
-                'archived': 'done',
+                'archived': 'archived',
             };
             const targetView = statusViewMap[task.status] || 'next';
             onNavigate(targetView, task.id);

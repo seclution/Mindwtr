@@ -6,19 +6,13 @@ import { Undo2, Trash2 } from 'lucide-react';
 import { useLanguage } from '../../contexts/language-context';
 
 export function ArchiveView() {
-    const { tasks, updateTask, deleteTask, settings } = useTaskStore();
+    const { _allTasks, updateTask, deleteTask, settings } = useTaskStore();
     const { t } = useLanguage();
     const [searchQuery, setSearchQuery] = useState('');
     const sortBy = (settings?.taskSortBy ?? 'default') as TaskSortBy;
 
     const archivedTasks = useMemo(() => {
-        // "Archived" == completed history (older than 7 days)
-        const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-        const filtered = tasks.filter((t) => {
-            if (t.status !== 'done') return false;
-            const completedAt = t.completedAt ? new Date(t.completedAt).getTime() : 0;
-            return Number.isFinite(completedAt) && completedAt > 0 && completedAt < cutoff;
-        });
+        const filtered = _allTasks.filter((t) => t.status === 'archived' && !t.deletedAt);
 
         // Use standard sort
         const sorted = sortTasksBy(filtered, sortBy);
@@ -28,7 +22,7 @@ export function ArchiveView() {
         return sorted.filter(t =>
             t.title.toLowerCase().includes(searchQuery.toLowerCase())
         );
-    }, [tasks, searchQuery, sortBy]);
+    }, [_allTasks, searchQuery, sortBy]);
 
     const handleRestore = (taskId: string) => {
         updateTask(taskId, { status: 'inbox' }); // Restore to inbox? Or previous status? Inbox is safest.

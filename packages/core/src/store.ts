@@ -13,6 +13,7 @@ export function applyTaskUpdates(oldTask: Task, updates: Partial<Task>, now: str
 
     let finalUpdates: Partial<Task> = updates;
     let nextRecurringTask: Task | null = null;
+    const isCompleteStatus = (status: TaskStatus) => status === 'done' || status === 'archived';
 
     if (statusChanged && incomingStatus === 'done') {
         finalUpdates = {
@@ -22,7 +23,14 @@ export function applyTaskUpdates(oldTask: Task, updates: Partial<Task>, now: str
             isFocusedToday: false,
         };
         nextRecurringTask = createNextRecurringTask(oldTask, now, oldTask.status);
-    } else if (statusChanged && oldTask.status === 'done') {
+    } else if (statusChanged && incomingStatus === 'archived') {
+        finalUpdates = {
+            ...updates,
+            status: incomingStatus,
+            completedAt: oldTask.completedAt || now,
+            isFocusedToday: false,
+        };
+    } else if (statusChanged && isCompleteStatus(oldTask.status) && !isCompleteStatus(incomingStatus)) {
         finalUpdates = {
             ...updates,
             status: incomingStatus,
@@ -172,10 +180,23 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
             const data = await storage.getData();
             // Store ALL data including tombstones for persistence
             const nowIso = new Date().toISOString();
-            const allTasks = (data.tasks || []).map((task) => normalizeTaskForLoad(task, nowIso));
+            let allTasks = (data.tasks || []).map((task) => normalizeTaskForLoad(task, nowIso));
+
+            // Auto-archive stale completed items to keep day-to-day UI fast/clean.
+            const cutoffMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+            let didAutoArchive = false;
+            allTasks = allTasks.map((task) => {
+                if (task.deletedAt) return task;
+                if (task.status !== 'done') return task;
+                const completedAt = task.completedAt ? new Date(task.completedAt).getTime() : NaN;
+                if (!Number.isFinite(completedAt) || completedAt <= 0) return task;
+                if (completedAt >= cutoffMs) return task;
+                didAutoArchive = true;
+                return { ...task, status: 'archived', isFocusedToday: false, updatedAt: nowIso };
+            });
             const allProjects = data.projects || [];
-            // Filter out soft-deleted items for UI display
-            const visibleTasks = allTasks.filter(t => !t.deletedAt);
+            // Filter out soft-deleted and archived items for day-to-day UI display
+            const visibleTasks = allTasks.filter(t => !t.deletedAt && t.status !== 'archived');
             const visibleProjects = allProjects.filter(p => !p.deletedAt);
             set({
                 tasks: visibleTasks,
@@ -183,8 +204,16 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
                 settings: data.settings || {},
                 _allTasks: allTasks,
                 _allProjects: allProjects,
-                isLoading: false
+                isLoading: false,
+                lastDataChangeAt: didAutoArchive ? Date.now() : get().lastDataChangeAt,
             });
+
+            if (didAutoArchive) {
+                debouncedSave(
+                    { tasks: allTasks, projects: allProjects, settings: data.settings || {} },
+                    (msg) => set({ error: msg })
+                );
+            }
         } catch (err) {
             set({ error: 'Failed to fetch data', isLoading: false });
         }
@@ -239,7 +268,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
         if (nextRecurringTask) newAllTasks.push(nextRecurringTask);
 
-        const newVisibleTasks = newAllTasks.filter((t) => !t.deletedAt);
+        const newVisibleTasks = newAllTasks.filter((t) => !t.deletedAt && t.status !== 'archived');
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, settings: get().settings },
@@ -259,7 +288,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
             task.id === id ? { ...task, deletedAt: now, updatedAt: now } : task
         );
         // Filter for UI state (hide deleted)
-        const newVisibleTasks = newAllTasks.filter(t => !t.deletedAt);
+        const newVisibleTasks = newAllTasks.filter(t => !t.deletedAt && t.status !== 'archived');
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         // Save with all data including tombstones
         debouncedSave(
@@ -298,7 +327,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
         if (nextRecurringTasks.length > 0) newAllTasks.push(...nextRecurringTasks);
 
-        const newVisibleTasks = newAllTasks.filter((t) => !t.deletedAt);
+        const newVisibleTasks = newAllTasks.filter((t) => !t.deletedAt && t.status !== 'archived');
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, settings: get().settings },
@@ -318,7 +347,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         const newAllTasks = get()._allTasks.map((task) =>
             idSet.has(task.id) ? { ...task, deletedAt: now, updatedAt: now } : task
         );
-        const newVisibleTasks = newAllTasks.filter((t) => !t.deletedAt);
+        const newVisibleTasks = newAllTasks.filter((t) => !t.deletedAt && t.status !== 'archived');
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, settings: get().settings },
@@ -367,17 +396,17 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         let newAllTasks = get()._allTasks;
 
         if (statusChanged && (incomingStatus === 'completed' || incomingStatus === 'archived')) {
-            const taskStatus: TaskStatus = 'done';
+            const taskStatus: TaskStatus = incomingStatus === 'archived' ? 'archived' : 'done';
             newAllTasks = newAllTasks.map(task => {
                 if (
                     task.projectId === id &&
                     !task.deletedAt &&
-                    task.status !== 'done'
+                    task.status !== taskStatus
                 ) {
                     return {
                         ...task,
                         status: taskStatus,
-                        completedAt: now,
+                        completedAt: task.completedAt || now,
                         isFocusedToday: false,
                         updatedAt: now,
                     };
@@ -398,7 +427,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         );
 
         const newVisibleProjects = newAllProjects.filter(p => !p.deletedAt);
-        const newVisibleTasks = newAllTasks.filter(t => !t.deletedAt);
+        const newVisibleTasks = newAllTasks.filter(t => !t.deletedAt && t.status !== 'archived');
 
         set({
             projects: newVisibleProjects,
@@ -433,7 +462,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         );
         // Filter for UI state
         const newVisibleProjects = newAllProjects.filter(p => !p.deletedAt);
-        const newVisibleTasks = newAllTasks.filter(t => !t.deletedAt);
+        const newVisibleTasks = newAllTasks.filter(t => !t.deletedAt && t.status !== 'archived');
         set({
             projects: newVisibleProjects,
             tasks: newVisibleTasks,

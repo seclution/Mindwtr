@@ -94,7 +94,7 @@ describe('TaskStore', () => {
         expect(projectTasks.every(t => t.status === 'done')).toBe(true);
     });
 
-    it('should archive a project and mark its active tasks done', () => {
+    it('should archive a project and archive its active tasks', () => {
         const { addProject, addTask, updateProject } = useTaskStore.getState();
         addProject('Archived Project', '#123456');
 
@@ -106,7 +106,7 @@ describe('TaskStore', () => {
 
         const projectTasks = useTaskStore.getState()._allTasks.filter(t => t.projectId === project.id && !t.deletedAt);
         expect(projectTasks).toHaveLength(2);
-        expect(projectTasks.every(t => t.status === 'done')).toBe(true);
+        expect(projectTasks.every(t => t.status === 'archived')).toBe(true);
     });
 
     it('should roll a recurring task when completed', () => {

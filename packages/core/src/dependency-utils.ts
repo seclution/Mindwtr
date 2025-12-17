@@ -3,7 +3,7 @@ import type { Task } from './types';
 export function isTaskCompletedForDependency(task: Task | undefined): boolean {
     if (!task) return true;
     if (task.deletedAt) return true;
-    return task.status === 'done';
+    return task.status === 'done' || task.status === 'archived';
 }
 
 export function isTaskBlocked(task: Task, tasksById: Record<string, Task>): boolean {
