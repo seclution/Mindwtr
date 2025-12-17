@@ -726,10 +726,10 @@ export function CalendarView() {
           ))}
         </View>
 
-        <View style={styles.calendarGrid}>
+        <View style={[styles.calendarGrid, selectedDate && styles.calendarGridCompact]}>
           {calendarDays.map((day, index) => {
             if (day === null) {
-              return <View key={`empty-${index}`} style={styles.dayCell} />;
+              return <View key={`empty-${index}`} style={[styles.dayCell, selectedDate && styles.dayCellCompact]} />;
             }
 
             const date = new Date(currentYear, currentMonth, day);
@@ -744,6 +744,7 @@ export function CalendarView() {
                 key={day}
                 style={[
                   styles.dayCell,
+                  selectedDate && styles.dayCellCompact,
                   isToday(date) && { backgroundColor: todayCellBg },
                   isSelected && { backgroundColor: selectedCellBg },
                 ]}
@@ -752,12 +753,14 @@ export function CalendarView() {
                 <View
                   style={[
                     styles.dayNumber,
+                    selectedDate && styles.dayNumberCompact,
                     isToday(date) && styles.todayNumber,
                   ]}
                 >
                   <Text
                     style={[
                       styles.dayText,
+                      selectedDate && styles.dayTextCompact,
                       { color: tc.text },
                       isToday(date) && styles.todayText,
                     ]}
@@ -962,13 +965,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 6,
+    paddingVertical: 2,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
   title: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: 'bold',
     color: '#111827',
   },
@@ -977,7 +980,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
   navButtonText: {
-    fontSize: 28,
+    fontSize: 26,
     color: '#3B82F6',
     fontWeight: 'bold',
   },
@@ -986,7 +989,7 @@ const styles = StyleSheet.create({
   },
   monthDetailsPane: {
     flexShrink: 0,
-    maxHeight: 360,
+    maxHeight: 300,
     borderTopWidth: 1,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
@@ -1021,12 +1024,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     paddingTop: 0,
   },
+  calendarGridCompact: {
+    paddingHorizontal: 12,
+  },
   dayCell: {
     width: '14.28%',
     aspectRatio: 1,
     padding: 4,
     alignItems: 'center',
     justifyContent: 'flex-start',
+  },
+  dayCellCompact: {
+    aspectRatio: 0.88,
+    padding: 3,
   },
   todayCell: {
     backgroundColor: '#EFF6FF',
@@ -1041,12 +1051,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  dayNumberCompact: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+  },
   todayNumber: {
     backgroundColor: '#3B82F6',
   },
   dayText: {
     fontSize: 14,
     color: '#111827',
+  },
+  dayTextCompact: {
+    fontSize: 13,
   },
   todayText: {
     color: '#FFFFFF',
