@@ -119,6 +119,23 @@ export const TaskItem = memo(function TaskItem({
         moveTask(task.id, e.target.value as TaskStatus);
     };
 
+    const resetEditState = () => {
+        setEditTitle(task.title);
+        setEditDueDate(toDateTimeLocalValue(task.dueDate));
+        setEditStartTime(toDateTimeLocalValue(task.startTime));
+        setEditProjectId(task.projectId || '');
+        setEditContexts(task.contexts?.join(', ') || '');
+        setEditTags(task.tags?.join(', ') || '');
+        setEditDescription(task.description || '');
+        setEditLocation(task.location || '');
+        setEditRecurrence(task.recurrence || '');
+        setEditTimeEstimate(task.timeEstimate || '');
+        setEditReviewAt(toDateTimeLocalValue(task.reviewAt));
+        setEditBlockedByTaskIds(task.blockedByTaskIds || []);
+        setEditAttachments(task.attachments || []);
+        setShowDescriptionPreview(false);
+    };
+
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (editTitle.trim()) {
@@ -584,10 +601,17 @@ export const TaskItem = memo(function TaskItem({
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => setIsEditing(false)}
+                                    onClick={resetEditState}
                                     className="text-xs bg-muted text-muted-foreground px-3 py-1.5 rounded hover:bg-muted/80"
                                 >
                                     {t('common.cancel')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsEditing(false)}
+                                    className="text-xs px-3 py-1.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                                >
+                                    {t('common.close')}
                                 </button>
                             </div>
                         </form>
@@ -787,7 +811,10 @@ export const TaskItem = memo(function TaskItem({
 	                    >
 	                        <button
 	                            type="button"
-	                            onClick={() => setIsEditing(true)}
+	                            onClick={() => {
+	                                resetEditState();
+	                                setIsEditing(true);
+	                            }}
 	                            aria-label={t('common.edit')}
 	                            className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted/50"
 	                        >
