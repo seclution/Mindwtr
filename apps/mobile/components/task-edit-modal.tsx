@@ -23,7 +23,7 @@ import * as Sharing from 'expo-sharing';
 import { useLanguage } from '../contexts/language-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { MarkdownText } from './markdown-text';
-import { buildAIConfig, loadAIKey } from '../lib/ai-config';
+import { buildAIConfig, buildCopilotConfig, loadAIKey } from '../lib/ai-config';
 import { AIResponseModal, type AIResponseAction } from './ai-response-modal';
 
 interface TaskEditModalProps {
@@ -69,6 +69,12 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
     const [isAIWorking, setIsAIWorking] = useState(false);
     const [aiModal, setAiModal] = useState<{ title: string; message?: string; actions: AIResponseAction[] } | null>(null);
     const aiEnabled = settings.ai?.enabled === true;
+    const aiProvider = (settings.ai?.provider ?? 'openai') as 'openai' | 'gemini';
+    const [aiKey, setAiKey] = useState('');
+    const [copilotSuggestion, setCopilotSuggestion] = useState<{ context?: string; timeEstimate?: TimeEstimate } | null>(null);
+    const [copilotApplied, setCopilotApplied] = useState(false);
+    const [copilotContext, setCopilotContext] = useState<string | undefined>(undefined);
+    const [copilotEstimate, setCopilotEstimate] = useState<TimeEstimate | undefined>(undefined);
 
     // Compute most frequent tags from all tasks
     const suggestedTags = React.useMemo(() => {
@@ -88,6 +94,11 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
         const unique = new Set([...sorted, ...defaults]);
 
         return Array.from(unique).slice(0, 8);
+    }, [tasks]);
+
+    const contextOptions = React.useMemo(() => {
+        const taskContexts = tasks.flatMap((item) => item.contexts || []);
+        return Array.from(new Set([...PRESET_CONTEXTS, ...taskContexts])).filter(Boolean);
     }, [tasks]);
 
     // Compute most frequent tags (hashtags)
@@ -117,8 +128,49 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
             setShowMoreOptions(false);
             setShowDescriptionPreview(false);
             setEditTab(task.taskMode === 'list' ? 'list' : 'task');
+            setCopilotSuggestion(null);
+            setCopilotApplied(false);
+            setCopilotContext(undefined);
+            setCopilotEstimate(undefined);
         }
     }, [task]);
+
+    useEffect(() => {
+        loadAIKey(aiProvider).then(setAiKey).catch(console.error);
+    }, [aiProvider]);
+
+    useEffect(() => {
+        if (!aiEnabled || !aiKey) {
+            setCopilotSuggestion(null);
+            return;
+        }
+        const title = String(editedTask.title ?? '').trim();
+        const description = String(editedTask.description ?? '').trim();
+        const input = [title, description].filter(Boolean).join('\n');
+        if (input.length < 4) {
+            setCopilotSuggestion(null);
+            return;
+        }
+        let cancelled = false;
+        const handle = setTimeout(async () => {
+            try {
+                const provider = createAIProvider(buildCopilotConfig(settings, aiKey));
+                const suggestion = await provider.predictMetadata({ title: input, contexts: contextOptions });
+                if (cancelled) return;
+                if (!suggestion.context && !suggestion.timeEstimate) {
+                    setCopilotSuggestion(null);
+                } else {
+                    setCopilotSuggestion(suggestion);
+                }
+            } catch {
+                if (!cancelled) setCopilotSuggestion(null);
+            }
+        }, 800);
+        return () => {
+            cancelled = true;
+            clearTimeout(handle);
+        };
+    }, [aiEnabled, aiKey, editedTask.title, editedTask.description, contextOptions, settings]);
 
     useEffect(() => {
         if (!visible) {
@@ -127,6 +179,26 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
     }, [visible]);
 
     const closeAIModal = () => setAiModal(null);
+    const resetCopilotDraft = () => {
+        setCopilotApplied(false);
+        setCopilotContext(undefined);
+        setCopilotEstimate(undefined);
+    };
+
+    const applyCopilotSuggestion = () => {
+        if (!copilotSuggestion) return;
+        if (copilotSuggestion.context) {
+            const current = editedTask.contexts ?? [];
+            const next = Array.from(new Set([...current, copilotSuggestion.context]));
+            setEditedTask(prev => ({ ...prev, contexts: next }));
+            setCopilotContext(copilotSuggestion.context);
+        }
+        if (copilotSuggestion.timeEstimate) {
+            setEditedTask(prev => ({ ...prev, timeEstimate: copilotSuggestion.timeEstimate }));
+            setCopilotEstimate(copilotSuggestion.timeEstimate);
+        }
+        setCopilotApplied(true);
+    };
 
     const projectContext = useMemo(() => {
         const projectId = (editedTask.projectId as string | undefined) ?? task?.projectId;
@@ -996,7 +1068,10 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                             <TextInput
                                 style={[styles.input, styles.textArea]}
                                 value={editedTask.description || ''}
-                                onChangeText={(text) => setEditedTask(prev => ({ ...prev, description: text }))}
+                                onChangeText={(text) => {
+                                    setEditedTask(prev => ({ ...prev, description: text }));
+                                    resetCopilotDraft();
+                                }}
                                 placeholder={t('taskEdit.descriptionPlaceholder')}
                                 multiline
                             />
@@ -1204,6 +1279,30 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                                 </TouchableOpacity>
                             </View>
                         )}
+                        {aiEnabled && copilotSuggestion && !copilotApplied && (
+                            <TouchableOpacity
+                                style={[styles.copilotPill, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
+                                onPress={applyCopilotSuggestion}
+                            >
+                                <Text style={[styles.copilotText, { color: tc.text }]}>
+                                    ✨ {t('copilot.suggested')}{' '}
+                                    {copilotSuggestion.context ? `${copilotSuggestion.context} ` : ''}
+                                    {copilotSuggestion.timeEstimate ? `${copilotSuggestion.timeEstimate}` : ''}
+                                </Text>
+                                <Text style={[styles.copilotHint, { color: tc.secondaryText }]}>
+                                    {t('copilot.applyHint')}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
+                        {aiEnabled && copilotApplied && (
+                            <View style={[styles.copilotPill, { borderColor: tc.border, backgroundColor: tc.filterBg }]}>
+                                <Text style={[styles.copilotText, { color: tc.text }]}>
+                                    ✅ {t('copilot.applied')}{' '}
+                                    {copilotContext ? `${copilotContext} ` : ''}
+                                    {copilotEstimate ? `${copilotEstimate}` : ''}
+                                </Text>
+                            </View>
+                        )}
                         <View style={styles.checklistContainer}>
                             {editedTask.checklist?.map((item, index) => (
                                 <View key={item.id || index} style={styles.checklistItem}>
@@ -1292,7 +1391,10 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                                 <TextInput
                                     style={styles.input}
                                     value={editedTask.title}
-                                    onChangeText={(text) => setEditedTask(prev => ({ ...prev, title: text }))}
+                                    onChangeText={(text) => {
+                                        setEditedTask(prev => ({ ...prev, title: text }));
+                                        resetCopilotDraft();
+                                    }}
                                 />
                             </View>
 
@@ -1312,6 +1414,30 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode }: T
                                     >
                                         <Text style={[styles.aiButtonText, { color: tc.tint }]}>{t('taskEdit.aiBreakdown')}</Text>
                                     </TouchableOpacity>
+                                </View>
+                            )}
+                            {aiEnabled && copilotSuggestion && !copilotApplied && (
+                                <TouchableOpacity
+                                    style={[styles.copilotPill, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
+                                    onPress={applyCopilotSuggestion}
+                                >
+                                    <Text style={[styles.copilotText, { color: tc.text }]}>
+                                        ✨ {t('copilot.suggested')}{' '}
+                                        {copilotSuggestion.context ? `${copilotSuggestion.context} ` : ''}
+                                        {copilotSuggestion.timeEstimate ? `${copilotSuggestion.timeEstimate}` : ''}
+                                    </Text>
+                                    <Text style={[styles.copilotHint, { color: tc.secondaryText }]}>
+                                        {t('copilot.applyHint')}
+                                    </Text>
+                                </TouchableOpacity>
+                            )}
+                            {aiEnabled && copilotApplied && (
+                                <View style={[styles.copilotPill, { borderColor: tc.border, backgroundColor: tc.filterBg }]}>
+                                    <Text style={[styles.copilotText, { color: tc.text }]}>
+                                        ✅ {t('copilot.applied')}{' '}
+                                        {copilotContext ? `${copilotContext} ` : ''}
+                                        {copilotEstimate ? `${copilotEstimate}` : ''}
+                                    </Text>
                                 </View>
                             )}
 
@@ -1601,6 +1727,21 @@ const styles = StyleSheet.create({
     aiButtonText: {
         fontSize: 12,
         fontWeight: '600',
+    },
+    copilotPill: {
+        borderWidth: 1,
+        borderRadius: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        marginBottom: 12,
+    },
+    copilotText: {
+        fontSize: 12,
+        fontWeight: '600',
+    },
+    copilotHint: {
+        fontSize: 11,
+        marginTop: 2,
     },
     checklistActions: {
         flexDirection: 'row',

@@ -1,11 +1,12 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Plus, Play, X, Trash2, Moon, User, CheckCircle } from 'lucide-react';
-import { useTaskStore, TaskStatus, Task, PRESET_CONTEXTS, sortTasksBy, Project, parseQuickAdd, isTaskBlocked, matchesHierarchicalToken, safeParseDate } from '@mindwtr/core';
+import { useTaskStore, TaskStatus, Task, PRESET_CONTEXTS, sortTasksBy, Project, parseQuickAdd, isTaskBlocked, matchesHierarchicalToken, safeParseDate, createAIProvider } from '@mindwtr/core';
 import type { TaskSortBy } from '@mindwtr/core';
 import { TaskItem } from '../TaskItem';
 import { cn } from '../../lib/utils';
 import { useLanguage } from '../../contexts/language-context';
 import { useKeybindings } from '../../contexts/keybinding-context';
+import { buildCopilotConfig, loadAIKey } from '../../lib/ai-config';
 
 
 interface ListViewProps {
@@ -27,6 +28,12 @@ export function ListView({ title, statusFilter }: ListViewProps) {
     const [selectionMode, setSelectionMode] = useState(false);
     const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
     const addInputRef = useRef<HTMLInputElement>(null);
+    const [aiKey, setAiKey] = useState('');
+    const [copilotSuggestion, setCopilotSuggestion] = useState<string | null>(null);
+    const [copilotApplied, setCopilotApplied] = useState(false);
+    const [copilotContext, setCopilotContext] = useState<string | null>(null);
+    const aiEnabled = settings?.ai?.enabled === true;
+    const aiProvider = (settings?.ai?.provider ?? 'openai') as 'openai' | 'gemini';
 
     const exitSelectionMode = useCallback(() => {
         setSelectionMode(false);
@@ -44,6 +51,41 @@ export function ListView({ title, statusFilter }: ListViewProps) {
         const taskContexts = tasks.flatMap(t => t.contexts || []);
         return Array.from(new Set([...PRESET_CONTEXTS, ...taskContexts])).sort();
     }, [tasks]);
+
+    useEffect(() => {
+        setAiKey(loadAIKey(aiProvider));
+    }, [aiProvider]);
+
+    useEffect(() => {
+        if (!aiEnabled || !aiKey) {
+            setCopilotSuggestion(null);
+            return;
+        }
+        const title = newTaskTitle.trim();
+        if (title.length < 4) {
+            setCopilotSuggestion(null);
+            return;
+        }
+        let cancelled = false;
+        const handle = setTimeout(async () => {
+            try {
+                const provider = createAIProvider(buildCopilotConfig(settings, aiKey));
+                const suggestion = await provider.predictMetadata({ title, contexts: allContexts });
+                if (cancelled) return;
+                if (!suggestion.context) {
+                    setCopilotSuggestion(null);
+                } else {
+                    setCopilotSuggestion(suggestion.context);
+                }
+            } catch {
+                if (!cancelled) setCopilotSuggestion(null);
+            }
+        }, 800);
+        return () => {
+            cancelled = true;
+            clearTimeout(handle);
+        };
+    }, [aiEnabled, aiKey, newTaskTitle, allContexts, settings]);
 
     const projectMap = useMemo(() => {
         return projects.reduce((acc, project) => {
@@ -261,8 +303,15 @@ export function ListView({ title, statusFilter }: ListViewProps) {
             if (!initialProps.status && statusFilter !== 'all') {
                 initialProps.status = statusFilter;
             }
+            if (copilotContext) {
+                const existing = initialProps.contexts ?? [];
+                initialProps.contexts = Array.from(new Set([...existing, copilotContext]));
+            }
             addTask(finalTitle, initialProps);
             setNewTaskTitle('');
+            setCopilotSuggestion(null);
+            setCopilotApplied(false);
+            setCopilotContext(null);
         }
     };
 
@@ -758,7 +807,11 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                         type="text"
                         placeholder={`${t('nav.addTask')}... ${t('quickAdd.example')}`}
                         value={newTaskTitle}
-                        onChange={(e) => setNewTaskTitle(e.target.value)}
+                        onChange={(e) => {
+                            setNewTaskTitle(e.target.value);
+                            setCopilotApplied(false);
+                            setCopilotContext(null);
+                        }}
                         className="w-full bg-card border border-border rounded-lg py-3 pl-4 pr-12 shadow-sm focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
                     />
                     <button
@@ -769,6 +822,24 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                         <Plus className="w-4 h-4" />
                     </button>
                 </form>
+            )}
+            {['inbox', 'next'].includes(statusFilter) && aiEnabled && copilotSuggestion && !copilotApplied && (
+                <button
+                    type="button"
+                    onClick={() => {
+                        setCopilotContext(copilotSuggestion);
+                        setCopilotApplied(true);
+                    }}
+                    className="mt-2 text-xs px-2 py-1 rounded bg-muted/30 border border-border text-muted-foreground hover:bg-muted/60 transition-colors text-left"
+                >
+                    ✨ {t('copilot.suggested')} {copilotSuggestion}
+                    <span className="ml-2 text-muted-foreground/70">{t('copilot.applyHint')}</span>
+                </button>
+            )}
+            {['inbox', 'next'].includes(statusFilter) && aiEnabled && copilotApplied && (
+                <div className="mt-2 text-xs px-2 py-1 rounded bg-muted/30 border border-border text-muted-foreground">
+                    ✅ {t('copilot.applied')} {copilotContext}
+                </div>
             )}
             {['inbox', 'next'].includes(statusFilter) && !isProcessing && (
                 <p className="text-xs text-muted-foreground">

@@ -1,4 +1,4 @@
-import { useMemo, useState, memo } from 'react';
+import { useMemo, useState, memo, useEffect } from 'react';
 
 import { Calendar as CalendarIcon, Tag, Trash2, ArrowRight, Repeat, Check, Plus, Clock, Timer, Paperclip, Link2, Pencil } from 'lucide-react';
 import {
@@ -26,7 +26,7 @@ import { cn } from '../lib/utils';
 import { useLanguage } from '../contexts/language-context';
 import { Markdown } from './Markdown';
 import { isTauriRuntime } from '../lib/runtime';
-import { buildAIConfig, loadAIKey } from '../lib/ai-config';
+import { buildAIConfig, buildCopilotConfig, loadAIKey } from '../lib/ai-config';
 
 // Convert stored ISO or datetime-local strings into datetime-local input values.
 function toDateTimeLocalValue(dateStr: string | undefined): string {
@@ -76,6 +76,10 @@ export const TaskItem = memo(function TaskItem({
     const [aiClarifyResponse, setAiClarifyResponse] = useState<ClarifyResponse | null>(null);
     const [aiError, setAiError] = useState<string | null>(null);
     const [aiBreakdownSteps, setAiBreakdownSteps] = useState<string[] | null>(null);
+    const [copilotSuggestion, setCopilotSuggestion] = useState<{ context?: string; timeEstimate?: TimeEstimate } | null>(null);
+    const [copilotApplied, setCopilotApplied] = useState(false);
+    const [copilotContext, setCopilotContext] = useState<string | undefined>(undefined);
+    const [copilotEstimate, setCopilotEstimate] = useState<TimeEstimate | undefined>(undefined);
     const [isAIWorking, setIsAIWorking] = useState(false);
     const aiEnabled = settings?.ai?.enabled === true;
     const aiProvider = (settings?.ai?.provider ?? 'openai') as 'openai' | 'gemini';
@@ -179,7 +183,76 @@ export const TaskItem = memo(function TaskItem({
         setAiClarifyResponse(null);
         setAiError(null);
         setAiBreakdownSteps(null);
+        setCopilotSuggestion(null);
+        setCopilotApplied(false);
+        setCopilotContext(undefined);
+        setCopilotEstimate(undefined);
     };
+
+    const resetCopilotDraft = () => {
+        setCopilotApplied(false);
+        setCopilotContext(undefined);
+        setCopilotEstimate(undefined);
+    };
+
+    const applyCopilotSuggestion = () => {
+        if (!copilotSuggestion) return;
+        if (copilotSuggestion.context) {
+            const currentContexts = editContexts.split(',').map((c) => c.trim()).filter(Boolean);
+            const nextContexts = Array.from(new Set([...currentContexts, copilotSuggestion.context]));
+            setEditContexts(nextContexts.join(', '));
+            setCopilotContext(copilotSuggestion.context);
+        }
+        if (copilotSuggestion.timeEstimate) {
+            setEditTimeEstimate(copilotSuggestion.timeEstimate);
+            setCopilotEstimate(copilotSuggestion.timeEstimate);
+        }
+        setCopilotApplied(true);
+    };
+
+    useEffect(() => {
+        if (!aiEnabled) {
+            setCopilotSuggestion(null);
+            return;
+        }
+        const apiKey = loadAIKey(aiProvider);
+        if (!apiKey) {
+            setCopilotSuggestion(null);
+            return;
+        }
+        const title = editTitle.trim();
+        const description = editDescription.trim();
+        const input = [title, description].filter(Boolean).join('\n');
+        if (input.length < 4) {
+            setCopilotSuggestion(null);
+            return;
+        }
+        let cancelled = false;
+        const handle = setTimeout(async () => {
+            try {
+                const currentContexts = editContexts.split(',').map((c) => c.trim()).filter(Boolean);
+                const provider = createAIProvider(buildCopilotConfig(settings, apiKey));
+                const suggestion = await provider.predictMetadata({
+                    title: input,
+                    contexts: Array.from(new Set([...PRESET_CONTEXTS, ...currentContexts])),
+                });
+                if (cancelled) return;
+                if (!suggestion.context && !suggestion.timeEstimate) {
+                    setCopilotSuggestion(null);
+                } else {
+                    setCopilotSuggestion(suggestion);
+                }
+            } catch {
+                if (!cancelled) {
+                    setCopilotSuggestion(null);
+                }
+            }
+        }, 800);
+        return () => {
+            cancelled = true;
+            clearTimeout(handle);
+        };
+    }, [aiEnabled, aiProvider, editTitle, editDescription, editContexts, settings]);
 
     const logAIDebug = async (context: string, message: string) => {
         if (!isTauriRuntime()) return;
@@ -347,7 +420,10 @@ export const TaskItem = memo(function TaskItem({
                                 type="text"
                                 aria-label="Task title"
                                 value={editTitle}
-                                onChange={(e) => setEditTitle(e.target.value)}
+                                onChange={(e) => {
+                                    setEditTitle(e.target.value);
+                                    resetCopilotDraft();
+                                }}
                                 className="w-full bg-transparent border-b border-primary/50 p-1 text-base font-medium focus:ring-0 focus:border-primary outline-none"
                                 placeholder={t('taskEdit.titleLabel')}
                             />
@@ -369,6 +445,25 @@ export const TaskItem = memo(function TaskItem({
                                     >
                                         {t('taskEdit.aiBreakdown')}
                                     </button>
+                                </div>
+                            )}
+                            {aiEnabled && copilotSuggestion && !copilotApplied && (
+                                <button
+                                    type="button"
+                                    onClick={applyCopilotSuggestion}
+                                    className="text-xs px-2 py-1 rounded bg-muted/30 border border-border text-muted-foreground hover:bg-muted/60 transition-colors text-left"
+                                >
+                                    ✨ {t('copilot.suggested')}{' '}
+                                    {copilotSuggestion.context ? `${copilotSuggestion.context} ` : ''}
+                                    {copilotSuggestion.timeEstimate ? `${copilotSuggestion.timeEstimate}` : ''}
+                                    <span className="ml-2 text-muted-foreground/70">{t('copilot.applyHint')}</span>
+                                </button>
+                            )}
+                            {aiEnabled && copilotApplied && (
+                                <div className="text-xs px-2 py-1 rounded bg-muted/30 border border-border text-muted-foreground">
+                                    ✅ {t('copilot.applied')}{' '}
+                                    {copilotContext ? `${copilotContext} ` : ''}
+                                    {copilotEstimate ? `${copilotEstimate}` : ''}
                                 </div>
                             )}
                             {aiEnabled && aiError && (
@@ -467,7 +562,10 @@ export const TaskItem = memo(function TaskItem({
 	                                    <textarea
 	                                        aria-label="Task description"
 	                                        value={editDescription}
-	                                        onChange={(e) => setEditDescription(e.target.value)}
+	                                        onChange={(e) => {
+                                                setEditDescription(e.target.value);
+                                                resetCopilotDraft();
+                                            }}
 	                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1 min-h-[60px] resize-y"
 	                                        placeholder={t('taskEdit.descriptionPlaceholder')}
 	                                    />
