@@ -194,7 +194,12 @@ export const TaskItem = memo(function TaskItem({
 
                 <div className="flex-1 min-w-0">
                     {isEditing ? (
-                        <form onSubmit={handleSubmit} className="space-y-3">
+                        <form
+                            onSubmit={handleSubmit}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => e.stopPropagation()}
+                            className="space-y-3"
+                        >
                             <input
                                 autoFocus
                                 type="text"
