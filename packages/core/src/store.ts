@@ -371,14 +371,15 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
             ...item,
             isCompleted: false,
         }));
-        const nextStatus = sourceTask.status === 'done' ? 'next' : sourceTask.status;
+        const wasDone = sourceTask.status === 'done';
+        const nextStatus: TaskStatus = wasDone ? 'next' : sourceTask.status;
 
         const updatedTask: Task = {
             ...sourceTask,
             checklist: resetChecklist,
             status: nextStatus,
-            completedAt: nextStatus === 'done' ? sourceTask.completedAt : undefined,
-            isFocusedToday: nextStatus === 'done' ? sourceTask.isFocusedToday : false,
+            completedAt: wasDone ? undefined : sourceTask.completedAt,
+            isFocusedToday: wasDone ? false : sourceTask.isFocusedToday,
             updatedAt: now,
         };
 

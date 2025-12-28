@@ -57,6 +57,10 @@ apps/mobile/eas-build-*
 apps/desktop/dist/
 apps/desktop/dist-electron/
 
+# Desktop (Tauri)
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/.tauri/
+
 # Lock files (using bun)
 package-lock.json
 yarn.lock
