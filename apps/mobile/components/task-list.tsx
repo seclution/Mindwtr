@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { View, TextInput, FlatList, StyleSheet, TouchableOpacity, Text, RefreshControl, ScrollView, Modal, Pressable } from 'react-native';
 import { router } from 'expo-router';
 import { useTaskStore, Task, TaskStatus, sortTasksBy, parseQuickAdd, isTaskBlocked, safeParseDate, PRESET_CONTEXTS, PRESET_TAGS, createAIProvider } from '@mindwtr/core';

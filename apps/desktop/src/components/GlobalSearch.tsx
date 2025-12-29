@@ -165,7 +165,9 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
                 <div className="max-h-[60vh] overflow-y-auto p-2">
                     {isTruncated && (
                         <div className="px-3 pb-2 text-xs text-muted-foreground">
-                            {t('search.showingFirst', { shown: results.length, total: totalResults })}
+                            {t('search.showingFirst')
+                                .replace('{shown}', String(results.length))
+                                .replace('{total}', String(totalResults))}
                         </div>
                     )}
                     {results.length === 0 && trimmedQuery !== '' && (
