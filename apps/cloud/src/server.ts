@@ -146,7 +146,9 @@ async function main() {
                 if (req.method === 'GET') {
                     const data = readData(filePath);
                     if (!data) return errorResponse('Not found', 404);
-                    return jsonResponse(data);
+                    const validated = validateAppData(data);
+                    if (!validated.ok) return errorResponse(validated.error, 500);
+                    return jsonResponse(validated.data);
                 }
 
                 if (req.method === 'PUT') {
