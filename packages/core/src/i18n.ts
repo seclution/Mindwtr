@@ -217,6 +217,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'calendar.unschedule': 'Remove from calendar',
         'calendar.changeTime': 'Change time',
         'calendar.noTasks': 'No tasks for this day',
+        'calendar.noFreeTime': 'No free time available for this day.',
+        'calendar.overlapWarning': 'That time overlaps with an event. Please choose a free slot.',
 
         // Projects
         'projects.title': 'Projects',
@@ -863,6 +865,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'calendar.unschedule': '从日历移除',
         'calendar.changeTime': '调整时间',
         'calendar.noTasks': '这一天没有任务',
+        'calendar.noFreeTime': '当天没有可用时间段。',
+        'calendar.overlapWarning': '该时间与已有日程冲突，请选择空闲时间段。',
 
         // Projects
         'projects.title': '项目',

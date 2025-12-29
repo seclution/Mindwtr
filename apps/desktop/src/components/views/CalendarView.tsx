@@ -13,6 +13,7 @@ export function CalendarView() {
     const [currentMonth] = useState(today);
     const [selectedDate, setSelectedDate] = useState<Date | null>(null);
     const [scheduleQuery, setScheduleQuery] = useState('');
+    const [scheduleError, setScheduleError] = useState<string | null>(null);
     const [externalCalendars, setExternalCalendars] = useState<ExternalCalendarSubscription[]>([]);
     const [externalEvents, setExternalEvents] = useState<ExternalCalendarEvent[]>([]);
     const [externalError, setExternalError] = useState<string | null>(null);
@@ -273,12 +274,13 @@ export function CalendarView() {
         const durationMinutes = timeEstimateToMinutes(task.timeEstimate);
         const slot = findFreeSlotForDay(selectedDate, durationMinutes, taskId);
         if (!slot) {
-            alert('No free time available for this day.');
+            setScheduleError(t('calendar.noFreeTime'));
             return;
         }
 
         updateTask(taskId, { startTime: slot.toISOString() }).catch(console.error);
         setScheduleQuery('');
+        setScheduleError(null);
     };
 
     const beginEditScheduledTime = (taskId: string) => {
@@ -306,13 +308,14 @@ export function CalendarView() {
         const durationMinutes = timeEstimateToMinutes(task.timeEstimate);
         const ok = isSlotFreeForDay(selectedDate, nextStart, durationMinutes, task.id);
         if (!ok) {
-            alert('That time overlaps with an event. Please choose a free slot.');
+            setScheduleError(t('calendar.overlapWarning'));
             return;
         }
 
         await updateTask(task.id, { startTime: nextStart.toISOString() });
         setEditingTimeTaskId(null);
         setEditingTimeValue('');
+        setScheduleError(null);
     };
 
     const cancelEditScheduledTime = () => {
@@ -416,6 +419,7 @@ export function CalendarView() {
                             onClick={() => {
                                 setSelectedDate(null);
                                 setScheduleQuery('');
+                                setScheduleError(null);
                             }}
                         >
                             {t('common.close')}
@@ -426,10 +430,16 @@ export function CalendarView() {
                         <input
                             type="text"
                             value={scheduleQuery}
-                            onChange={(e) => setScheduleQuery(e.target.value)}
+                            onChange={(e) => {
+                                setScheduleQuery(e.target.value);
+                                if (scheduleError) setScheduleError(null);
+                            }}
                             placeholder={t('calendar.schedulePlaceholder')}
                             className="w-full text-sm px-3 py-2 rounded border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
+                        {scheduleError && (
+                            <div className="text-xs text-red-400">{scheduleError}</div>
+                        )}
 
                         {scheduleCandidates.length > 0 && (
                             <div className="space-y-1">
