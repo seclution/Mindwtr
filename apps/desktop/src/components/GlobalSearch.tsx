@@ -46,10 +46,12 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
         ? { tasks: [] as Task[], projects: [] as Project[] }
         : searchAll(_allTasks, projects, trimmedQuery);
 
+    const totalResults = projectResults.length + taskResults.length;
     const results = trimmedQuery === '' ? [] : [
         ...projectResults.map(p => ({ type: 'project' as const, item: p })),
         ...taskResults.map(t => ({ type: 'task' as const, item: t })),
     ].slice(0, 50); // Limit results
+    const isTruncated = totalResults > results.length;
 
     // Keyboard navigation
     const handleListKeyDown = (e: React.KeyboardEvent) => {
@@ -150,6 +152,11 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
                 </div>
 
                 <div className="max-h-[60vh] overflow-y-auto p-2">
+                    {isTruncated && (
+                        <div className="px-3 pb-2 text-xs text-muted-foreground">
+                            {t('search.showingFirst', { shown: results.length, total: totalResults })}
+                        </div>
+                    )}
                     {results.length === 0 && trimmedQuery !== '' && (
                         <div className="text-center py-8 text-muted-foreground text-sm">
                             {t('search.noResults')} "{trimmedQuery}"
