@@ -124,7 +124,11 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-start justify-center pt-[20vh] bg-background/80 backdrop-blur-sm animate-in fade-in-0">
+        <div
+            className="fixed inset-0 z-50 flex items-start justify-center pt-[20vh] bg-background/80 backdrop-blur-sm animate-in fade-in-0"
+            role="dialog"
+            aria-modal="true"
+        >
             <div
                 className="w-full max-w-lg bg-popover text-popover-foreground rounded-xl border shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-100"
                 onClick={(e) => e.stopPropagation()}
