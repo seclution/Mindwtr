@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useTaskStore, Attachment, Task, generateUUID, safeFormatDate, safeParseDate, parseQuickAdd } from '@mindwtr/core';
 import { TaskItem } from '../TaskItem';
 import { Plus, Folder, Trash2, ListOrdered, ChevronRight, ChevronDown, CheckCircle, Archive as ArchiveIcon, RotateCcw, Paperclip, Link2 } from 'lucide-react';
@@ -23,6 +23,11 @@ export function ProjectsView() {
     const [newProjectColor, setNewProjectColor] = useState('#3b82f6'); // Default blue
     const [notesExpanded, setNotesExpanded] = useState(false);
     const [showNotesPreview, setShowNotesPreview] = useState(false);
+    const [attachmentError, setAttachmentError] = useState<string | null>(null);
+
+    useEffect(() => {
+        setAttachmentError(null);
+    }, [selectedProjectId]);
 
     // Group tasks by project to avoid O(N*M) filtering
     const tasksByProject = projects.reduce((acc, project) => {
@@ -85,9 +90,10 @@ export function ProjectsView() {
     const addProjectFileAttachment = async () => {
         if (!selectedProject) return;
         if (!isTauriRuntime()) {
-            alert(t('attachments.fileNotSupported'));
+            setAttachmentError(t('attachments.fileNotSupported'));
             return;
         }
+        setAttachmentError(null);
         const { open } = await import('@tauri-apps/plugin-dialog');
         const selected = await open({
             multiple: false,
@@ -110,6 +116,7 @@ export function ProjectsView() {
 
     const addProjectLinkAttachment = () => {
         if (!selectedProject) return;
+        setAttachmentError(null);
         const url = window.prompt(t('attachments.addLink'), t('attachments.linkPlaceholder'));
         if (!url) return;
         const now = new Date().toISOString();
@@ -427,9 +434,12 @@ export function ProjectsView() {
 			                                        />
 			                                    )}
 
-			                                    <div className="pt-2 border-t border-border/50 space-y-1">
-			                                        <div className="text-xs text-muted-foreground font-medium">{t('attachments.title')}</div>
-			                                        {visibleAttachments.length === 0 ? (
+                                <div className="pt-2 border-t border-border/50 space-y-1">
+                                    <div className="text-xs text-muted-foreground font-medium">{t('attachments.title')}</div>
+                                    {attachmentError && (
+                                        <div className="text-xs text-red-400">{attachmentError}</div>
+                                    )}
+                                    {visibleAttachments.length === 0 ? (
 			                                            <div className="text-xs text-muted-foreground">{t('common.none')}</div>
 			                                        ) : (
 			                                            <div className="space-y-1">

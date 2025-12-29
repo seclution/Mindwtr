@@ -74,6 +74,7 @@ export const TaskItem = memo(function TaskItem({
     const [editReviewAt, setEditReviewAt] = useState(toDateTimeLocalValue(task.reviewAt));
     const [editBlockedByTaskIds, setEditBlockedByTaskIds] = useState<string[]>(task.blockedByTaskIds || []);
     const [editAttachments, setEditAttachments] = useState<Attachment[]>(task.attachments || []);
+    const [attachmentError, setAttachmentError] = useState<string | null>(null);
     const [aiClarifyResponse, setAiClarifyResponse] = useState<ClarifyResponse | null>(null);
     const [aiError, setAiError] = useState<string | null>(null);
     const [aiBreakdownSteps, setAiBreakdownSteps] = useState<string[] | null>(null);
@@ -137,9 +138,10 @@ export const TaskItem = memo(function TaskItem({
 
     const addFileAttachment = async () => {
         if (!isTauriRuntime()) {
-            alert(t('attachments.fileNotSupported'));
+            setAttachmentError(t('attachments.fileNotSupported'));
             return;
         }
+        setAttachmentError(null);
         const { open } = await import('@tauri-apps/plugin-dialog');
         const selected = await open({
             multiple: false,
@@ -161,6 +163,7 @@ export const TaskItem = memo(function TaskItem({
     };
 
     const addLinkAttachment = () => {
+        setAttachmentError(null);
         const url = window.prompt(t('attachments.addLink'), t('attachments.linkPlaceholder'));
         if (!url) return;
         const now = new Date().toISOString();
@@ -200,6 +203,7 @@ export const TaskItem = memo(function TaskItem({
         setEditReviewAt(toDateTimeLocalValue(task.reviewAt));
         setEditBlockedByTaskIds(task.blockedByTaskIds || []);
         setEditAttachments(task.attachments || []);
+        setAttachmentError(null);
         setShowDescriptionPreview(false);
         setAiClarifyResponse(null);
         setAiError(null);
@@ -299,12 +303,12 @@ export const TaskItem = memo(function TaskItem({
 
     const getAIProvider = () => {
         if (!aiEnabled) {
-            alert(t('ai.disabledBody'));
+            setAiError(t('ai.disabledBody'));
             return null;
         }
         const apiKey = loadAIKey(aiProvider);
         if (!apiKey) {
-            alert(t('ai.missingKeyBody'));
+            setAiError(t('ai.missingKeyBody'));
             return null;
         }
         return createAIProvider(buildAIConfig(settings, apiKey));
@@ -343,7 +347,6 @@ export const TaskItem = memo(function TaskItem({
             setAiError(message);
             await logAIDebug('clarify', message);
             console.warn(error);
-            alert(`${t('ai.errorBody')}\n\n${message}`);
         } finally {
             setIsAIWorking(false);
         }
@@ -372,7 +375,6 @@ export const TaskItem = memo(function TaskItem({
             setAiError(message);
             await logAIDebug('breakdown', message);
             console.warn(error);
-            alert(`${t('ai.errorBody')}\n\n${message}`);
         } finally {
             setIsAIWorking(false);
         }
@@ -602,9 +604,9 @@ export const TaskItem = memo(function TaskItem({
 	                            </div>
 
 	                            <div className="flex flex-col gap-2">
-	                                <div className="flex items-center justify-between">
-	                                    <label className="text-xs text-muted-foreground font-medium">{t('attachments.title')}</label>
-	                                    <div className="flex items-center gap-2">
+                                <div className="flex items-center justify-between">
+                                    <label className="text-xs text-muted-foreground font-medium">{t('attachments.title')}</label>
+                                    <div className="flex items-center gap-2">
 	                                        <button
 	                                            type="button"
 	                                            onClick={addFileAttachment}
@@ -621,9 +623,12 @@ export const TaskItem = memo(function TaskItem({
 	                                            <Link2 className="w-3 h-3" />
 	                                            {t('attachments.addLink')}
 	                                        </button>
-	                                    </div>
-	                                </div>
-	                                {visibleEditAttachments.length === 0 ? (
+                                    </div>
+                                </div>
+                                {attachmentError && (
+                                    <div className="text-xs text-red-400">{attachmentError}</div>
+                                )}
+                                {visibleEditAttachments.length === 0 ? (
 	                                    <p className="text-xs text-muted-foreground">{t('common.none')}</p>
 	                                ) : (
 	                                    <div className="space-y-1">
