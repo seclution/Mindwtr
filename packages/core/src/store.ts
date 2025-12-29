@@ -3,6 +3,7 @@ import { generateUUID as uuidv4 } from './uuid';
 import { Task, TaskStatus, AppData, Project } from './types';
 import { StorageAdapter, noopStorage } from './storage';
 import { createNextRecurringTask } from './recurrence';
+import { safeParseDate } from './date';
 import { normalizeTaskForLoad } from './task-status';
 
 let storage: StorageAdapter = noopStorage;
@@ -194,8 +195,8 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
                 allTasks = allTasks.map((task) => {
                     if (task.deletedAt) return task;
                     if (task.status !== 'done') return task;
-                    const completedAt = task.completedAt ? Date.parse(task.completedAt) : NaN;
-                    const updatedAt = task.updatedAt ? Date.parse(task.updatedAt) : NaN;
+                    const completedAt = safeParseDate(task.completedAt)?.getTime() ?? NaN;
+                    const updatedAt = safeParseDate(task.updatedAt)?.getTime() ?? NaN;
                     const resolvedCompletedAt = Number.isFinite(completedAt) ? completedAt : updatedAt;
                     if (!Number.isFinite(resolvedCompletedAt) || resolvedCompletedAt <= 0) return task;
                     if (resolvedCompletedAt >= cutoffMs) return task;
@@ -632,8 +633,8 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
                 newAllTasks = newAllTasks.map((task) => {
                     if (task.deletedAt) return task;
                     if (task.status !== 'done') return task;
-                    const completedAt = task.completedAt ? new Date(task.completedAt).getTime() : NaN;
-                    const updatedAt = task.updatedAt ? new Date(task.updatedAt).getTime() : NaN;
+                    const completedAt = safeParseDate(task.completedAt)?.getTime() ?? NaN;
+                    const updatedAt = safeParseDate(task.updatedAt)?.getTime() ?? NaN;
                     const resolvedCompletedAt = Number.isFinite(completedAt) ? completedAt : updatedAt;
                     if (!Number.isFinite(resolvedCompletedAt) || resolvedCompletedAt <= 0) return task;
                     if (resolvedCompletedAt >= cutoffMs) return task;
