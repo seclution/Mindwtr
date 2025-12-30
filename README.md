@@ -165,4 +165,3 @@ Sync via File (Dropbox, etc.), WebDAV (Nextcloud, etc.), or Cloud can be configu
 
 For developers, see the [Development Guide](docs/development.md).
 
-## Roadmap

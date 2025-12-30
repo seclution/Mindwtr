@@ -46,6 +46,21 @@ const LANGUAGES: { id: Language; label: string; native: string }[] = [
     { id: 'zh', label: 'Chinese', native: '中文' },
 ];
 
+const maskCalendarUrl = (url: string): string => {
+    const trimmed = url.trim();
+    if (!trimmed) return '';
+    const match = trimmed.match(/^(https?:\/\/)?([^/?#]+)([^?#]*)/i);
+    if (!match) {
+        return trimmed.length <= 8 ? '...' : `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
+    }
+    const protocol = match[1] ?? '';
+    const host = match[2] ?? '';
+    const path = match[3] ?? '';
+    const lastSegment = path.split('/').filter(Boolean).pop() ?? '';
+    const suffix = lastSegment ? `...${lastSegment.slice(-6)}` : '...';
+    return `${protocol}${host}/${suffix}`;
+};
+
 export function SettingsView() {
     const [page, setPage] = useState<SettingsPage>('main');
     const [themeMode, setThemeMode] = useState<ThemeMode>('system');
@@ -1074,7 +1089,7 @@ export function SettingsView() {
                                     <div key={calendar.id} className="p-4 flex items-start justify-between gap-4">
                                         <div className="min-w-0">
                                             <div className="text-sm font-medium truncate">{calendar.name}</div>
-                                            <div className="text-xs text-muted-foreground truncate mt-1">{calendar.url}</div>
+                                            <div className="text-xs text-muted-foreground truncate mt-1">{maskCalendarUrl(calendar.url)}</div>
                                         </div>
                                         <div className="flex items-center gap-3">
                                             <input

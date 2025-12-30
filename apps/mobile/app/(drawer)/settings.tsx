@@ -75,6 +75,21 @@ const LANGUAGES: { id: Language; native: string }[] = [
     { id: 'zh', native: '中文' },
 ];
 
+const maskCalendarUrl = (url: string): string => {
+    const trimmed = url.trim();
+    if (!trimmed) return '';
+    const match = trimmed.match(/^(https?:\/\/)?([^/?#]+)([^?#]*)/i);
+    if (!match) {
+        return trimmed.length <= 8 ? '...' : `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
+    }
+    const protocol = match[1] ?? '';
+    const host = match[2] ?? '';
+    const path = match[3] ?? '';
+    const lastSegment = path.split('/').filter(Boolean).pop() ?? '';
+    const suffix = lastSegment ? `...${lastSegment.slice(-6)}` : '...';
+    return `${protocol}${host}/${suffix}`;
+};
+
 export default function SettingsPage() {
     const { themeMode, setThemeMode, isDark } = useTheme();
     const { language, setLanguage, t } = useLanguage();
@@ -1345,7 +1360,7 @@ export default function SettingsPage() {
                                                 {calendar.name}
                                             </Text>
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]} numberOfLines={1}>
-                                                {calendar.url}
+                                                {maskCalendarUrl(calendar.url)}
                                             </Text>
                                         </View>
                                         <View style={{ alignItems: 'flex-end', gap: 10 }}>
