@@ -82,7 +82,7 @@ A complete Getting Things Done (GTD) productivity system for desktop and mobile.
 
 ### Cross-Platform
 - 🖥️ **Desktop** - Tauri v2 (macOS, Linux, Windows)
-- 📱 **Mobile** - React Native/Expo (iOS, Android)
+- 📱 **Mobile** - React Native/Expo (~iOS~, Android)
 - 📲 **Android Widget** - Home screen focus/next widget
 - ⌨️ **Keyboard Shortcuts** - Vim and Emacs presets
 - 🎨 **Themes** - Light/Dark

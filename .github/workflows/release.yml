@@ -255,8 +255,28 @@ jobs:
       - name: List release assets
         run: ls -la ./release-assets/ || echo "No assets found"
 
+      - name: Resolve release notes
+        id: release_notes
+        run: |
+          CURRENT_TAG=${GITHUB_REF#refs/tags/}
+          NOTES_PATH="docs/release-notes/${CURRENT_TAG}.md"
+          ALT_NOTES_PATH="docs/release-notes/${CURRENT_TAG#v}.md"
+          if [ -f "$NOTES_PATH" ]; then
+            echo "Using release notes at $NOTES_PATH"
+            echo "body_path=$NOTES_PATH" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -f "$ALT_NOTES_PATH" ]; then
+            echo "Using release notes at $ALT_NOTES_PATH"
+            echo "body_path=$ALT_NOTES_PATH" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "No release notes file found; falling back to generated changelog."
+          echo "body_path=CHANGELOG.md" >> "$GITHUB_OUTPUT"
+
       - name: Generate Changelog
         id: changelog
+        if: ${{ steps.release_notes.outputs.body_path == 'CHANGELOG.md' }}
         run: |
           # Get the previous tag
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
@@ -283,7 +303,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: ./release-assets/*
-          body_path: CHANGELOG.md
+          body_path: ${{ steps.release_notes.outputs.body_path }}
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
         env:

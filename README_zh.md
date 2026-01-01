@@ -82,7 +82,7 @@
 
 ### 跨平台
 - 🖥️ **桌面端** - Tauri v2（macOS、Linux、Windows）
-- 📱 **移动端** - React Native/Expo（iOS、Android）
+- 📱 **移动端** - React Native/Expo（~iOS~、Android）
 - 📲 **Android 小部件** - 桌面焦点/下一步小组件
 - ⌨️ **键盘快捷键** - Vim 与 Emacs 预设
 - 🎨 **主题** - 明/暗模式
