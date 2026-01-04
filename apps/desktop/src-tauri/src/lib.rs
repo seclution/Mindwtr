@@ -15,12 +15,83 @@ use tauri::path::BaseDirectory;
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::image::Image;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use rusqlite::{params, Connection, OptionalExtension};
 
 /// App name used for config directories and files
 const APP_NAME: &str = "mindwtr";
 const CONFIG_FILE_NAME: &str = "config.toml";
 const SECRETS_FILE_NAME: &str = "secrets.toml";
 const DATA_FILE_NAME: &str = "data.json";
+const DB_FILE_NAME: &str = "mindwtr.db";
+
+const SQLITE_SCHEMA: &str = r#"
+PRAGMA journal_mode = WAL;
+
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL,
+  priority TEXT,
+  taskMode TEXT,
+  startTime TEXT,
+  dueDate TEXT,
+  recurrence TEXT,
+  pushCount INTEGER,
+  tags TEXT,
+  contexts TEXT,
+  checklist TEXT,
+  description TEXT,
+  attachments TEXT,
+  location TEXT,
+  projectId TEXT,
+  isFocusedToday INTEGER,
+  timeEstimate TEXT,
+  reviewAt TEXT,
+  completedAt TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  deletedAt TEXT
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL,
+  color TEXT NOT NULL,
+  tagIds TEXT,
+  isSequential INTEGER,
+  isFocused INTEGER,
+  supportNotes TEXT,
+  attachments TEXT,
+  reviewAt TEXT,
+  areaId TEXT,
+  areaTitle TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  deletedAt TEXT
+);
+
+CREATE TABLE IF NOT EXISTS areas (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  color TEXT,
+  icon TEXT,
+  orderNum INTEGER NOT NULL,
+  createdAt TEXT,
+  updatedAt TEXT
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  data TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_projectId ON tasks(projectId);
+CREATE INDEX IF NOT EXISTS idx_tasks_deletedAt ON tasks(deletedAt);
+CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
+CREATE INDEX IF NOT EXISTS idx_projects_areaId ON projects(areaId);
+"#;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct LegacyAppConfigJson {
@@ -129,6 +200,328 @@ fn get_secrets_path(app: &tauri::AppHandle) -> PathBuf {
 
 fn get_data_path(app: &tauri::AppHandle) -> PathBuf {
     get_data_dir(app).join(DATA_FILE_NAME)
+}
+
+fn get_db_path(app: &tauri::AppHandle) -> PathBuf {
+    get_data_dir(app).join(DB_FILE_NAME)
+}
+
+fn open_sqlite(app: &tauri::AppHandle) -> Result<Connection, String> {
+    let db_path = get_db_path(app);
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    conn.execute_batch(SQLITE_SCHEMA).map_err(|e| e.to_string())?;
+    Ok(conn)
+}
+
+fn sqlite_has_any_data(conn: &Connection) -> Result<bool, String> {
+    let task_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    let project_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    let area_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM areas", [], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    let settings_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM settings", [], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    Ok(task_count > 0 || project_count > 0 || area_count > 0 || settings_count > 0)
+}
+
+fn json_str(value: Option<&Value>) -> Option<String> {
+    value.and_then(|v| serde_json::to_string(v).ok())
+}
+
+fn json_str_or_default(value: Option<&Value>, default: &str) -> String {
+    json_str(value).unwrap_or_else(|| default.to_string())
+}
+
+fn parse_json_value(raw: Option<String>) -> Value {
+    if let Some(text) = raw {
+        if let Ok(value) = serde_json::from_str::<Value>(&text) {
+            return value;
+        }
+    }
+    Value::Null
+}
+
+fn parse_json_array(raw: Option<String>) -> Value {
+    match parse_json_value(raw) {
+        Value::Array(arr) => Value::Array(arr),
+        _ => Value::Array(Vec::new()),
+    }
+}
+
+fn migrate_json_to_sqlite(conn: &Connection, data: &Value) -> Result<(), String> {
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM tasks", []).map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM projects", []).map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM areas", []).map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM settings", []).map_err(|e| e.to_string())?;
+
+    let tasks = data.get("tasks").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    for task in tasks {
+        let tags_json = json_str_or_default(task.get("tags"), "[]");
+        let contexts_json = json_str_or_default(task.get("contexts"), "[]");
+        let recurrence_json = json_str(task.get("recurrence"));
+        let checklist_json = json_str(task.get("checklist"));
+        let attachments_json = json_str(task.get("attachments"));
+        tx.execute(
+            "INSERT INTO tasks (id, title, status, priority, taskMode, startTime, dueDate, recurrence, pushCount, tags, contexts, checklist, description, attachments, location, projectId, isFocusedToday, timeEstimate, reviewAt, completedAt, createdAt, updatedAt, deletedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+            params![
+                task.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
+                task.get("title").and_then(|v| v.as_str()).unwrap_or_default(),
+                task.get("status").and_then(|v| v.as_str()).unwrap_or("inbox"),
+                task.get("priority").and_then(|v| v.as_str()),
+                task.get("taskMode").and_then(|v| v.as_str()),
+                task.get("startTime").and_then(|v| v.as_str()),
+                task.get("dueDate").and_then(|v| v.as_str()),
+                recurrence_json,
+                task.get("pushCount").and_then(|v| v.as_i64()),
+                tags_json,
+                contexts_json,
+                checklist_json,
+                task.get("description").and_then(|v| v.as_str()),
+                attachments_json,
+                task.get("location").and_then(|v| v.as_str()),
+                task.get("projectId").and_then(|v| v.as_str()),
+                task.get("isFocusedToday").and_then(|v| v.as_bool()).unwrap_or(false) as i32,
+                task.get("timeEstimate").and_then(|v| v.as_str()),
+                task.get("reviewAt").and_then(|v| v.as_str()),
+                task.get("completedAt").and_then(|v| v.as_str()),
+                task.get("createdAt").and_then(|v| v.as_str()).unwrap_or_default(),
+                task.get("updatedAt").and_then(|v| v.as_str()).unwrap_or_default(),
+                task.get("deletedAt").and_then(|v| v.as_str()),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let projects = data.get("projects").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    for project in projects {
+        let tag_ids_json = json_str_or_default(project.get("tagIds"), "[]");
+        let attachments_json = json_str(project.get("attachments"));
+        tx.execute(
+            "INSERT INTO projects (id, title, status, color, tagIds, isSequential, isFocused, supportNotes, attachments, reviewAt, areaId, areaTitle, createdAt, updatedAt, deletedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                project.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
+                project.get("title").and_then(|v| v.as_str()).unwrap_or_default(),
+                project.get("status").and_then(|v| v.as_str()).unwrap_or("active"),
+                project.get("color").and_then(|v| v.as_str()).unwrap_or("#6B7280"),
+                tag_ids_json,
+                project.get("isSequential").and_then(|v| v.as_bool()).unwrap_or(false) as i32,
+                project.get("isFocused").and_then(|v| v.as_bool()).unwrap_or(false) as i32,
+                project.get("supportNotes").and_then(|v| v.as_str()),
+                attachments_json,
+                project.get("reviewAt").and_then(|v| v.as_str()),
+                project.get("areaId").and_then(|v| v.as_str()),
+                project.get("areaTitle").and_then(|v| v.as_str()),
+                project.get("createdAt").and_then(|v| v.as_str()).unwrap_or_default(),
+                project.get("updatedAt").and_then(|v| v.as_str()).unwrap_or_default(),
+                project.get("deletedAt").and_then(|v| v.as_str()),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let areas = data.get("areas").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    for area in areas {
+        tx.execute(
+            "INSERT INTO areas (id, name, color, icon, orderNum, createdAt, updatedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                area.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
+                area.get("name").and_then(|v| v.as_str()).unwrap_or_default(),
+                area.get("color").and_then(|v| v.as_str()),
+                area.get("icon").and_then(|v| v.as_str()),
+                area.get("order").and_then(|v| v.as_i64()).unwrap_or(0),
+                area.get("createdAt").and_then(|v| v.as_str()),
+                area.get("updatedAt").and_then(|v| v.as_str()),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let settings_json = json_str(data.get("settings"));
+    tx.execute(
+        "INSERT INTO settings (id, data) VALUES (1, ?1)",
+        params![settings_json.unwrap_or_else(|| "{}".to_string())],
+    )
+    .map_err(|e| e.to_string())?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn read_sqlite_data(conn: &Connection) -> Result<Value, String> {
+    let mut tasks_stmt = conn
+        .prepare("SELECT * FROM tasks")
+        .map_err(|e| e.to_string())?;
+    let task_rows = tasks_stmt
+        .query_map([], |row| {
+            let mut map = serde_json::Map::new();
+            map.insert("id".to_string(), Value::String(row.get::<_, String>("id")?));
+            map.insert("title".to_string(), Value::String(row.get::<_, String>("title")?));
+            map.insert("status".to_string(), Value::String(row.get::<_, String>("status")?));
+            if let Ok(val) = row.get::<_, Option<String>>("priority") {
+                if let Some(v) = val { map.insert("priority".to_string(), Value::String(v)); }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("taskMode") {
+                if let Some(v) = val { map.insert("taskMode".to_string(), Value::String(v)); }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("startTime") {
+                if let Some(v) = val { map.insert("startTime".to_string(), Value::String(v)); }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("dueDate") {
+                if let Some(v) = val { map.insert("dueDate".to_string(), Value::String(v)); }
+            }
+            let recurrence_raw: Option<String> = row.get("recurrence")?;
+            let recurrence_val = parse_json_value(recurrence_raw);
+            if !recurrence_val.is_null() {
+                map.insert("recurrence".to_string(), recurrence_val);
+            }
+            if let Ok(val) = row.get::<_, Option<i64>>("pushCount") {
+                if let Some(v) = val { map.insert("pushCount".to_string(), Value::Number(v.into())); }
+            }
+            let tags_raw: Option<String> = row.get("tags")?;
+            map.insert("tags".to_string(), parse_json_array(tags_raw));
+            let contexts_raw: Option<String> = row.get("contexts")?;
+            map.insert("contexts".to_string(), parse_json_array(contexts_raw));
+            let checklist_raw: Option<String> = row.get("checklist")?;
+            let checklist_val = parse_json_value(checklist_raw);
+            if !checklist_val.is_null() { map.insert("checklist".to_string(), checklist_val); }
+            if let Ok(val) = row.get::<_, Option<String>>("description") {
+                if let Some(v) = val { map.insert("description".to_string(), Value::String(v)); }
+            }
+            let attachments_raw: Option<String> = row.get("attachments")?;
+            let attachments_val = parse_json_value(attachments_raw);
+            if !attachments_val.is_null() { map.insert("attachments".to_string(), attachments_val); }
+            if let Ok(val) = row.get::<_, Option<String>>("location") {
+                if let Some(v) = val { map.insert("location".to_string(), Value::String(v)); }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("projectId") {
+                if let Some(v) = val { map.insert("projectId".to_string(), Value::String(v)); }
+            }
+            if let Ok(val) = row.get::<_, i64>("isFocusedToday") {
+                if val != 0 { map.insert("isFocusedToday".to_string(), Value::Bool(true)); }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("timeEstimate") {
+                if let Some(v) = val { map.insert("timeEstimate".to_string(), Value::String(v)); }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("reviewAt") {
+                if let Some(v) = val { map.insert("reviewAt".to_string(), Value::String(v)); }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("completedAt") {
+                if let Some(v) = val { map.insert("completedAt".to_string(), Value::String(v)); }
+            }
+            map.insert("createdAt".to_string(), Value::String(row.get::<_, String>("createdAt")?));
+            map.insert("updatedAt".to_string(), Value::String(row.get::<_, String>("updatedAt")?));
+            if let Ok(val) = row.get::<_, Option<String>>("deletedAt") {
+                if let Some(v) = val { map.insert("deletedAt".to_string(), Value::String(v)); }
+            }
+            Ok(Value::Object(map))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut tasks: Vec<Value> = Vec::new();
+    for row in task_rows {
+        tasks.push(row.map_err(|e| e.to_string())?);
+    }
+
+    let mut projects_stmt = conn
+        .prepare("SELECT * FROM projects")
+        .map_err(|e| e.to_string())?;
+    let project_rows = projects_stmt
+        .query_map([], |row| {
+            let mut map = serde_json::Map::new();
+            map.insert("id".to_string(), Value::String(row.get::<_, String>("id")?));
+            map.insert("title".to_string(), Value::String(row.get::<_, String>("title")?));
+            map.insert("status".to_string(), Value::String(row.get::<_, String>("status")?));
+            map.insert("color".to_string(), Value::String(row.get::<_, String>("color")?));
+            let tag_ids_raw: Option<String> = row.get("tagIds")?;
+            map.insert("tagIds".to_string(), parse_json_array(tag_ids_raw));
+            if let Ok(val) = row.get::<_, i64>("isSequential") {
+                if val != 0 { map.insert("isSequential".to_string(), Value::Bool(true)); }
+            }
+            if let Ok(val) = row.get::<_, i64>("isFocused") {
+                if val != 0 { map.insert("isFocused".to_string(), Value::Bool(true)); }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("supportNotes") {
+                if let Some(v) = val { map.insert("supportNotes".to_string(), Value::String(v)); }
+            }
+            let attachments_raw: Option<String> = row.get("attachments")?;
+            let attachments_val = parse_json_value(attachments_raw);
+            if !attachments_val.is_null() { map.insert("attachments".to_string(), attachments_val); }
+            if let Ok(val) = row.get::<_, Option<String>>("reviewAt") {
+                if let Some(v) = val { map.insert("reviewAt".to_string(), Value::String(v)); }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("areaId") {
+                if let Some(v) = val { map.insert("areaId".to_string(), Value::String(v)); }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("areaTitle") {
+                if let Some(v) = val { map.insert("areaTitle".to_string(), Value::String(v)); }
+            }
+            map.insert("createdAt".to_string(), Value::String(row.get::<_, String>("createdAt")?));
+            map.insert("updatedAt".to_string(), Value::String(row.get::<_, String>("updatedAt")?));
+            if let Ok(val) = row.get::<_, Option<String>>("deletedAt") {
+                if let Some(v) = val { map.insert("deletedAt".to_string(), Value::String(v)); }
+            }
+            Ok(Value::Object(map))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut projects: Vec<Value> = Vec::new();
+    for row in project_rows {
+        projects.push(row.map_err(|e| e.to_string())?);
+    }
+
+    let mut areas_stmt = conn
+        .prepare("SELECT * FROM areas")
+        .map_err(|e| e.to_string())?;
+    let area_rows = areas_stmt
+        .query_map([], |row| {
+            let mut map = serde_json::Map::new();
+            map.insert("id".to_string(), Value::String(row.get::<_, String>("id")?));
+            map.insert("name".to_string(), Value::String(row.get::<_, String>("name")?));
+            if let Ok(val) = row.get::<_, Option<String>>("color") {
+                if let Some(v) = val { map.insert("color".to_string(), Value::String(v)); }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("icon") {
+                if let Some(v) = val { map.insert("icon".to_string(), Value::String(v)); }
+            }
+            map.insert("order".to_string(), Value::Number((row.get::<_, i64>("orderNum")?).into()));
+            if let Ok(val) = row.get::<_, Option<String>>("createdAt") {
+                if let Some(v) = val { map.insert("createdAt".to_string(), Value::String(v)); }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("updatedAt") {
+                if let Some(v) = val { map.insert("updatedAt".to_string(), Value::String(v)); }
+            }
+            Ok(Value::Object(map))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut areas: Vec<Value> = Vec::new();
+    for row in area_rows {
+        areas.push(row.map_err(|e| e.to_string())?);
+    }
+
+    let settings_raw: Option<String> = conn
+        .query_row("SELECT data FROM settings WHERE id = 1", [], |row| row.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let settings_val = parse_json_value(settings_raw).as_object().cloned().unwrap_or_default();
+
+    Ok(Value::Object(
+        serde_json::json!({
+            "tasks": tasks,
+            "projects": projects,
+            "areas": areas,
+            "settings": Value::Object(settings_val),
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    ))
 }
 
 fn get_legacy_config_json_path(app: &tauri::AppHandle) -> PathBuf {
@@ -432,11 +825,26 @@ fn ensure_data_file(app: &tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn get_data(app: tauri::AppHandle) -> Result<Value, String> {
+    ensure_data_file(&app)?;
     let data_path = get_data_path(&app);
     let backup_path = data_path.with_extension("json.bak");
-    match read_json_with_retries(&data_path, 4) {
+    let conn = open_sqlite(&app)?;
+
+    if !sqlite_has_any_data(&conn)? && data_path.exists() {
+        if let Ok(value) = read_json_with_retries(&data_path, 2) {
+            let _ = fs::copy(&data_path, &backup_path);
+            migrate_json_to_sqlite(&conn, &value)?;
+        }
+    }
+
+    match read_sqlite_data(&conn) {
         Ok(value) => Ok(value),
         Err(primary_err) => {
+            if data_path.exists() {
+                if let Ok(value) = read_json_with_retries(&data_path, 2) {
+                    return Ok(value);
+                }
+            }
             if backup_path.exists() {
                 if let Ok(value) = read_json_with_retries(&backup_path, 2) {
                     return Ok(value);
@@ -449,16 +857,19 @@ fn get_data(app: tauri::AppHandle) -> Result<Value, String> {
 
 #[tauri::command]
 fn save_data(app: tauri::AppHandle, data: Value) -> Result<bool, String> {
+    ensure_data_file(&app)?;
+    let conn = open_sqlite(&app)?;
+    migrate_json_to_sqlite(&conn, &data)?;
+
+    // Keep JSON backup updated for safety/rollbacks
     let data_path = get_data_path(&app);
     if let Some(parent) = data_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-
     let backup_path = data_path.with_extension("json.bak");
     if data_path.exists() {
         let _ = fs::copy(&data_path, &backup_path);
     }
-
     let tmp_path = data_path.with_extension("json.tmp");
     let content = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     {
@@ -466,7 +877,6 @@ fn save_data(app: tauri::AppHandle, data: Value) -> Result<bool, String> {
         file.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
     }
-
     if cfg!(windows) && data_path.exists() {
         fs::remove_file(&data_path).map_err(|e| e.to_string())?;
     }
@@ -477,6 +887,11 @@ fn save_data(app: tauri::AppHandle, data: Value) -> Result<bool, String> {
 #[tauri::command]
 fn get_data_path_cmd(app: tauri::AppHandle) -> String {
     get_data_path(&app).to_string_lossy().to_string()
+}
+
+#[tauri::command]
+fn get_db_path_cmd(app: tauri::AppHandle) -> String {
+    get_db_path(&app).to_string_lossy().to_string()
 }
 
 #[tauri::command]
@@ -848,6 +1263,7 @@ pub fn run() {
             get_data,
             save_data,
             get_data_path_cmd,
+            get_db_path_cmd,
             get_config_path_cmd,
             get_sync_path,
             set_sync_path,
