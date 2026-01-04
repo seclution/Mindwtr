@@ -34,6 +34,7 @@ export function KeybindingHelpModal({ style, onClose, currentView, t }: Keybindi
         { keys: 'j / k', labelKey: 'keybindings.list.nextPrev' },
         { keys: 'gg / G', labelKey: 'keybindings.list.firstLast' },
         { keys: 'e', labelKey: 'keybindings.list.edit' },
+        { keys: 'Esc', labelKey: 'keybindings.list.cancelEdit' },
         { keys: 'x', labelKey: 'keybindings.list.toggleDone' },
         { keys: 'dd', labelKey: 'keybindings.list.delete' },
         { keys: 'o', labelKey: 'keybindings.list.newTask' },
@@ -62,6 +63,7 @@ export function KeybindingHelpModal({ style, onClose, currentView, t }: Keybindi
     const emacsList: HelpItem[] = [
         { keys: 'Ctrl-n / Ctrl-p', labelKey: 'keybindings.list.nextPrev' },
         { keys: 'Ctrl-e', labelKey: 'keybindings.list.edit' },
+        { keys: 'Esc', labelKey: 'keybindings.list.cancelEdit' },
         { keys: 'Ctrl-t', labelKey: 'keybindings.list.toggleDone' },
         { keys: 'Ctrl-d', labelKey: 'keybindings.list.delete' },
         { keys: 'Ctrl-o', labelKey: 'keybindings.list.newTask' },

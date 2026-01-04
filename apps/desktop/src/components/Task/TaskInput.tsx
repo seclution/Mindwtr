@@ -161,6 +161,7 @@ export function TaskInput({
             if (event.key === 'Escape') {
                 event.stopPropagation();
                 closeTrigger();
+                return;
             }
         }
         onKeyDown?.(event);

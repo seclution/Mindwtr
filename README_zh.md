@@ -94,7 +94,7 @@ Mindwtr **默认简单，需要时也足够强大**。我们专注于降低认�
 - 📲 **Android 小部件** - 桌面焦点/下一步小组件
 - ⌨️ **键盘快捷键** - Vim 与 Emacs 预设
 - 🎨 **主题** - 明/暗模式
-- 🌍 **国际化** - 英文、中文、西班牙语、印地语、阿拉伯语
+- 🌍 **国际化** - 英文、中文、西班牙语、印地语、阿拉伯语、德语、俄语、日语、法语、葡萄牙语、韩语、意大利语、土耳其语
 
 ## 安装
 
@@ -152,11 +152,11 @@ iOS 构建需要 Apple Developer 账号（$99/年），目前仅提供模拟器�
 ## 数据存储
 
 任务和项目保存在本地设备：
-- **桌面端数据（Linux）**：`~/.local/share/mindwtr/data.json`
+- **桌面端数据（Linux）**：`~/.local/share/mindwtr/mindwtr.db`（SQLite）+ `data.json`（同步/备份）
 - **桌面端配置（Linux）**：`~/.config/mindwtr/config.toml`
-- **移动端**：设备存储（AsyncStorage）
+- **移动端**：`mindwtr.db`（SQLite）+ `data.json`（同步/备份）
 
-可在设置中选择文件同步（Dropbox 等）、WebDAV（Nextcloud 等）或云同步。
+可在设置中选择文件同步（Dropbox 等）或 WebDAV（Nextcloud 等）。
 
 ## 文档
 

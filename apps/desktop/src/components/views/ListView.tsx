@@ -18,6 +18,9 @@ interface ListViewProps {
 
 type ProcessingStep = 'actionable' | 'twomin' | 'decide' | 'context' | 'project' | 'waiting-note';
 
+const EMPTY_PRIORITIES: TaskPriority[] = [];
+const EMPTY_ESTIMATES: TimeEstimate[] = [];
+
 export function ListView({ title, statusFilter }: ListViewProps) {
     const { tasks, projects, settings, updateSettings, addTask, addProject, updateTask, deleteTask, moveTask, batchMoveTasks, batchDeleteTasks, batchUpdateTasks, queryTasks, lastDataChangeAt } = useTaskStore();
     const { t } = useLanguage();
@@ -45,8 +48,14 @@ export function ListView({ title, statusFilter }: ListViewProps) {
     const aiProvider = (settings?.ai?.provider ?? 'openai') as 'openai' | 'gemini';
     const prioritiesEnabled = settings?.features?.priorities === true;
     const timeEstimatesEnabled = settings?.features?.timeEstimates === true;
-    const activePriorities = prioritiesEnabled ? selectedPriorities : [];
-    const activeTimeEstimates = timeEstimatesEnabled ? selectedTimeEstimates : [];
+    const activePriorities = useMemo(
+        () => (prioritiesEnabled ? selectedPriorities : EMPTY_PRIORITIES),
+        [prioritiesEnabled, selectedPriorities]
+    );
+    const activeTimeEstimates = useMemo(
+        () => (timeEstimatesEnabled ? selectedTimeEstimates : EMPTY_ESTIMATES),
+        [timeEstimatesEnabled, selectedTimeEstimates]
+    );
 
     const exitSelectionMode = useCallback(() => {
         setSelectionMode(false);
@@ -222,7 +231,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
     useEffect(() => {
         setSelectedIndex(0);
         exitSelectionMode();
-    }, [statusFilter, selectedTokens, activePriorities, activeTimeEstimates, exitSelectionMode]);
+    }, [statusFilter, selectedTokens, selectedPriorities, selectedTimeEstimates, prioritiesEnabled, timeEstimatesEnabled, exitSelectionMode]);
 
     useEffect(() => {
         if (filteredTasks.length === 0) {

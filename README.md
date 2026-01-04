@@ -97,7 +97,7 @@ Mindwtr is built to be **simple by default and powerful when you need it**. We f
 - 📲 **Android Widget** - Home screen focus/next widget
 - ⌨️ **Keyboard Shortcuts** - Vim and Emacs presets
 - 🎨 **Themes** - Light/Dark
-- 🌍 **i18n** - English, Chinese, Spanish, Hindi, Arabic
+- 🌍 **i18n** - English, Chinese, Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Korean, Italian, Turkish
 
 ## Installation
 
@@ -155,11 +155,11 @@ iOS builds require an Apple Developer account ($99/year). Currently available as
 ## Data Storage
 
 Tasks and projects are stored locally on your device:
-- **Desktop data (Linux)**: `~/.local/share/mindwtr/data.json`
+- **Desktop data (Linux)**: `~/.local/share/mindwtr/mindwtr.db` (SQLite) + `data.json` (sync/backup)
 - **Desktop config (Linux)**: `~/.config/mindwtr/config.toml`
-- **Mobile**: Device storage (AsyncStorage)
+- **Mobile**: `mindwtr.db` (SQLite) + `data.json` (sync/backup)
 
-Sync via File (Dropbox, etc.), WebDAV (Nextcloud, etc.), or Cloud can be configured in Settings.
+Sync via File (Dropbox, etc.) or WebDAV (Nextcloud, etc.) can be configured in Settings.
 
 ## Documentation
 
