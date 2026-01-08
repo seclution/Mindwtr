@@ -12,6 +12,7 @@ import {
     type Recurrence,
     type RecurrenceRule,
     type RecurrenceStrategy,
+    type RecurrenceByDay,
     buildRRuleString,
     parseRRuleString,
     generateUUID,
@@ -64,6 +65,24 @@ const DEFAULT_TASK_EDITOR_HIDDEN: TaskEditorFieldId[] = [
     'checklist',
 ];
 const WEEKDAY_ORDER: RecurrenceWeekday[] = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+const WEEKDAY_LABELS: Array<{ id: RecurrenceWeekday; label: string }> = [
+    { id: 'SU', label: 'Sun' },
+    { id: 'MO', label: 'Mon' },
+    { id: 'TU', label: 'Tue' },
+    { id: 'WE', label: 'Wed' },
+    { id: 'TH', label: 'Thu' },
+    { id: 'FR', label: 'Fri' },
+    { id: 'SA', label: 'Sat' },
+];
+const WEEKDAY_FULL_LABELS: Record<RecurrenceWeekday, string> = {
+    SU: 'Sunday',
+    MO: 'Monday',
+    TU: 'Tuesday',
+    WE: 'Wednesday',
+    TH: 'Thursday',
+    FR: 'Friday',
+    SA: 'Saturday',
+};
 
 // Convert stored ISO or datetime-local strings into datetime-local input values.
 function toDateTimeLocalValue(dateStr: string | undefined): string {
@@ -155,13 +174,72 @@ export const TaskItem = memo(function TaskItem({
     const isStagnant = (task.pushCount ?? 0) > 3;
     const monthlyAnchorDate = safeParseDate(editDueDate) ?? safeParseDate(task.dueDate) ?? new Date();
     const monthlyWeekdayCode = WEEKDAY_ORDER[monthlyAnchorDate.getDay()];
-    const monthlyWeekdayLabel = safeFormatDate(monthlyAnchorDate, 'EEEE', monthlyWeekdayCode);
-    const monthlyPattern = useMemo(() => {
-        if (editRecurrence !== 'monthly') return 'date';
+    const monthlyRecurrence = useMemo(() => {
+        if (editRecurrence !== 'monthly') {
+            return { pattern: 'date' as const, interval: 1 };
+        }
         const parsed = parseRRuleString(editRecurrenceRRule);
         const hasLast = parsed.byDay?.some((day) => String(day).startsWith('-1'));
-        return hasLast ? 'last' : 'date';
-    }, [editRecurrence, editRecurrenceRRule]);
+        const hasNth = parsed.byDay?.some((day) => /^[1-4]/.test(String(day)));
+        const hasByMonthDay = parsed.byMonthDay && parsed.byMonthDay.length > 0;
+        const interval = parsed.interval && parsed.interval > 0 ? parsed.interval : 1;
+        const isCustomDay = hasByMonthDay && parsed.byMonthDay?.[0] !== monthlyAnchorDate.getDate();
+        const pattern = hasNth || hasLast || interval > 1 || isCustomDay ? 'custom' : 'date';
+        return { pattern, interval };
+    }, [editRecurrence, editRecurrenceRRule, monthlyAnchorDate]);
+
+    const [showCustomRecurrence, setShowCustomRecurrence] = useState(false);
+    const [customInterval, setCustomInterval] = useState(1);
+    const [customMode, setCustomMode] = useState<'date' | 'nth'>('date');
+    const [customOrdinal, setCustomOrdinal] = useState<'1' | '2' | '3' | '4' | '-1'>('1');
+    const [customWeekday, setCustomWeekday] = useState<RecurrenceWeekday>(monthlyWeekdayCode);
+    const [customMonthDay, setCustomMonthDay] = useState<number>(monthlyAnchorDate.getDate());
+
+    const openCustomRecurrence = useCallback(() => {
+        const parsed = parseRRuleString(editRecurrenceRRule);
+        const interval = parsed.interval && parsed.interval > 0 ? parsed.interval : 1;
+        let mode: 'date' | 'nth' = 'date';
+        let ordinal: '1' | '2' | '3' | '4' | '-1' = '1';
+        let weekday: RecurrenceWeekday = monthlyWeekdayCode;
+        const monthDay = parsed.byMonthDay?.[0];
+        if (monthDay) {
+            mode = 'date';
+            setCustomMonthDay(Math.min(Math.max(monthDay, 1), 31));
+        }
+        const token = parsed.byDay?.find((day) => /^(-?1|2|3|4)/.test(String(day)));
+        if (token) {
+            const match = String(token).match(/^(-1|1|2|3|4)?(SU|MO|TU|WE|TH|FR|SA)$/);
+            if (match) {
+                mode = 'nth';
+                ordinal = (match[1] ?? '1') as '1' | '2' | '3' | '4' | '-1';
+                weekday = match[2] as RecurrenceWeekday;
+            }
+        }
+        setCustomInterval(interval);
+        setCustomMode(mode);
+        setCustomOrdinal(ordinal);
+        setCustomWeekday(weekday);
+        if (!monthDay) {
+            setCustomMonthDay(monthlyAnchorDate.getDate());
+        }
+        setShowCustomRecurrence(true);
+    }, [editRecurrenceRRule, monthlyAnchorDate, monthlyWeekdayCode]);
+
+    const applyCustomRecurrence = useCallback(() => {
+        const intervalValue = Number(customInterval);
+        const safeInterval = Number.isFinite(intervalValue) && intervalValue > 0 ? intervalValue : 1;
+        const safeMonthDay = Math.min(Math.max(Math.round(customMonthDay || 1), 1), 31);
+        const rrule = customMode === 'nth'
+            ? buildRRuleString('monthly', [`${customOrdinal}${customWeekday}` as RecurrenceByDay], safeInterval)
+            : [
+                'FREQ=MONTHLY',
+                safeInterval > 1 ? `INTERVAL=${safeInterval}` : null,
+                `BYMONTHDAY=${safeMonthDay}`,
+            ].filter(Boolean).join(';');
+        setEditRecurrence('monthly');
+        setEditRecurrenceRRule(rrule);
+        setShowCustomRecurrence(false);
+    }, [customInterval, customMode, customOrdinal, customWeekday, customMonthDay]);
 
     useEffect(() => {
         if (!isHighlighted) return;
@@ -524,7 +602,7 @@ export const TaskItem = memo(function TaskItem({
                                         onClick={() => setEditRecurrenceRRule(buildRRuleString('monthly'))}
                                         className={cn(
                                             'text-[10px] px-2 py-1 rounded border transition-colors',
-                                            monthlyPattern === 'date'
+                                            monthlyRecurrence.pattern === 'date'
                                                 ? 'bg-primary text-primary-foreground border-primary'
                                                 : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
                                         )}
@@ -533,15 +611,15 @@ export const TaskItem = memo(function TaskItem({
                                     </button>
                                     <button
                                         type="button"
-                                        onClick={() => setEditRecurrenceRRule(`FREQ=MONTHLY;BYDAY=-1${monthlyWeekdayCode}`)}
+                                        onClick={openCustomRecurrence}
                                         className={cn(
                                             'text-[10px] px-2 py-1 rounded border transition-colors',
-                                            monthlyPattern === 'last'
+                                            monthlyRecurrence.pattern === 'custom'
                                                 ? 'bg-primary text-primary-foreground border-primary'
                                                 : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
                                         )}
                                     >
-                                        {t('recurrence.monthlyOnLastWeekday').replace('{weekday}', monthlyWeekdayLabel)}
+                                        {t('recurrence.custom')}
                                     </button>
                                 </div>
                             </div>
@@ -1165,6 +1243,133 @@ export const TaskItem = memo(function TaskItem({
                 )}
             </div>
         </div >
+        {showCustomRecurrence && (
+            <div
+                className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+                role="button"
+                tabIndex={0}
+                aria-label={t('common.close')}
+                onClick={() => setShowCustomRecurrence(false)}
+                onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                        event.preventDefault();
+                        setShowCustomRecurrence(false);
+                    }
+                }}
+            >
+                <div
+                    className="bg-card border border-border rounded-lg shadow-xl max-w-md w-full mx-4"
+                    onClick={(event) => event.stopPropagation()}
+                >
+                    <div className="p-4 border-b border-border">
+                        <h3 className="text-lg font-semibold">{t('recurrence.customTitle')}</h3>
+                    </div>
+                    <div className="p-4 space-y-4">
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm">{t('recurrence.repeatEvery')}</span>
+                            <input
+                                type="number"
+                                min={1}
+                                max={12}
+                                value={customInterval}
+                                onChange={(event) => setCustomInterval(event.target.valueAsNumber || 1)}
+                                className="w-20 text-sm bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
+                            />
+                            <span className="text-sm">{t('recurrence.monthUnit')}</span>
+                        </div>
+                        <div className="space-y-2">
+                            <div className="text-xs text-muted-foreground">{t('recurrence.onLabel')}</div>
+                            <div className="flex flex-wrap gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setCustomMode('date')}
+                                    className={cn(
+                                        'text-[10px] px-2 py-1 rounded border transition-colors',
+                                        customMode === 'date'
+                                            ? 'bg-primary text-primary-foreground border-primary'
+                                            : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
+                                    )}
+                                >
+                                    {t('recurrence.onDayOfMonth').replace('{day}', String(customMonthDay))}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setCustomMode('nth')}
+                                    className={cn(
+                                        'text-[10px] px-2 py-1 rounded border transition-colors',
+                                        customMode === 'nth'
+                                            ? 'bg-primary text-primary-foreground border-primary'
+                                            : 'bg-transparent text-muted-foreground border-border hover:bg-accent'
+                                    )}
+                                >
+                                    {t('recurrence.onNthWeekday')
+                                        .replace('{ordinal}', t(`recurrence.ordinal.${customOrdinal === '-1' ? 'last' : customOrdinal === '1' ? 'first' : customOrdinal === '2' ? 'second' : customOrdinal === '3' ? 'third' : 'fourth'}`))
+                                        .replace('{weekday}', WEEKDAY_FULL_LABELS[customWeekday] ?? customWeekday)}
+                                </button>
+                            </div>
+                            {customMode === 'nth' && (
+                                <div className="flex flex-wrap gap-2 items-center">
+                                    <select
+                                        value={customOrdinal}
+                                        onChange={(event) => setCustomOrdinal(event.target.value as '1' | '2' | '3' | '4' | '-1')}
+                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
+                                    >
+                                        <option value="1">{t('recurrence.ordinal.first')}</option>
+                                        <option value="2">{t('recurrence.ordinal.second')}</option>
+                                        <option value="3">{t('recurrence.ordinal.third')}</option>
+                                        <option value="4">{t('recurrence.ordinal.fourth')}</option>
+                                        <option value="-1">{t('recurrence.ordinal.last')}</option>
+                                    </select>
+                                    <select
+                                        value={customWeekday}
+                                        onChange={(event) => setCustomWeekday(event.target.value as RecurrenceWeekday)}
+                                        className="text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
+                                    >
+                                        {WEEKDAY_ORDER.map((day) => (
+                                            <option key={day} value={day}>
+                                                {WEEKDAY_FULL_LABELS[day] ?? day}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
+                            {customMode === 'date' && (
+                                <div className="flex items-center gap-2">
+                                    <label className="text-xs text-muted-foreground">{t('recurrence.onDayOfMonth').replace('{day}', '')}</label>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={31}
+                                        value={customMonthDay}
+                                        onChange={(event) => {
+                                            const value = Number(event.target.value);
+                                            setCustomMonthDay(Number.isFinite(value) ? Math.min(Math.max(value, 1), 31) : 1);
+                                        }}
+                                        className="w-20 text-sm bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    <div className="p-4 border-t border-border flex justify-end gap-2">
+                        <button
+                            type="button"
+                            className="text-sm px-3 py-1 rounded border border-border text-muted-foreground hover:bg-muted"
+                            onClick={() => setShowCustomRecurrence(false)}
+                        >
+                            {t('common.cancel')}
+                        </button>
+                        <button
+                            type="button"
+                            className="text-sm px-3 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                            onClick={applyCustomRecurrence}
+                        >
+                            {t('common.save')}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
         <PromptModal
             isOpen={showLinkPrompt}
             title={t('attachments.addLink')}

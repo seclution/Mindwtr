@@ -96,6 +96,16 @@ const WEEKDAY_BUTTONS: { key: RecurrenceWeekday; label: string }[] = [
     { key: 'SA', label: 'S' },
 ];
 
+const MONTHLY_WEEKDAY_LABELS: Record<RecurrenceWeekday, string> = {
+    SU: 'Sunday',
+    MO: 'Monday',
+    TU: 'Tuesday',
+    WE: 'Wednesday',
+    TH: 'Thursday',
+    FR: 'Friday',
+    SA: 'Saturday',
+};
+
 const getRecurrenceByDayValue = (recurrence: Task['recurrence']): RecurrenceWeekday[] => {
     if (!recurrence || typeof recurrence === 'string') return [];
     if (recurrence.byDay?.length) {
@@ -785,13 +795,76 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         return safeParseDate(editedTask.dueDate ?? task?.dueDate) ?? new Date();
     }, [editedTask.dueDate, task?.dueDate]);
     const monthlyWeekdayCode = WEEKDAY_ORDER[monthlyAnchorDate.getDay()];
-    const monthlyWeekdayLabel = safeFormatDate(monthlyAnchorDate, 'EEEE', monthlyWeekdayCode);
     const monthlyPattern = useMemo(() => {
         if (recurrenceRuleValue !== 'monthly') return 'date';
         const parsed = parseRRuleString(recurrenceRRuleValue);
         const hasLast = parsed.byDay?.some((day) => String(day).startsWith('-1'));
-        return hasLast ? 'last' : 'date';
-    }, [recurrenceRuleValue, recurrenceRRuleValue]);
+        const hasNth = parsed.byDay?.some((day) => /^[1-4]/.test(String(day)));
+        const hasByMonthDay = parsed.byMonthDay && parsed.byMonthDay.length > 0;
+        const interval = parsed.interval && parsed.interval > 0 ? parsed.interval : 1;
+        const isCustomDay = hasByMonthDay && parsed.byMonthDay?.[0] !== monthlyAnchorDate.getDate();
+        return hasNth || hasLast || interval > 1 || isCustomDay ? 'custom' : 'date';
+    }, [recurrenceRuleValue, recurrenceRRuleValue, monthlyAnchorDate]);
+
+    const [customRecurrenceVisible, setCustomRecurrenceVisible] = useState(false);
+    const [customInterval, setCustomInterval] = useState(1);
+    const [customMode, setCustomMode] = useState<'date' | 'nth'>('date');
+    const [customOrdinal, setCustomOrdinal] = useState<'1' | '2' | '3' | '4' | '-1'>('1');
+    const [customWeekday, setCustomWeekday] = useState<RecurrenceWeekday>(monthlyWeekdayCode);
+    const [customMonthDay, setCustomMonthDay] = useState<number>(monthlyAnchorDate.getDate());
+
+    const openCustomRecurrence = useCallback(() => {
+        const parsed = parseRRuleString(recurrenceRRuleValue);
+        const interval = parsed.interval && parsed.interval > 0 ? parsed.interval : 1;
+        let mode: 'date' | 'nth' = 'date';
+        let ordinal: '1' | '2' | '3' | '4' | '-1' = '1';
+        let weekday: RecurrenceWeekday = monthlyWeekdayCode;
+        const monthDay = parsed.byMonthDay?.[0];
+        if (monthDay) {
+            mode = 'date';
+            setCustomMonthDay(Math.min(Math.max(monthDay, 1), 31));
+        }
+        const token = parsed.byDay?.find((day) => /^(-1|1|2|3|4)/.test(String(day)));
+        if (token) {
+            const match = String(token).match(/^(-1|1|2|3|4)?(SU|MO|TU|WE|TH|FR|SA)$/);
+            if (match) {
+                mode = 'nth';
+                ordinal = (match[1] ?? '1') as '1' | '2' | '3' | '4' | '-1';
+                weekday = match[2] as RecurrenceWeekday;
+            }
+        }
+        setCustomInterval(interval);
+        setCustomMode(mode);
+        setCustomOrdinal(ordinal);
+        setCustomWeekday(weekday);
+        if (!monthDay) {
+            setCustomMonthDay(monthlyAnchorDate.getDate());
+        }
+        setCustomRecurrenceVisible(true);
+    }, [monthlyAnchorDate, monthlyWeekdayCode, recurrenceRRuleValue]);
+
+    const applyCustomRecurrence = useCallback(() => {
+        const intervalValue = Number(customInterval);
+        const safeInterval = Number.isFinite(intervalValue) && intervalValue > 0 ? intervalValue : 1;
+        const safeMonthDay = Math.min(Math.max(Math.round(customMonthDay || 1), 1), 31);
+        const rrule = customMode === 'nth'
+            ? buildRRuleString('monthly', [`${customOrdinal}${customWeekday}` as RecurrenceByDay], safeInterval)
+            : [
+                'FREQ=MONTHLY',
+                safeInterval > 1 ? `INTERVAL=${safeInterval}` : null,
+                `BYMONTHDAY=${safeMonthDay}`,
+            ].filter(Boolean).join(';');
+        setEditedTask(prev => ({
+            ...prev,
+            recurrence: {
+                rule: 'monthly',
+                strategy: recurrenceStrategyValue,
+                ...(customMode === 'nth' ? { byDay: [`${customOrdinal}${customWeekday}` as RecurrenceByDay] } : {}),
+                rrule,
+            },
+        }));
+        setCustomRecurrenceVisible(false);
+    }, [customInterval, customMode, customOrdinal, customWeekday, customMonthDay, recurrenceStrategyValue]);
 
     const toggleContext = (tag: string) => {
         const current = editedTask.contexts || [];
@@ -1289,23 +1362,11 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                     </Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
-                                    style={getStatusChipStyle(monthlyPattern === 'last')}
-                                    onPress={() => {
-                                        const token = `-1${monthlyWeekdayCode}` as RecurrenceByDay;
-                                        const rrule = `FREQ=MONTHLY;BYDAY=${token}`;
-                                        setEditedTask(prev => ({
-                                            ...prev,
-                                            recurrence: {
-                                                rule: 'monthly',
-                                                strategy: recurrenceStrategyValue,
-                                                byDay: [token],
-                                                rrule,
-                                            },
-                                        }));
-                                    }}
+                                    style={getStatusChipStyle(monthlyPattern === 'custom')}
+                                    onPress={openCustomRecurrence}
                                 >
-                                    <Text style={getStatusTextStyle(monthlyPattern === 'last')}>
-                                        {t('recurrence.monthlyOnLastWeekday').replace('{weekday}', monthlyWeekdayLabel)}
+                                    <Text style={getStatusTextStyle(monthlyPattern === 'custom')}>
+                                        {t('recurrence.custom')}
                                     </Text>
                                 </TouchableOpacity>
                             </View>
@@ -1971,6 +2032,135 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                         </View>
                     </View>
                 </Modal>
+                <Modal
+                    visible={customRecurrenceVisible}
+                    transparent
+                    animationType="fade"
+                    onRequestClose={() => setCustomRecurrenceVisible(false)}
+                >
+                    <Pressable style={styles.overlay} onPress={() => setCustomRecurrenceVisible(false)}>
+                        <Pressable
+                            style={[styles.modalCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}
+                            onPress={(event) => event.stopPropagation()}
+                        >
+                            <Text style={[styles.modalTitle, { color: tc.text }]}>{t('recurrence.customTitle')}</Text>
+                            <View style={[styles.customRow, { borderColor: tc.border }]}>
+                                <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.repeatEvery')}</Text>
+                                <TextInput
+                                    value={String(customInterval)}
+                                    onChangeText={(value) => {
+                                        const parsed = Number.parseInt(value, 10);
+                                        setCustomInterval(Number.isFinite(parsed) && parsed > 0 ? parsed : 1);
+                                    }}
+                                    keyboardType="number-pad"
+                                    style={[styles.customInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
+                                />
+                                <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.monthUnit')}</Text>
+                            </View>
+                            <View style={{ marginTop: 12 }}>
+                                <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.onLabel')}</Text>
+                                <View style={[styles.statusContainer, { marginTop: 8 }]}>
+                                    <TouchableOpacity
+                                        style={getStatusChipStyle(customMode === 'date')}
+                                        onPress={() => setCustomMode('date')}
+                                    >
+                                        <Text style={getStatusTextStyle(customMode === 'date')}>
+                                            {t('recurrence.onDayOfMonth').replace('{day}', String(customMonthDay))}
+                                        </Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={getStatusChipStyle(customMode === 'nth')}
+                                        onPress={() => setCustomMode('nth')}
+                                    >
+                                        <Text style={getStatusTextStyle(customMode === 'nth')}>
+                                            {t('recurrence.onNthWeekday')
+                                                .replace('{ordinal}', t(`recurrence.ordinal.${customOrdinal === '-1' ? 'last' : customOrdinal === '1' ? 'first' : customOrdinal === '2' ? 'second' : customOrdinal === '3' ? 'third' : 'fourth'}`))
+                                                .replace('{weekday}', MONTHLY_WEEKDAY_LABELS[customWeekday] ?? customWeekday)}
+                                        </Text>
+                                    </TouchableOpacity>
+                                </View>
+                                {customMode === 'nth' && (
+                                    <>
+                                        <View style={[styles.weekdayRow, { marginTop: 10, flexWrap: 'wrap' }]}>
+                                        {(['1', '2', '3', '4', '-1'] as const).map((value) => {
+                                            const label = value === '-1' ? 'Last' : `${value}${value === '1' ? 'st' : value === '2' ? 'nd' : value === '3' ? 'rd' : 'th'}`;
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={value}
+                                                        style={[
+                                                            styles.ordinalButton,
+                                                            {
+                                                                borderColor: tc.border,
+                                                                backgroundColor: customOrdinal === value ? tc.filterBg : tc.cardBg,
+                                                            },
+                                                        ]}
+                                                        onPress={() => setCustomOrdinal(value)}
+                                                    >
+                                                    <Text style={[styles.weekdayButtonText, { color: tc.text }]}>{label}</Text>
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                        </View>
+                                        <View style={[styles.weekdayRow, { marginTop: 10 }]}>
+                                            {WEEKDAY_BUTTONS.map((day) => {
+                                                const active = customWeekday === day.key;
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={day.key}
+                                                        style={[
+                                                            styles.weekdayButton,
+                                                            {
+                                                                borderColor: tc.border,
+                                                                backgroundColor: active ? tc.filterBg : tc.cardBg,
+                                                            },
+                                                        ]}
+                                                        onPress={() => setCustomWeekday(day.key)}
+                                                    >
+                                                        <Text style={[styles.weekdayButtonText, { color: tc.text }]}>{day.label}</Text>
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
+                                        </View>
+                                    </>
+                                )}
+                                {customMode === 'date' && (
+                                    <View style={[styles.customRow, { marginTop: 10 }]}>
+                                        <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>
+                                            {t('recurrence.onDayOfMonth').replace('{day}', '')}
+                                        </Text>
+                                        <TextInput
+                                            value={String(customMonthDay)}
+                                            onChangeText={(value) => {
+                                                const parsed = Number.parseInt(value, 10);
+                                                if (!Number.isFinite(parsed)) {
+                                                    setCustomMonthDay(1);
+                                                } else {
+                                                    setCustomMonthDay(Math.min(Math.max(parsed, 1), 31));
+                                                }
+                                            }}
+                                            keyboardType="number-pad"
+                                            style={[styles.customInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
+                                        />
+                                    </View>
+                                )}
+                            </View>
+                            <View style={styles.modalButtons}>
+                                <TouchableOpacity
+                                    style={styles.modalButton}
+                                    onPress={() => setCustomRecurrenceVisible(false)}
+                                >
+                                    <Text style={[styles.modalButtonText, { color: tc.secondaryText }]}>{t('common.cancel')}</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.modalButton}
+                                    onPress={applyCustomRecurrence}
+                                >
+                                    <Text style={[styles.modalButtonText, { color: tc.tint }]}>{t('common.save')}</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </Pressable>
+                    </Pressable>
+                </Modal>
 
                 <Modal
                     visible={showProjectPicker}
@@ -2167,6 +2357,15 @@ const styles = StyleSheet.create({
         width: 32,
         height: 32,
         borderRadius: 16,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    ordinalButton: {
+        minWidth: 54,
+        paddingHorizontal: 8,
+        height: 30,
+        borderRadius: 15,
         borderWidth: 1,
         alignItems: 'center',
         justifyContent: 'center',
@@ -2518,12 +2717,31 @@ const styles = StyleSheet.create({
         fontWeight: '700',
         marginBottom: 12,
     },
+    modalLabel: {
+        fontSize: 13,
+        fontWeight: '600',
+    },
     modalInput: {
         borderWidth: 1,
         borderRadius: 10,
         paddingHorizontal: 12,
         paddingVertical: 10,
         fontSize: 16,
+    },
+    customRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        flexWrap: 'wrap',
+    },
+    customInput: {
+        borderWidth: 1,
+        borderRadius: 10,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        fontSize: 14,
+        minWidth: 64,
+        textAlign: 'center',
     },
     modalButtons: {
         flexDirection: 'row',

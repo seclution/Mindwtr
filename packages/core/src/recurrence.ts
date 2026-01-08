@@ -40,7 +40,16 @@ const normalizeWeekdays = (days?: string[] | null): RecurrenceByDay[] | undefine
     return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
 };
 
-export function parseRRuleString(rrule: string): { rule?: RecurrenceRule; byDay?: RecurrenceByDay[] } {
+const normalizeMonthDays = (days?: string[] | null): number[] | undefined => {
+    if (!days || days.length === 0) return undefined;
+    const normalized = days
+        .map((day) => Number(day))
+        .filter((day) => Number.isFinite(day) && day >= 1 && day <= 31);
+    const unique = Array.from(new Set(normalized)).sort((a, b) => a - b);
+    return unique.length > 0 ? unique : undefined;
+};
+
+export function parseRRuleString(rrule: string): { rule?: RecurrenceRule; byDay?: RecurrenceByDay[]; byMonthDay?: number[]; interval?: number } {
     if (!rrule) return {};
     const tokens = rrule.split(';').reduce<Record<string, string>>((acc, part) => {
         const [key, value] = part.split('=');
@@ -49,7 +58,9 @@ export function parseRRuleString(rrule: string): { rule?: RecurrenceRule; byDay?
     }, {});
     const freq = tokens.FREQ ? RRULE_FREQ_MAP[tokens.FREQ.toUpperCase()] : undefined;
     const byDay = tokens.BYDAY ? normalizeWeekdays(tokens.BYDAY.split(',')) : undefined;
-    return { rule: freq, byDay };
+    const byMonthDay = tokens.BYMONTHDAY ? normalizeMonthDays(tokens.BYMONTHDAY.split(',')) : undefined;
+    const interval = tokens.INTERVAL ? Number(tokens.INTERVAL) : undefined;
+    return { rule: freq, byDay, byMonthDay, interval: interval && interval > 0 ? interval : undefined };
 }
 
 const normalizeWeeklyByDay = (days?: RecurrenceByDay[] | null): RecurrenceWeekday[] | undefined => {
@@ -59,8 +70,11 @@ const normalizeWeeklyByDay = (days?: RecurrenceByDay[] | null): RecurrenceWeekda
     return weekly.length > 0 ? Array.from(new Set(weekly)) : undefined;
 };
 
-export function buildRRuleString(rule: RecurrenceRule, byDay?: RecurrenceByDay[]): string {
+export function buildRRuleString(rule: RecurrenceRule, byDay?: RecurrenceByDay[], interval?: number): string {
     const parts = [`FREQ=${rule.toUpperCase()}`];
+    if (interval && interval > 1) {
+        parts.push(`INTERVAL=${interval}`);
+    }
     const normalizedDays = normalizeWeekdays(byDay as string[] | null);
     if (normalizedDays && normalizedDays.length > 0) {
         if (rule === 'weekly') {
@@ -114,16 +128,36 @@ function getRecurrenceByDay(value: Task['recurrence']): RecurrenceByDay[] | unde
     return undefined;
 }
 
-function addInterval(base: Date, rule: RecurrenceRule): Date {
+function getRecurrenceByMonthDay(value: Task['recurrence']): number[] | undefined {
+    if (!value || typeof value === 'string') return undefined;
+    const recurrence = value as Recurrence;
+    if (recurrence.rrule) {
+        const parsed = parseRRuleString(recurrence.rrule);
+        return parsed.byMonthDay;
+    }
+    return undefined;
+}
+
+function getRecurrenceInterval(value: Task['recurrence']): number {
+    if (!value || typeof value === 'string') return 1;
+    const recurrence = value as Recurrence;
+    if (recurrence.rrule) {
+        const parsed = parseRRuleString(recurrence.rrule);
+        if (parsed.interval && parsed.interval > 0) return parsed.interval;
+    }
+    return 1;
+}
+
+function addInterval(base: Date, rule: RecurrenceRule, interval: number = 1): Date {
     switch (rule) {
         case 'daily':
-            return addDays(base, 1);
+            return addDays(base, interval);
         case 'weekly':
-            return addWeeks(base, 1);
+            return addWeeks(base, interval);
         case 'monthly':
-            return addMonths(base, 1);
+            return addMonths(base, interval);
         case 'yearly':
-            return addYears(base, 1);
+            return addYears(base, interval);
     }
 }
 
@@ -174,15 +208,16 @@ const parseOrdinalByDay = (token: RecurrenceByDay): { weekday: RecurrenceWeekday
     return { weekday, ordinal };
 };
 
-function nextMonthlyByDay(base: Date, byDay: RecurrenceByDay[]): Date {
+function nextMonthlyByDay(base: Date, byDay: RecurrenceByDay[], interval: number = 1): Date {
     const normalized = normalizeWeekdays(byDay as string[] | null);
     if (!normalized || normalized.length === 0) {
-        return addMonths(base, 1);
+        return addMonths(base, interval);
     }
     const candidates = normalized
         .map(parseOrdinalByDay)
         .filter((item): item is { weekday: RecurrenceWeekday; ordinal?: number } => Boolean(item));
-    for (let offset = 0; offset <= 12; offset += 1) {
+    const safeInterval = interval > 0 ? interval : 1;
+    for (let offset = safeInterval; offset <= safeInterval * 12; offset += safeInterval) {
         const monthDate = addMonths(base, offset);
         const year = monthDate.getFullYear();
         const month = monthDate.getMonth();
@@ -194,29 +229,63 @@ function nextMonthlyByDay(base: Date, byDay: RecurrenceByDay[]): Date {
             }
         });
         const filtered = monthCandidates
-            .filter((date) => (offset === 0 ? date > base : true))
+            .filter((date) => date > base)
             .sort((a, b) => a.getTime() - b.getTime());
         if (filtered.length > 0) {
             return filtered[0];
         }
     }
-    return addMonths(base, 1);
+    return addMonths(base, safeInterval);
+}
+
+function nextMonthlyByMonthDay(base: Date, byMonthDay: number[], interval: number = 1): Date {
+    const normalized = normalizeMonthDays(byMonthDay.map(String));
+    if (!normalized || normalized.length === 0) {
+        return addMonths(base, interval);
+    }
+    const safeInterval = interval > 0 ? interval : 1;
+    const startOffset = safeInterval === 1 ? 0 : safeInterval;
+    for (let offset = startOffset; offset <= safeInterval * 12; offset += safeInterval) {
+        const monthDate = addMonths(base, offset);
+        const year = monthDate.getFullYear();
+        const month = monthDate.getMonth();
+        const candidates = normalized.map((day) => new Date(
+            year,
+            month,
+            day,
+            base.getHours(),
+            base.getMinutes(),
+            base.getSeconds(),
+            base.getMilliseconds()
+        ));
+        const filtered = candidates
+            .filter((date) => date.getMonth() === month)
+            .filter((date) => (offset === 0 ? date > base : true))
+            .sort((a, b) => a.getTime() - b.getTime());
+        if (filtered.length > 0) return filtered[0];
+    }
+    return addMonths(base, safeInterval);
 }
 
 function nextIsoFrom(
     baseIso: string | undefined,
     rule: RecurrenceRule,
     fallbackBase: Date,
-    byDay?: RecurrenceByDay[]
+    byDay?: RecurrenceByDay[],
+    interval: number = 1,
+    byMonthDay?: number[]
 ): string | undefined {
     const parsed = safeParseDate(baseIso);
     const base = parsed || fallbackBase;
     const effectiveByDay = byDay && byDay.length > 0 ? byDay : undefined;
+    const effectiveByMonthDay = byMonthDay && byMonthDay.length > 0 ? byMonthDay : undefined;
     const nextDate = rule === 'weekly' && effectiveByDay
         ? nextWeeklyByDay(base, effectiveByDay)
         : rule === 'monthly' && effectiveByDay
-            ? nextMonthlyByDay(base, effectiveByDay)
-            : addInterval(base, rule);
+            ? nextMonthlyByDay(base, effectiveByDay, interval)
+            : rule === 'monthly' && effectiveByMonthDay
+                ? nextMonthlyByMonthDay(base, effectiveByMonthDay, interval)
+                : addInterval(base, rule, interval);
 
     // Preserve existing storage format:
     // - If base has timezone/offset, keep ISO (Z/offset).
@@ -255,18 +324,20 @@ export function createNextRecurringTask(
     if (!rule) return null;
     const strategy = getRecurrenceStrategy(task.recurrence);
     const byDay = getRecurrenceByDay(task.recurrence);
+    const byMonthDay = getRecurrenceByMonthDay(task.recurrence);
+    const interval = getRecurrenceInterval(task.recurrence);
     const completedAtDate = safeParseDate(completedAtIso) || new Date(completedAtIso);
     const baseIso = strategy === 'fluid' ? completedAtIso : task.dueDate;
 
-    const nextDueDate = nextIsoFrom(baseIso, rule, completedAtDate, byDay);
+    const nextDueDate = nextIsoFrom(baseIso, rule, completedAtDate, byDay, interval, byMonthDay);
     let nextStartTime = task.startTime
-        ? nextIsoFrom(strategy === 'fluid' ? completedAtIso : task.startTime, rule, completedAtDate, byDay)
+        ? nextIsoFrom(strategy === 'fluid' ? completedAtIso : task.startTime, rule, completedAtDate, byDay, interval, byMonthDay)
         : undefined;
     if (!nextStartTime && nextDueDate) {
         nextStartTime = nextDueDate;
     }
     const nextReviewAt = task.reviewAt
-        ? nextIsoFrom(strategy === 'fluid' ? completedAtIso : task.reviewAt, rule, completedAtDate, byDay)
+        ? nextIsoFrom(strategy === 'fluid' ? completedAtIso : task.reviewAt, rule, completedAtDate, byDay, interval, byMonthDay)
         : undefined;
 
     let newStatus: TaskStatus = previousStatus;
