@@ -226,7 +226,7 @@ export default function SettingsPage() {
     };
 
     const selectWeeklyReviewDay = () => {
-        const options: Array<{ text: string; onPress?: () => void; style?: 'default' | 'cancel' | 'destructive' }> =
+        const options: { text: string; onPress?: () => void; style?: 'default' | 'cancel' | 'destructive' }[] =
             Array.from({ length: 7 }, (_, idx) => ({
                 text: getWeekdayLabel(idx),
                 onPress: () => updateSettings({ weeklyReviewDay: idx }).catch(console.error),
@@ -294,7 +294,7 @@ export default function SettingsPage() {
         return () => subscription.remove();
     }, [currentScreen]);
 
-    const themeOptions: Array<{ value: typeof themeMode; label: string }> = [
+    const themeOptions: { value: typeof themeMode; label: string }[] = [
         { value: 'system', label: t('settings.system') },
         { value: 'light', label: t('settings.light') },
         { value: 'dark', label: t('settings.dark') },

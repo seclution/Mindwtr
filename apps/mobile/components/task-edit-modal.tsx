@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TextInput, Modal, TouchableOpacity, ScrollView, Platform, KeyboardAvoidingView, Share, Alert, Image, Animated, Pressable } from 'react-native';
+import { View, Text, TextInput, Modal, TouchableOpacity, ScrollView, Platform, Share, Alert, Animated, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
     Attachment,
@@ -22,7 +22,6 @@ import {
     parseRRuleString,
     RECURRENCE_RULES,
     safeParseDate,
-    safeFormatDate,
 } from '@mindwtr/core';
 import type { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -407,7 +406,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         }
         const baseTask = baseTaskRef.current ?? task;
         const trimmedUpdates: Partial<Task> = { ...updates };
-        (Object.keys(trimmedUpdates) as Array<keyof Task>).forEach((key) => {
+        (Object.keys(trimmedUpdates) as (keyof Task)[]).forEach((key) => {
             const nextValue = trimmedUpdates[key];
             const baseValue = baseTask[key];
             if (Array.isArray(nextValue) || typeof nextValue === 'object') {
@@ -749,7 +748,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
     ];
     const priorityOptions: TaskPriority[] = ['low', 'medium', 'high', 'urgent'];
 
-    const savedOrder = settings.gtd?.taskEditor?.order ?? [];
+    const savedOrder = useMemo(() => settings.gtd?.taskEditor?.order ?? [], [settings.gtd?.taskEditor?.order]);
     const disabledFields = useMemo(() => {
         const next = new Set<TaskEditorFieldId>();
         if (!prioritiesEnabled) next.add('priority');
@@ -775,7 +774,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         ...(task ?? {}),
         ...editedTask,
     }), [task, editedTask]);
-    const hasFieldValue = (fieldId: TaskEditorFieldId) => {
+    const hasFieldValue = useCallback((fieldId: TaskEditorFieldId) => {
         switch (fieldId) {
             case 'status':
                 return Boolean(mergedTask.status);
@@ -806,11 +805,11 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
             default:
                 return false;
         }
-    };
+    }, [mergedTask, prioritiesEnabled, timeEstimatesEnabled]);
 
     const compactFieldIds = useMemo(() => {
         return taskEditorOrder.filter((fieldId) => primaryFieldIds.has(fieldId) || hasFieldValue(fieldId));
-    }, [taskEditorOrder, primaryFieldIds, mergedTask]);
+    }, [taskEditorOrder, primaryFieldIds, hasFieldValue]);
 
     const fieldIdsToRender = showMoreOptions ? taskEditorOrder : compactFieldIds;
     const hasHiddenFields = compactFieldIds.length < taskEditorOrder.length;
@@ -898,7 +897,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
             },
         }));
         setCustomRecurrenceVisible(false);
-    }, [customInterval, customMode, customOrdinal, customWeekday, customMonthDay, recurrenceStrategyValue]);
+    }, [customInterval, customMode, customOrdinal, customWeekday, customMonthDay, recurrenceStrategyValue, setEditedTask]);
 
     const toggleContext = (tag: string) => {
         const current = editedTask.contexts || [];

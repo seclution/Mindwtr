@@ -1,7 +1,15 @@
 import React, { useState } from 'react';
 import { View, Text, Modal, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
-import { createAIProvider, getStaleItems, isDueForReview, type ReviewSuggestion, type AIProviderId, useTaskStore } from '@mindwtr/core';
-import type { Task, TaskStatus } from '@mindwtr/core';
+import {
+    createAIProvider,
+    getStaleItems,
+    isDueForReview,
+    type ReviewSuggestion,
+    type AIProviderId,
+    type Task,
+    type TaskStatus,
+    useTaskStore,
+} from '@mindwtr/core';
 import { useTheme } from '../contexts/theme-context';
 import { useLanguage } from '../contexts/language-context';
 
@@ -259,7 +267,7 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                 }
                 return null;
             })
-            .filter(Boolean) as Array<{ id: string; updates: Partial<Task> }>;
+            .filter(Boolean) as { id: string; updates: Partial<Task> }[];
 
         if (updates.length === 0) return;
         await batchUpdateTasks(updates);

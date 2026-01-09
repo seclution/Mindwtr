@@ -1,6 +1,5 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import { View, Text, SectionList, StyleSheet } from 'react-native';
-import { useRouter } from 'expo-router';
 import { format } from 'date-fns';
 
 import { useTaskStore, safeParseDate, type Task, type TaskStatus } from '@mindwtr/core';
@@ -11,7 +10,6 @@ import { useLanguage } from '../../../contexts/language-context';
 import { TaskEditModal } from '@/components/task-edit-modal';
 
 export default function FocusScreen() {
-  const router = useRouter();
   const { tasks, updateTask, deleteTask } = useTaskStore();
   const { isDark } = useTheme();
   const { t } = useLanguage();

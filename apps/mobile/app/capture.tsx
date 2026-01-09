@@ -79,7 +79,7 @@ export default function CaptureScreen() {
         } else {
           setCopilotSuggestion(suggestion);
         }
-      } catch (error) {
+      } catch {
         if (!cancelled) {
           setCopilotSuggestion(null);
         }
@@ -100,8 +100,10 @@ export default function CaptureScreen() {
     aiKey,
     aiProvider,
     contextOptions,
+    settings,
     settings.ai?.copilotModel,
     settings.ai?.thinkingBudget,
+    tagOptions,
     timeEstimatesEnabled,
     value,
   ]);

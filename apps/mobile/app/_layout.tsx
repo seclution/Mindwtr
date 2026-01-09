@@ -52,7 +52,7 @@ function RootLayoutContent() {
   const lastSyncErrorShown = useRef<string | null>(null);
   const lastSyncErrorAt = useRef(0);
 
-  const runSync = (minIntervalMs = 5_000) => {
+  const runSync = useCallback((minIntervalMs = 5_000) => {
     if (!isActive.current) return;
     if (syncInFlight.current) {
       return;
@@ -81,12 +81,12 @@ function RootLayoutContent() {
         runSync(0);
       }
     });
-  };
+  }, []);
 
-  const requestSync = (minIntervalMs = 5_000) => {
+  const requestSync = useCallback((minIntervalMs = 5_000) => {
     syncRequestVersion.current += 1;
     runSync(minIntervalMs);
-  };
+  }, [runSync]);
 
   // Auto-sync on data changes with debounce
   useEffect(() => {
@@ -109,7 +109,7 @@ function RootLayoutContent() {
         clearTimeout(syncDebounceTimer.current);
       }
     };
-  }, []);
+  }, [requestSync]);
 
   useEffect(() => {
     if (!hasShareIntent) return;
@@ -171,7 +171,7 @@ function RootLayoutContent() {
       // Flush on unmount/reload as well
       flushPendingSave().catch(console.error);
     };
-  }, []);
+  }, [requestSync]);
 
   useEffect(() => {
     // Show storage error alert if initialization failed

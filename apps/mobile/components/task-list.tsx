@@ -1,8 +1,19 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { View, TextInput, FlatList, StyleSheet, TouchableOpacity, Text, RefreshControl, ScrollView, Modal, Pressable, Alert } from 'react-native';
 import { router } from 'expo-router';
-import { useTaskStore, Task, TaskStatus, sortTasksBy, parseQuickAdd, safeParseDate, PRESET_CONTEXTS, PRESET_TAGS, createAIProvider, type AIProviderId } from '@mindwtr/core';
-import type { TaskSortBy } from '@mindwtr/core';
+import {
+  useTaskStore,
+  Task,
+  TaskStatus,
+  sortTasksBy,
+  parseQuickAdd,
+  safeParseDate,
+  PRESET_CONTEXTS,
+  PRESET_TAGS,
+  createAIProvider,
+  type AIProviderId,
+  type TaskSortBy,
+} from '@mindwtr/core';
 
 
 import { TaskEditModal } from './task-edit-modal';
@@ -208,7 +219,7 @@ export function TaskList({
         } else {
           setCopilotSuggestion(suggestion);
         }
-      } catch (error) {
+      } catch {
         if (!cancelled) {
           setCopilotSuggestion(null);
         }
@@ -306,16 +317,16 @@ export function TaskList({
     setTypeaheadIndex(0);
   }, [addProject, newTaskTitle, trigger]);
 
-  const handleEditTask = (task: Task) => {
+  const handleEditTask = useCallback((task: Task) => {
     setEditingTask(task);
     setIsModalVisible(true);
-  };
+  }, []);
 
-  const onSaveTask = (taskId: string, updates: Partial<Task>) => {
+  const onSaveTask = useCallback((taskId: string, updates: Partial<Task>) => {
     updateTask(taskId, updates);
     setIsModalVisible(false);
     setEditingTask(null);
-  };
+  }, [updateTask]);
 
   const selectedIdsArray = useMemo(() => Array.from(multiSelectedIds), [multiSelectedIds]);
   const hasSelection = selectedIdsArray.length > 0;

@@ -220,7 +220,7 @@ export function QuickCaptureSheet({ visible, onClose }: { visible: boolean; onCl
                 }}
                 style={styles.pickerRow}
               >
-                <Text style={[styles.pickerRowText, { color: tc.tint }]}>+ {t('projects.create')} "{projectQuery.trim()}"</Text>
+                <Text style={[styles.pickerRowText, { color: tc.tint }]}>+ {t('projects.create')} &quot;{projectQuery.trim()}&quot;</Text>
               </Pressable>
             )}
             <ScrollView style={[styles.pickerList, { borderColor: tc.border }]} contentContainerStyle={styles.pickerListContent}>

@@ -84,7 +84,7 @@ export function TaskEditProjectPicker({
                     {!hasExactProjectMatch && projectQuery.trim() && (
                         <Pressable onPress={handleCreateProject} style={styles.pickerItem}>
                             <Text style={[styles.pickerItemText, { color: tc.tint }]}>
-                                + {t('projects.create')} "{projectQuery.trim()}"
+                                + {t('projects.create')} &quot;{projectQuery.trim()}&quot;
                             </Text>
                         </Pressable>
                     )}
