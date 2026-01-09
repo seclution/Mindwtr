@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTaskStore, Task, TaskPriority, TimeEstimate, PRESET_CONTEXTS, PRESET_TAGS, matchesHierarchicalToken, getTaskAgeLabel, getTaskStaleness, type TaskStatus, safeFormatDate, safeParseDate, isDueForReview } from '@mindwtr/core';
 import { useLanguage } from '../../contexts/language-context';
 import { cn } from '../../lib/utils';
-import { Clock, Star, Calendar, AlertCircle, ArrowRight, Filter, type LucideIcon } from 'lucide-react';
+import { Clock, Star, Calendar, AlertCircle, ArrowRight, Filter, Check, type LucideIcon } from 'lucide-react';
 
 export function AgendaView() {
     const { tasks, projects, updateTask, settings } = useTaskStore();
@@ -293,6 +293,17 @@ export function AgendaView() {
                                 }
                             >
                                 <Star className={cn("w-4 h-4", task.isFocusedToday && "fill-current")} />
+                            </button>
+                        )}
+
+                        {task.status !== 'done' && (
+                            <button
+                                onClick={() => handleStatusChange(task.id, 'done')}
+                                className="p-1.5 rounded-full text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/20"
+                                title={t('status.done')}
+                                aria-label={t('status.done')}
+                            >
+                                <Check className="w-4 h-4" />
                             </button>
                         )}
 
