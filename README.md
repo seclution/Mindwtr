@@ -156,7 +156,7 @@ To get access, you need to be "whitelisted" by Google. I set up a Google Group t
 How to join:
 - Join the Alpha Group here: https://groups.google.com/g/mindwtr-alpha-testers
 - Once you join, your Google account is automatically approved for the Alpha.
-- Check the pinned post inside the group for the Play Store download link.
+- Download from Google Play: [Android Link](https://play.google.com/store/apps/details?id=tech.dongdongbh.mindwtr).
 
 **iOS:**
 iOS builds require an Apple Developer account ($99/year). Currently available as simulator builds only. If you want iOS builds, please consider [sponsoring the developer](https://github.com/sponsors/dongdongbh) so we can fund the Apple Developer account.

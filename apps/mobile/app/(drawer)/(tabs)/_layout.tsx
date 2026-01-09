@@ -1,12 +1,14 @@
 import { Link, Tabs } from 'expo-router';
-import { Search, Inbox, ArrowRightCircle, CalendarDays, Folder, Menu } from 'lucide-react-native';
-import { Platform, StyleSheet, TouchableOpacity } from 'react-native';
+import { Search, Inbox, ArrowRightCircle, Folder, Menu, Plus } from 'lucide-react-native';
+import { Platform, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useState } from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useTheme } from '../../../contexts/theme-context';
 import { useLanguage } from '../../../contexts/language-context';
+import { QuickCaptureSheet } from '@/components/quick-capture-sheet';
 
 export default function TabLayout() {
   const { isDark } = useTheme();
@@ -17,6 +19,7 @@ export default function TabLayout() {
     : 0;
   const tabBarHeight = 58 + androidNavInset;
   const iconLift = Platform.OS === 'android' ? 6 : 0;
+  const [captureOpen, setCaptureOpen] = useState(false);
 
   const iconTint = isDark ? '#E5E7EB' : '#1F2937';
   const inactiveTint = isDark ? '#9CA3AF' : '#9CA3AF';
@@ -87,6 +90,7 @@ export default function TabLayout() {
         },
       })}
     >
+      <QuickCaptureSheet visible={captureOpen} onClose={() => setCaptureOpen(false)} />
       <Tabs.Screen
         name="inbox"
         options={{
@@ -106,11 +110,20 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="agenda"
+        name="capture"
         options={{
-          title: t('tab.agenda'),
-          tabBarIcon: ({ color, focused }) => (
-            <CalendarDays size={focused ? 26 : 24} color={color} strokeWidth={2} opacity={focused ? 1 : 0.8} />
+          title: t('nav.addTask'),
+          tabBarButton: () => (
+            <TouchableOpacity
+              onPress={() => setCaptureOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={t('nav.addTask')}
+              style={styles.captureButton}
+            >
+              <View style={[styles.captureButtonInner, { backgroundColor: activeIndicator }]}>
+                <Plus size={26} color="#FFFFFF" strokeWidth={3} />
+              </View>
+            </TouchableOpacity>
           ),
         }}
       />
@@ -140,5 +153,23 @@ const styles = StyleSheet.create({
   headerIconButton: {
     marginRight: 16,
     padding: 4,
+  },
+  captureButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  captureButtonInner: {
+    width: 54,
+    height: 54,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: -8,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
   },
 });

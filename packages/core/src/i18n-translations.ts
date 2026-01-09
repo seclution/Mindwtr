@@ -27,6 +27,8 @@ const en: Record<string, string> = {
         // Quick Add
         'quickAdd.help': 'Quick add supports /due:<when>, /note:<text>, /next|/todo, @context, #tag, +Project.',
         'quickAdd.example': 'Example: Call mom /due:tomorrow 5pm @phone #family',
+        'quickAdd.placeholder': 'Add a task… use @context +Project #tag /due:tomorrow',
+        'quickAdd.addAnother': 'Add another',
 
         // Checklist
         'checklist.progress': 'Checklist progress',
@@ -791,6 +793,8 @@ const zh: Record<string, string> = {
         // Quick Add
         'quickAdd.help': '快速添加支持 /due:<when>、/note:<text>、/next|/todo、@context、#tag、+Project。',
         'quickAdd.example': '示例：给妈妈打电话 /due:tomorrow 5pm @phone #family',
+        'quickAdd.placeholder': '添加任务… 支持 @情境 +项目 #标签 /due:tomorrow',
+        'quickAdd.addAnother': '连续添加',
 
         // Checklist
         'checklist.progress': '清单进度',
