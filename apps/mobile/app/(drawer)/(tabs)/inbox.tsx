@@ -745,7 +745,7 @@ export default function InboxScreen() {
                   </View>
 
                   <TouchableOpacity
-                    style={[styles.button, { backgroundColor: tc.border }]}
+                    style={[styles.buttonSecondary, { borderColor: tc.border, backgroundColor: tc.cardBg }]}
                     onPress={handleSendDelegateRequest}
                   >
                     <Text style={[styles.buttonText, { color: tc.text }]}>{t('process.delegateSendRequest')}</Text>
@@ -1070,6 +1070,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     borderRadius: 10,
     alignItems: 'center',
+  },
+  buttonSecondary: {
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    borderWidth: 1,
   },
   buttonPrimary: {
     backgroundColor: '#3B82F6',
