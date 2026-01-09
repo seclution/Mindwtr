@@ -306,14 +306,14 @@ function RootLayoutContent() {
 
 export default function RootLayout() {
   return (
-    <ErrorBoundary>
-      <ShareIntentProvider>
-        <ThemeProvider>
-          <LanguageProvider>
+    <ShareIntentProvider>
+      <ThemeProvider>
+        <LanguageProvider>
+          <ErrorBoundary>
             <RootLayoutContent />
-          </LanguageProvider>
-        </ThemeProvider>
-      </ShareIntentProvider>
-    </ErrorBoundary>
+          </ErrorBoundary>
+        </LanguageProvider>
+      </ThemeProvider>
+    </ShareIntentProvider>
   );
 }
