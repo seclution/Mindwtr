@@ -199,8 +199,7 @@ export class SqliteAdapter {
         }
         const tokens = cleaned.split(/\s+/).filter(Boolean);
         const ftsQuery = tokens.map((token) => `${token}*`).join(' ');
-
-        try {
+        const runSearch = async (): Promise<SearchResults> => {
             const taskRows = await this.client.all<Record<string, unknown>>(
                 `SELECT t.* FROM tasks_fts f JOIN tasks t ON f.id = t.id WHERE tasks_fts MATCH ? AND t.deletedAt IS NULL`,
                 [ftsQuery]
@@ -213,8 +212,18 @@ export class SqliteAdapter {
                 tasks: taskRows.map((row) => this.mapTaskRow(row)),
                 projects: projectRows.map((row) => this.mapProjectRow(row)),
             };
-        } catch {
-            return { tasks: [], projects: [] };
+        };
+
+        try {
+            return await runSearch();
+        } catch (error) {
+            try {
+                await this.ensureFtsPopulated();
+                return await runSearch();
+            } catch (retryError) {
+                console.warn('Search failed:', retryError);
+                return { tasks: [], projects: [] };
+            }
         }
     }
 
