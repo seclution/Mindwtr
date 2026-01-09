@@ -55,6 +55,23 @@ export function applyTaskUpdates(oldTask: Task, updates: Partial<Task>, now: str
     };
 }
 
+const isTaskVisible = (task?: Task | null) => Boolean(task && !task.deletedAt && task.status !== 'archived');
+
+const updateVisibleTasks = (visible: Task[], previous?: Task | null, next?: Task | null): Task[] => {
+    const wasVisible = isTaskVisible(previous);
+    const isVisible = isTaskVisible(next);
+    if (wasVisible && isVisible && next) {
+        return visible.map((task) => (task.id === next.id ? next : task));
+    }
+    if (wasVisible && !isVisible && previous) {
+        return visible.filter((task) => task.id !== previous.id);
+    }
+    if (!wasVisible && isVisible && next) {
+        return [...visible, next];
+    }
+    return visible;
+};
+
 /**
  * Configure the storage adapter to use for persistence.
  * Must be called before using the store.
@@ -464,7 +481,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         };
 
         const newAllTasks = [...get()._allTasks, newTask];
-        const newVisibleTasks = [...get().tasks, newTask];
+        const newVisibleTasks = updateVisibleTasks(get().tasks, null, newTask);
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, areas: get()._allAreas, settings: get().settings },
@@ -494,7 +511,10 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
         if (nextRecurringTask) newAllTasks.push(nextRecurringTask);
 
-        const newVisibleTasks = newAllTasks.filter((t) => !t.deletedAt && t.status !== 'archived');
+        let newVisibleTasks = updateVisibleTasks(get().tasks, oldTask, updatedTask);
+        if (nextRecurringTask) {
+            newVisibleTasks = updateVisibleTasks(newVisibleTasks, null, nextRecurringTask);
+        }
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, areas: get()._allAreas, settings: get().settings },
@@ -509,12 +529,14 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     deleteTask: async (id: string) => {
         const changeAt = Date.now();
         const now = new Date().toISOString();
+        const oldTask = get()._allTasks.find((task) => task.id === id);
+        const updatedTask = oldTask ? { ...oldTask, deletedAt: now, updatedAt: now } : null;
         // Update in full data (set tombstone)
         const newAllTasks = get()._allTasks.map((task) =>
-            task.id === id ? { ...task, deletedAt: now, updatedAt: now } : task
+            task.id === id ? (updatedTask ?? task) : task
         );
         // Filter for UI state (hide deleted)
-        const newVisibleTasks = newAllTasks.filter(t => !t.deletedAt && t.status !== 'archived');
+        const newVisibleTasks = updateVisibleTasks(get().tasks, oldTask, updatedTask);
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         // Save with all data including tombstones
         debouncedSave(
@@ -529,17 +551,21 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     restoreTask: async (id: string) => {
         const changeAt = Date.now();
         const now = new Date().toISOString();
+        const oldTask = get()._allTasks.find((task) => task.id === id);
+        const updatedTask = oldTask
+            ? {
+                ...oldTask,
+                deletedAt: undefined,
+                status: oldTask.status === 'archived' ? 'inbox' : oldTask.status,
+                updatedAt: now,
+            }
+            : null;
         const newAllTasks = get()._allTasks.map((task) =>
             task.id === id
-                ? {
-                    ...task,
-                    deletedAt: undefined,
-                    status: task.status === 'archived' ? 'inbox' : task.status,
-                    updatedAt: now,
-                }
+                ? (updatedTask ?? task)
                 : task
         );
-        const newVisibleTasks = newAllTasks.filter((task) => !task.deletedAt && task.status !== 'archived');
+        const newVisibleTasks = updateVisibleTasks(get().tasks, oldTask, updatedTask);
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, areas: get()._allAreas, settings: get().settings },
@@ -552,8 +578,9 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
      */
     purgeTask: async (id: string) => {
         const changeAt = Date.now();
+        const oldTask = get()._allTasks.find((task) => task.id === id);
         const newAllTasks = get()._allTasks.filter((task) => task.id !== id);
-        const newVisibleTasks = newAllTasks.filter((task) => !task.deletedAt && task.status !== 'archived');
+        const newVisibleTasks = updateVisibleTasks(get().tasks, oldTask, null);
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, areas: get()._allAreas, settings: get().settings },
@@ -567,7 +594,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     purgeDeletedTasks: async () => {
         const changeAt = Date.now();
         const newAllTasks = get()._allTasks.filter((task) => !task.deletedAt);
-        const newVisibleTasks = newAllTasks.filter((task) => !task.deletedAt && task.status !== 'archived');
+        const newVisibleTasks = get().tasks.filter((task) => !task.deletedAt && task.status !== 'archived');
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, areas: get()._allAreas, settings: get().settings },
@@ -617,7 +644,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         };
 
         const newAllTasks = [...get()._allTasks, newTask];
-        const newVisibleTasks = newAllTasks.filter((task) => !task.deletedAt && task.status !== 'archived');
+        const newVisibleTasks = updateVisibleTasks(get().tasks, null, newTask);
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, areas: get()._allAreas, settings: get().settings },
@@ -651,7 +678,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         };
 
         const newAllTasks = get()._allTasks.map((task) => (task.id === id ? updatedTask : task));
-        const newVisibleTasks = newAllTasks.filter((task) => !task.deletedAt && task.status !== 'archived');
+        const newVisibleTasks = updateVisibleTasks(get().tasks, sourceTask, updatedTask);
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, areas: get()._allAreas, settings: get().settings },
@@ -678,18 +705,23 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         const now = new Date().toISOString();
         const updatesById = new Map(updatesList.map((u) => [u.id, u.updates]));
         const nextRecurringTasks: Task[] = [];
+        let newVisibleTasks = get().tasks;
 
         const newAllTasks = get()._allTasks.map((task) => {
             const updates = updatesById.get(task.id);
             if (!updates) return task;
             const { updatedTask, nextRecurringTask } = applyTaskUpdates(task, updates, now);
             if (nextRecurringTask) nextRecurringTasks.push(nextRecurringTask);
+            newVisibleTasks = updateVisibleTasks(newVisibleTasks, task, updatedTask);
             return updatedTask;
         });
 
-        if (nextRecurringTasks.length > 0) newAllTasks.push(...nextRecurringTasks);
-
-        const newVisibleTasks = newAllTasks.filter((t) => !t.deletedAt && t.status !== 'archived');
+        if (nextRecurringTasks.length > 0) {
+            newAllTasks.push(...nextRecurringTasks);
+            nextRecurringTasks.forEach((task) => {
+                newVisibleTasks = updateVisibleTasks(newVisibleTasks, null, task);
+            });
+        }
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, areas: get()._allAreas, settings: get().settings },
@@ -709,7 +741,12 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         const newAllTasks = get()._allTasks.map((task) =>
             idSet.has(task.id) ? { ...task, deletedAt: now, updatedAt: now } : task
         );
-        const newVisibleTasks = newAllTasks.filter((t) => !t.deletedAt && t.status !== 'archived');
+        let newVisibleTasks = get().tasks;
+        idSet.forEach((id) => {
+            const oldTask = get()._allTasks.find((task) => task.id === id);
+            const updatedTask = oldTask ? { ...oldTask, deletedAt: now, updatedAt: now } : null;
+            newVisibleTasks = updateVisibleTasks(newVisibleTasks, oldTask, updatedTask);
+        });
         set({ tasks: newVisibleTasks, _allTasks: newAllTasks, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: newAllTasks, projects: get()._allProjects, areas: get()._allAreas, settings: get().settings },
