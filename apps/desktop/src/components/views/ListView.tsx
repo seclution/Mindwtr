@@ -34,6 +34,7 @@ type VirtualTaskRowProps = {
     onToggleSelect: () => void;
     onMeasure: (id: string, height: number) => void;
     showQuickDone: boolean;
+    readOnly: boolean;
 };
 
 const VirtualTaskRow = React.memo(function VirtualTaskRow({
@@ -47,6 +48,7 @@ const VirtualTaskRow = React.memo(function VirtualTaskRow({
     onToggleSelect,
     onMeasure,
     showQuickDone,
+    readOnly,
 }: VirtualTaskRowProps) {
     const rowRef = useRef<HTMLDivElement | null>(null);
 
@@ -77,6 +79,7 @@ const VirtualTaskRow = React.memo(function VirtualTaskRow({
                     isMultiSelected={isMultiSelected}
                     onToggleSelect={onToggleSelect}
                     showQuickDone={showQuickDone}
+                    readOnly={readOnly}
                 />
             </div>
         </div>
@@ -115,6 +118,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
     const prioritiesEnabled = settings?.features?.priorities === true;
     const timeEstimatesEnabled = settings?.features?.timeEstimates === true;
     const showQuickDone = statusFilter === 'next';
+    const readOnly = statusFilter === 'done';
     const activePriorities = useMemo(
         () => (prioritiesEnabled ? selectedPriorities : EMPTY_PRIORITIES),
         [prioritiesEnabled, selectedPriorities]
@@ -927,6 +931,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                                     onToggleSelect={() => toggleMultiSelect(task.id)}
                                     onMeasure={handleRowMeasure}
                                     showQuickDone={showQuickDone}
+                                    readOnly={readOnly}
                                 />
                             );
                         })}
@@ -946,6 +951,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                                 isMultiSelected={multiSelectedIds.has(task.id)}
                                 onToggleSelect={() => toggleMultiSelect(task.id)}
                                 showQuickDone={showQuickDone}
+                                readOnly={readOnly}
                             />
                         ))}
                     </div>

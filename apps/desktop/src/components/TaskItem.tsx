@@ -107,6 +107,7 @@ interface TaskItemProps {
     isMultiSelected?: boolean;
     onToggleSelect?: () => void;
     showQuickDone?: boolean;
+    readOnly?: boolean;
 }
 
 export const TaskItem = memo(function TaskItem({
@@ -118,6 +119,7 @@ export const TaskItem = memo(function TaskItem({
     isMultiSelected = false,
     onToggleSelect,
     showQuickDone = false,
+    readOnly = false,
 }: TaskItemProps) {
     const { updateTask, deleteTask, moveTask, projects, tasks, areas, settings, duplicateTask, resetTaskChecklist, highlightTaskId, setHighlightTask, addProject } = useTaskStore();
     const { t } = useLanguage();
@@ -838,6 +840,7 @@ export const TaskItem = memo(function TaskItem({
                             onToggleSelect={onToggleSelect}
                             onToggleView={() => setIsViewOpen((prev) => !prev)}
                             onEdit={() => {
+                                if (readOnly) return;
                                 resetEditState();
                                 setIsViewOpen(false);
                                 setIsEditing(true);
@@ -852,6 +855,7 @@ export const TaskItem = memo(function TaskItem({
                             timeEstimatesEnabled={timeEstimatesEnabled}
                             isStagnant={isStagnant}
                             showQuickDone={showQuickDone}
+                            readOnly={readOnly}
                             t={t}
                         />
                     )}

@@ -1,4 +1,4 @@
-import { Calendar as CalendarIcon, Tag, Trash2, ArrowRight, Repeat, Check, Clock, Timer, Paperclip, Pencil } from 'lucide-react';
+import { Calendar as CalendarIcon, Tag, Trash2, ArrowRight, Repeat, Check, Clock, Timer, Paperclip, Pencil, RotateCcw } from 'lucide-react';
 import type { Attachment, Project, Task, TaskPriority, TaskStatus, RecurrenceRule, RecurrenceStrategy } from '@mindwtr/core';
 import { getChecklistProgress, getTaskAgeLabel, getTaskStaleness, getTaskUrgency, hasTimeComponent, safeFormatDate, stripMarkdown } from '@mindwtr/core';
 import { cn } from '../../lib/utils';
@@ -22,6 +22,7 @@ interface TaskItemDisplayProps {
     timeEstimatesEnabled: boolean;
     isStagnant: boolean;
     showQuickDone: boolean;
+    readOnly: boolean;
     t: (key: string) => string;
 }
 
@@ -69,6 +70,7 @@ export function TaskItemDisplay({
     timeEstimatesEnabled,
     isStagnant,
     showQuickDone,
+    readOnly,
     t,
 }: TaskItemDisplayProps) {
     const checklistProgress = getChecklistProgress(task);
@@ -103,7 +105,7 @@ export function TaskItemDisplay({
                         onToggleView();
                     }}
                     onDoubleClick={() => {
-                        if (!selectionMode) {
+                        if (!selectionMode && !readOnly) {
                             onEdit();
                         }
                     }}
@@ -313,43 +315,57 @@ export function TaskItemDisplay({
                     className="relative flex items-center gap-2"
                     onPointerDown={(e) => e.stopPropagation()}
                 >
-                    <button
-                        type="button"
-                        onClick={onEdit}
-                        aria-label={t('common.edit')}
-                        className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted/50"
-                    >
-                        <Pencil className="w-4 h-4" />
-                    </button>
-                    {showQuickDone && task.status !== 'done' && (
+                    {readOnly ? (
                         <button
                             type="button"
-                            onClick={() => onStatusChange('done')}
-                            aria-label={t('status.done')}
-                            className="text-emerald-400 hover:text-emerald-300 p-1 rounded hover:bg-emerald-500/20"
+                            onClick={() => onStatusChange('next')}
+                            aria-label={t('waiting.moveToNext')}
+                            title={t('waiting.moveToNext')}
+                            className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted/50"
                         >
-                            <Check className="w-4 h-4" />
+                            <RotateCcw className="w-4 h-4" />
                         </button>
+                    ) : (
+                        <>
+                            <button
+                                type="button"
+                                onClick={onEdit}
+                                aria-label={t('common.edit')}
+                                className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted/50"
+                            >
+                                <Pencil className="w-4 h-4" />
+                            </button>
+                            {showQuickDone && task.status !== 'done' && (
+                                <button
+                                    type="button"
+                                    onClick={() => onStatusChange('done')}
+                                    aria-label={t('status.done')}
+                                    className="text-emerald-400 hover:text-emerald-300 p-1 rounded hover:bg-emerald-500/20"
+                                >
+                                    <Check className="w-4 h-4" />
+                                </button>
+                            )}
+                            <select
+                                value={task.status}
+                                aria-label="Task status"
+                                onChange={(e) => onStatusChange(e.target.value as TaskStatus)}
+                                className="text-xs px-2 py-1 rounded cursor-pointer bg-muted/50 text-foreground border border-border hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/40"
+                            >
+                                <option value="inbox">{t('status.inbox')}</option>
+                                <option value="next">{t('status.next')}</option>
+                                <option value="waiting">{t('status.waiting')}</option>
+                                <option value="someday">{t('status.someday')}</option>
+                                <option value="done">{t('status.done')}</option>
+                            </select>
+                            <button
+                                onClick={onDelete}
+                                aria-label="Delete task"
+                                className="text-red-400 hover:text-red-300 p-1 rounded hover:bg-red-500/20"
+                            >
+                                <Trash2 className="w-4 h-4" />
+                            </button>
+                        </>
                     )}
-                    <select
-                        value={task.status}
-                        aria-label="Task status"
-                        onChange={(e) => onStatusChange(e.target.value as TaskStatus)}
-                        className="text-xs px-2 py-1 rounded cursor-pointer bg-muted/50 text-foreground border border-border hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/40"
-                    >
-                        <option value="inbox">{t('status.inbox')}</option>
-                        <option value="next">{t('status.next')}</option>
-                        <option value="waiting">{t('status.waiting')}</option>
-                        <option value="someday">{t('status.someday')}</option>
-                        <option value="done">{t('status.done')}</option>
-                    </select>
-                    <button
-                        onClick={onDelete}
-                        aria-label="Delete task"
-                        className="text-red-400 hover:text-red-300 p-1 rounded hover:bg-red-500/20"
-                    >
-                        <Trash2 className="w-4 h-4" />
-                    </button>
                 </div>
             )}
         </div>
