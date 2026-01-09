@@ -97,6 +97,10 @@ export function InboxProcessingWizard({
 }: InboxProcessingWizardProps) {
     if (!isProcessing || !processingTask) return null;
 
+    const currentProject = processingTask.projectId
+        ? projects.find((project) => project.id === processingTask.projectId) ?? null
+        : null;
+
     return (
         <div className="bg-card border border-border rounded-xl p-6 space-y-4 animate-in fade-in">
             <div className="flex items-center justify-between">
@@ -344,6 +348,16 @@ export function InboxProcessingWizard({
                         {t('process.projectDesc')}
                     </p>
 
+                    {!convertToProject && currentProject && (
+                        <button
+                            type="button"
+                            onClick={() => handleSetProject(currentProject.id)}
+                            className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg border border-primary bg-primary/10 text-primary text-sm font-medium hover:bg-primary/20"
+                        >
+                            ✓ {currentProject.title}
+                        </button>
+                    )}
+
                     <div className="flex flex-wrap gap-2 justify-center">
                         <button
                             type="button"
@@ -445,7 +459,12 @@ export function InboxProcessingWizard({
                                         <button
                                             key={project.id}
                                             onClick={() => handleSetProject(project.id)}
-                                            className="w-full flex items-center gap-3 p-3 bg-muted rounded-lg hover:bg-muted/80 text-left"
+                                            className={cn(
+                                                "w-full flex items-center gap-3 p-3 rounded-lg text-left border",
+                                                processingTask.projectId === project.id
+                                                    ? "bg-primary/10 border-primary"
+                                                    : "bg-muted border-transparent hover:bg-muted/80"
+                                            )}
                                         >
                                             <div
                                                 className="w-3 h-3 rounded-full"

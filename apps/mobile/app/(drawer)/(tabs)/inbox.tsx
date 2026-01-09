@@ -323,6 +323,9 @@ export default function InboxScreen() {
     const projectTitle = currentTask.projectId
       ? projects.find((p) => p.id === currentTask.projectId)?.title
       : null;
+    const currentProject = currentTask.projectId
+      ? projects.find((p) => p.id === currentTask.projectId) ?? null
+      : null;
 
     return (
       <Modal
@@ -748,10 +751,19 @@ export default function InboxScreen() {
             )}
 
 	            {processingStep === 'project' && (
-	              <View style={styles.stepContent}>
-	                <Text style={[styles.stepQuestion, { color: tc.text }]}>
-	                  📁 {t('inbox.assignProjectQuestion')}
-	                </Text>
+              <View style={styles.stepContent}>
+                <Text style={[styles.stepQuestion, { color: tc.text }]}>
+                  📁 {t('inbox.assignProjectQuestion')}
+                </Text>
+
+                {currentProject && (
+                  <TouchableOpacity
+                    style={[styles.projectChip, { backgroundColor: tc.tint }]}
+                    onPress={() => handleSetProject(currentProject.id)}
+                  >
+                    <Text style={styles.projectChipText}>✓ {currentProject.title}</Text>
+                  </TouchableOpacity>
+                )}
 
                   <View style={styles.projectSearchRow}>
                     <TextInput
@@ -799,10 +811,16 @@ export default function InboxScreen() {
 	                  </TouchableOpacity>
                   {filteredProjects.map(proj => {
                     const projectColor = proj.areaId ? areaById.get(proj.areaId)?.color : undefined;
+                    const isSelected = currentTask.projectId === proj.id;
                     return (
                       <TouchableOpacity
                         key={proj.id}
-                        style={[styles.projectChip, { backgroundColor: tc.cardBg, borderWidth: 1, borderColor: tc.border }]}
+                        style={[
+                          styles.projectChip,
+                          isSelected
+                            ? { backgroundColor: '#3B82F620', borderWidth: 1, borderColor: tc.tint }
+                            : { backgroundColor: tc.cardBg, borderWidth: 1, borderColor: tc.border },
+                        ]}
                         onPress={() => handleSetProject(proj.id)}
                       >
                         <View style={[styles.projectDot, { backgroundColor: projectColor || '#6B7280' }]} />
