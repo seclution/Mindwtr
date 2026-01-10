@@ -27,6 +27,10 @@ type TaskEditFormTabProps = {
     copilotTags: string[];
     timeEstimatesEnabled: boolean;
     renderField: (fieldId: TaskEditorFieldId) => React.ReactNode;
+    alwaysFields: TaskEditorFieldId[];
+    schedulingFields: TaskEditorFieldId[];
+    organizationFields: TaskEditorFieldId[];
+    detailsFields: TaskEditorFieldId[];
     showDatePicker: string | null;
     pendingStartDate: Date | null;
     pendingDueDate: Date | null;
@@ -55,6 +59,10 @@ export function TaskEditFormTab({
     copilotTags,
     timeEstimatesEnabled,
     renderField,
+    alwaysFields,
+    schedulingFields,
+    organizationFields,
+    detailsFields,
     showDatePicker,
     pendingStartDate,
     pendingDueDate,
@@ -160,18 +168,18 @@ export function TaskEditFormTab({
                             </Text>
                         </View>
                     )}
-                    {renderField('status')}
-                    {renderField('project')}
-                    {renderField('dueDate')}
+                    {alwaysFields.map((fieldId) => (
+                        <React.Fragment key={fieldId}>{renderField(fieldId)}</React.Fragment>
+                    ))}
 
                     <CollapsibleSection
                         title={t('taskEdit.scheduling')}
                         badge={countFilledFields(['startTime', 'recurrence', 'reviewAt'])}
                         defaultExpanded={countFilledFields(['startTime', 'recurrence', 'reviewAt']) > 0}
                     >
-                        {renderField('startTime')}
-                        {renderField('recurrence')}
-                        {renderField('reviewAt')}
+                        {schedulingFields.map((fieldId) => (
+                            <React.Fragment key={fieldId}>{renderField(fieldId)}</React.Fragment>
+                        ))}
                     </CollapsibleSection>
 
                     <CollapsibleSection
@@ -179,10 +187,9 @@ export function TaskEditFormTab({
                         badge={countFilledFields(['contexts', 'tags', 'priority', 'timeEstimate'])}
                         defaultExpanded={countFilledFields(['contexts', 'tags']) > 0}
                     >
-                        {renderField('contexts')}
-                        {renderField('tags')}
-                        {renderField('priority')}
-                        {renderField('timeEstimate')}
+                        {organizationFields.map((fieldId) => (
+                            <React.Fragment key={fieldId}>{renderField(fieldId)}</React.Fragment>
+                        ))}
                     </CollapsibleSection>
 
                     <CollapsibleSection
@@ -190,9 +197,9 @@ export function TaskEditFormTab({
                         badge={countFilledFields(['description', 'checklist', 'attachments'])}
                         defaultExpanded={countFilledFields(['description', 'checklist', 'attachments']) > 0}
                     >
-                        {renderField('description')}
-                        {renderField('checklist')}
-                        {renderField('attachments')}
+                        {detailsFields.map((fieldId) => (
+                            <React.Fragment key={fieldId}>{renderField(fieldId)}</React.Fragment>
+                        ))}
                     </CollapsibleSection>
 
                     <View style={{ height: 100 }} />
