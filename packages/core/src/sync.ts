@@ -135,7 +135,7 @@ function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; delet
                 const liveTime = Number.isFinite(liveTimeRaw) ? liveTimeRaw : 0;
                 winner = deletedTime >= liveTime ? deletedItem : liveItem;
             } else if (safeIncomingTime === safeLocalTime) {
-                winner = localItem;
+                winner = incomingItem;
             }
         }
         if (winner === incomingItem) stats.resolvedUsingIncoming += 1;
