@@ -159,7 +159,6 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
     const [pendingDueDate, setPendingDueDate] = useState<Date | null>(null);
     const [editTab, setEditTab] = useState<TaskEditTab>('task');
     const [showDescriptionPreview, setShowDescriptionPreview] = useState(false);
-    const [showMoreOptions, setShowMoreOptions] = useState(false);
     const [linkModalVisible, setLinkModalVisible] = useState(false);
     const [showProjectPicker, setShowProjectPicker] = useState(false);
     const [linkInput, setLinkInput] = useState('');
@@ -758,56 +757,10 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         return [...normalized, ...missing].filter((id) => !disabledFields.has(id));
     }, [savedOrder, disabledFields]);
 
-    const primaryFieldIds = useMemo(() => new Set<TaskEditorFieldId>(['status', 'project', 'contexts', 'dueDate']), []);
-
-    useEffect(() => {
-        if (!visible) return;
-        setShowMoreOptions(false);
-    }, [visible, task]);
-
     const mergedTask = useMemo(() => ({
         ...(task ?? {}),
         ...editedTask,
     }), [task, editedTask]);
-    const hasFieldValue = useCallback((fieldId: TaskEditorFieldId) => {
-        switch (fieldId) {
-            case 'status':
-                return Boolean(mergedTask.status);
-            case 'project':
-                return Boolean(mergedTask.projectId);
-            case 'priority':
-                return prioritiesEnabled && Boolean(mergedTask.priority);
-            case 'contexts':
-                return (mergedTask.contexts || []).length > 0;
-            case 'description':
-                return Boolean(mergedTask.description && String(mergedTask.description).trim());
-            case 'tags':
-                return (mergedTask.tags || []).length > 0;
-            case 'timeEstimate':
-                return timeEstimatesEnabled && Boolean(mergedTask.timeEstimate);
-            case 'recurrence':
-                return Boolean(mergedTask.recurrence);
-            case 'startTime':
-                return Boolean(mergedTask.startTime);
-            case 'dueDate':
-                return Boolean(mergedTask.dueDate);
-            case 'reviewAt':
-                return Boolean(mergedTask.reviewAt);
-            case 'attachments':
-                return (mergedTask.attachments || []).some((attachment) => !attachment.deletedAt);
-            case 'checklist':
-                return (mergedTask.checklist || []).length > 0;
-            default:
-                return false;
-        }
-    }, [mergedTask, prioritiesEnabled, timeEstimatesEnabled]);
-
-    const compactFieldIds = useMemo(() => {
-        return taskEditorOrder.filter((fieldId) => primaryFieldIds.has(fieldId) || hasFieldValue(fieldId));
-    }, [taskEditorOrder, primaryFieldIds, hasFieldValue]);
-
-    const fieldIdsToRender = showMoreOptions ? taskEditorOrder : compactFieldIds;
-    const hasHiddenFields = compactFieldIds.length < taskEditorOrder.length;
 
     const recurrenceOptions: { value: RecurrenceRule | ''; label: string }[] = [
         { value: '', label: t('recurrence.none') },
@@ -1828,11 +1781,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                             timeEstimatesEnabled={timeEstimatesEnabled}
                             task={task}
                             handleDuplicateTask={handleDuplicateTask}
-                            fieldIdsToRender={fieldIdsToRender}
                             renderField={renderField}
-                            hasHiddenFields={hasHiddenFields}
-                            showMoreOptions={showMoreOptions}
-                            setShowMoreOptions={setShowMoreOptions}
                             showDatePicker={showDatePicker}
                             pendingStartDate={pendingStartDate}
                             pendingDueDate={pendingDueDate}

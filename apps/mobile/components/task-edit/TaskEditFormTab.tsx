@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingVi
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import type { Task, TaskEditorFieldId, TimeEstimate } from '@mindwtr/core';
 import type { ThemeColors } from '@/hooks/use-theme-colors';
+import { CollapsibleSection } from './CollapsibleSection';
 
 type CopilotSuggestion = { context?: string; timeEstimate?: TimeEstimate; tags?: string[] };
 
@@ -27,11 +28,7 @@ type TaskEditFormTabProps = {
     timeEstimatesEnabled: boolean;
     task: Task | null;
     handleDuplicateTask: () => void;
-    fieldIdsToRender: TaskEditorFieldId[];
     renderField: (fieldId: TaskEditorFieldId) => React.ReactNode;
-    hasHiddenFields: boolean;
-    showMoreOptions: boolean;
-    setShowMoreOptions: React.Dispatch<React.SetStateAction<boolean>>;
     showDatePicker: string | null;
     pendingStartDate: Date | null;
     pendingDueDate: Date | null;
@@ -61,11 +58,7 @@ export function TaskEditFormTab({
     timeEstimatesEnabled,
     task,
     handleDuplicateTask,
-    fieldIdsToRender,
     renderField,
-    hasHiddenFields,
-    showMoreOptions,
-    setShowMoreOptions,
     showDatePicker,
     pendingStartDate,
     pendingDueDate,
@@ -73,6 +66,35 @@ export function TaskEditFormTab({
     onDateChange,
     containerWidth,
 }: TaskEditFormTabProps) {
+    const countFilledFields = (fieldIds: TaskEditorFieldId[]): number => {
+        return fieldIds.filter((fieldId) => {
+            switch (fieldId) {
+                case 'startTime':
+                    return Boolean(editedTask.startTime);
+                case 'recurrence':
+                    return Boolean(editedTask.recurrence);
+                case 'reviewAt':
+                    return Boolean(editedTask.reviewAt);
+                case 'contexts':
+                    return (editedTask.contexts?.length ?? 0) > 0;
+                case 'tags':
+                    return (editedTask.tags?.length ?? 0) > 0;
+                case 'priority':
+                    return Boolean(editedTask.priority);
+                case 'timeEstimate':
+                    return Boolean(editedTask.timeEstimate);
+                case 'description':
+                    return Boolean(String(editedTask.description ?? '').trim());
+                case 'checklist':
+                    return (editedTask.checklist?.length ?? 0) > 0;
+                case 'attachments':
+                    return (editedTask.attachments || []).some((attachment) => !attachment.deletedAt);
+                default:
+                    return false;
+            }
+        }).length;
+    };
+
     return (
         <View style={[styles.tabPage, { width: containerWidth || '100%' }]}>
             <KeyboardAvoidingView
@@ -154,23 +176,40 @@ export function TaskEditFormTab({
                             </TouchableOpacity>
                         </View>
                     )}
+                    {renderField('status')}
+                    {renderField('project')}
+                    {renderField('dueDate')}
 
-                    {fieldIdsToRender.map((fieldId) => (
-                        <React.Fragment key={fieldId}>
-                            {renderField(fieldId)}
-                        </React.Fragment>
-                    ))}
+                    <CollapsibleSection
+                        title={t('taskEdit.scheduling')}
+                        badge={countFilledFields(['startTime', 'recurrence', 'reviewAt'])}
+                        defaultExpanded={countFilledFields(['startTime', 'recurrence', 'reviewAt']) > 0}
+                    >
+                        {renderField('startTime')}
+                        {renderField('recurrence')}
+                        {renderField('reviewAt')}
+                    </CollapsibleSection>
 
-                    {hasHiddenFields && (
-                        <TouchableOpacity
-                            style={[styles.moreOptionsButton, { borderColor: tc.border, backgroundColor: tc.cardBg }]}
-                            onPress={() => setShowMoreOptions((prev) => !prev)}
-                        >
-                            <Text style={[styles.moreOptionsText, { color: tc.tint }]}>
-                                {showMoreOptions ? t('taskEdit.hideOptions') : t('taskEdit.moreOptions')}
-                            </Text>
-                        </TouchableOpacity>
-                    )}
+                    <CollapsibleSection
+                        title={t('taskEdit.organization')}
+                        badge={countFilledFields(['contexts', 'tags', 'priority', 'timeEstimate'])}
+                        defaultExpanded={countFilledFields(['contexts', 'tags']) > 0}
+                    >
+                        {renderField('contexts')}
+                        {renderField('tags')}
+                        {renderField('priority')}
+                        {renderField('timeEstimate')}
+                    </CollapsibleSection>
+
+                    <CollapsibleSection
+                        title={t('taskEdit.details')}
+                        badge={countFilledFields(['description', 'checklist', 'attachments'])}
+                        defaultExpanded={countFilledFields(['description', 'checklist', 'attachments']) > 0}
+                    >
+                        {renderField('description')}
+                        {renderField('checklist')}
+                        {renderField('attachments')}
+                    </CollapsibleSection>
 
                     <View style={{ height: 100 }} />
 
