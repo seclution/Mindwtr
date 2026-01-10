@@ -134,6 +134,8 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
     const [copilotContext, setCopilotContext] = useState<string | undefined>(undefined);
     const [copilotEstimate, setCopilotEstimate] = useState<TimeEstimate | undefined>(undefined);
     const [copilotTags, setCopilotTags] = useState<string[]>([]);
+    const contextOptionsRef = useRef(contextOptions);
+    const tagOptionsRef = useRef(tagOptions);
     const copilotMountedRef = useRef(true);
     const copilotAbortRef = useRef<AbortController | null>(null);
     const [showAllContexts, setShowAllContexts] = useState(false);
@@ -252,6 +254,11 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
     }, []);
 
     useEffect(() => {
+        contextOptionsRef.current = contextOptions;
+        tagOptionsRef.current = tagOptions;
+    }, [contextOptions, tagOptions]);
+
+    useEffect(() => {
         if (!aiEnabled || !aiKey) {
             setCopilotSuggestion(null);
             return;
@@ -271,7 +278,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                     copilotAbortRef.current = abortController;
                     const provider = createAIProvider(buildCopilotConfig(settings, aiKey));
                     const suggestion = await provider.predictMetadata(
-                        { title: input, contexts: contextOptions, tags: tagOptions },
+                        { title: input, contexts: contextOptionsRef.current, tags: tagOptionsRef.current },
                         abortController ? { signal: abortController.signal } : undefined
                     );
                     if (cancelled || !copilotMountedRef.current) return;
@@ -292,7 +299,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                     copilotAbortRef.current = null;
                 }
             };
-    }, [aiEnabled, aiKey, editedTask.title, editedTask.description, contextOptions, tagOptions, settings, timeEstimatesEnabled]);
+    }, [aiEnabled, aiKey, editedTask.title, editedTask.description, settings, timeEstimatesEnabled]);
 
     useEffect(() => {
         if (!visible) {
