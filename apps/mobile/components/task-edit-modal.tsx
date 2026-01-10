@@ -39,6 +39,7 @@ import { styles } from './task-edit/task-edit-modal.styles';
 import { TaskEditViewTab } from './task-edit/TaskEditViewTab';
 import { TaskEditFormTab } from './task-edit/TaskEditFormTab';
 import { TaskEditHeader } from './task-edit/TaskEditHeader';
+import { TaskEditTabs } from './task-edit/TaskEditTabs';
 import { TaskEditProjectPicker } from './task-edit/TaskEditProjectPicker';
 
 const MAX_SUGGESTED_TAGS = 8;
@@ -1726,59 +1727,12 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                     onDelete={handleDeleteTask}
                 />
 
-                <View style={[styles.modeTabs, { borderBottomColor: tc.border, backgroundColor: tc.cardBg }]}>
-                    <View style={[styles.modeTabsTrack, { backgroundColor: tc.filterBg, borderColor: tc.border }]}>
-                        {containerWidth > 0 && (
-                            <Animated.View
-                                pointerEvents="none"
-                                style={[
-                                    styles.modeTabIndicator,
-                                    {
-                                        width: containerWidth / 2,
-                                        backgroundColor: tc.tint,
-                                        transform: [
-                                            {
-                                                translateX: scrollX.interpolate({
-                                                    inputRange: [0, containerWidth],
-                                                    outputRange: [0, containerWidth / 2],
-                                                    extrapolate: 'clamp',
-                                                }),
-                                            },
-                                        ],
-                                    },
-                                ]}
-                            />
-                        )}
-                        <TouchableOpacity
-                            style={styles.modeTab}
-                            onPress={() => handleTabPress('task')}
-                            activeOpacity={0.85}
-                        >
-                            <Text
-                                style={[
-                                    styles.modeTabText,
-                                    { color: editTab === 'task' ? '#fff' : tc.text },
-                                ]}
-                            >
-                                {t('markdown.edit')}
-                            </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.modeTab}
-                            onPress={() => handleTabPress('view')}
-                            activeOpacity={0.85}
-                        >
-                            <Text
-                                style={[
-                                    styles.modeTabText,
-                                    { color: editTab === 'view' ? '#fff' : tc.text },
-                                ]}
-                            >
-                                {t('markdown.preview')}
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
+                <TaskEditTabs
+                    editTab={editTab}
+                    onTabPress={handleTabPress}
+                    scrollX={scrollX}
+                    containerWidth={containerWidth}
+                />
 
                 <View
                     style={styles.tabContent}
