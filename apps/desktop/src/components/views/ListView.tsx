@@ -357,7 +357,11 @@ export function ListView({ title, statusFilter }: ListViewProps) {
 
     const rowHeights = useMemo(() => {
         if (!shouldVirtualize) return [];
-        return filteredTasks.map((task) => rowHeightsRef.current.get(task.id) ?? VIRTUAL_ROW_ESTIMATE);
+        const measuredHeights = Array.from(rowHeightsRef.current.values());
+        const fallbackHeight = measuredHeights.length
+            ? Math.round(measuredHeights.reduce((sum, value) => sum + value, 0) / measuredHeights.length)
+            : VIRTUAL_ROW_ESTIMATE;
+        return filteredTasks.map((task) => rowHeightsRef.current.get(task.id) ?? fallbackHeight);
     }, [filteredTasks, measureVersion, shouldVirtualize]);
 
     const { rowOffsets, totalHeight } = useMemo(() => {
