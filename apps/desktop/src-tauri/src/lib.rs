@@ -1346,33 +1346,81 @@ fn set_ai_key(app: tauri::AppHandle, provider: String, value: Option<String>) ->
     Ok(())
 }
 
+fn default_sync_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|_| "Could not determine home directory for default sync path".to_string())?;
+    Ok(home.join("Sync").join(APP_NAME))
+}
+
+fn normalize_sync_dir(input: &str) -> PathBuf {
+    let path = PathBuf::from(input);
+    let legacy_name = format!("{}-sync.json", APP_NAME);
+    if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+        if name == DATA_FILE_NAME || name == legacy_name {
+            return path.parent().unwrap_or(&path).to_path_buf();
+        }
+    }
+    path
+}
+
+fn validate_sync_dir(path: &PathBuf) -> Result<PathBuf, String> {
+    if path.as_os_str().is_empty() {
+        return Err("Sync path cannot be empty".to_string());
+    }
+
+    if path.exists() {
+        let metadata = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        if metadata.file_type().is_symlink() {
+            return Err("Sync path must not be a symlink".to_string());
+        }
+        if !metadata.is_dir() {
+            return Err("Sync path must be a directory".to_string());
+        }
+    } else {
+        fs::create_dir_all(path).map_err(|e| e.to_string())?;
+    }
+
+    let canonical = fs::canonicalize(path).map_err(|e| e.to_string())?;
+    let metadata = fs::symlink_metadata(&canonical).map_err(|e| e.to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err("Sync path must not be a symlink".to_string());
+    }
+    if !metadata.is_dir() {
+        return Err("Sync path must be a directory".to_string());
+    }
+
+    Ok(canonical)
+}
+
+fn resolve_sync_dir(app: &tauri::AppHandle, path: Option<String>) -> Result<PathBuf, String> {
+    let candidate = match path {
+        Some(raw) => normalize_sync_dir(raw.trim()),
+        None => default_sync_dir(app)?,
+    };
+    validate_sync_dir(&candidate)
+}
+
 #[tauri::command]
 fn get_sync_path(app: tauri::AppHandle) -> Result<String, String> {
     let config = read_config(&app);
-    if let Some(path) = config.sync_path {
-        return Ok(path);
-    }
-    // Default sync path: ~/Sync/{APP_NAME}
-    // We try to use a safe home dir, falling back to error if not found
-    let home = app.path().home_dir().map_err(|_| "Could not determine home directory for default sync path".to_string())?;
-    
-    Ok(home.join("Sync")
-        .join(APP_NAME)
-        .to_string_lossy()
-        .to_string())
+    let path = resolve_sync_dir(&app, config.sync_path).or_else(|_| resolve_sync_dir(&app, None))?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
 fn set_sync_path(app: tauri::AppHandle, sync_path: String) -> Result<serde_json::Value, String> {
     let config_path = get_config_path(&app);
-    
+    let sanitized_path = resolve_sync_dir(&app, Some(sync_path))?;
+
     let mut config = read_config(&app);
-    config.sync_path = Some(sync_path.clone());
+    config.sync_path = Some(sanitized_path.to_string_lossy().to_string());
     write_config_files(&config_path, &get_secrets_path(&app), &config)?;
     
     Ok(serde_json::json!({
         "success": true,
-        "path": sync_path
+        "path": config.sync_path
     }))
 }
 
