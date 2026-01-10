@@ -37,17 +37,27 @@ function App() {
         window.addEventListener('beforeunload', handleUnload);
         let unlistenClose: (() => void) | null = null;
         let isClosing = false;
+        let disposed = false;
         if (isTauriRuntime()) {
             import('@tauri-apps/api/window')
                 .then(async ({ getCurrentWindow }) => {
                     const window = getCurrentWindow();
-                    unlistenClose = await window.onCloseRequested(async (event) => {
+                    const unlisten = await window.onCloseRequested(async (event) => {
                         if (isClosing) return;
                         isClosing = true;
                         event.preventDefault();
-                        await flushPendingSave().catch(console.error);
-                        await window.close();
+                        try {
+                            await flushPendingSave().catch(console.error);
+                            await window.close();
+                        } finally {
+                            isClosing = false;
+                        }
                     });
+                    if (disposed) {
+                        unlisten();
+                    } else {
+                        unlistenClose = unlisten;
+                    }
                 })
                 .catch(console.error);
         }
@@ -152,6 +162,7 @@ function App() {
         }, 1500);
 
         return () => {
+            disposed = true;
             isActive = false;
             window.removeEventListener('beforeunload', handleUnload);
             window.removeEventListener('focus', focusListener);
