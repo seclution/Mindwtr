@@ -6,7 +6,7 @@ import 'react-native-reanimated';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { Alert, AppState, AppStateStatus } from 'react-native';
+import { Alert, AppState, AppStateStatus, SafeAreaView, Text, View } from 'react-native';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { QuickCaptureProvider, type QuickCaptureOptions } from '../contexts/quick-capture-context';
 
@@ -193,6 +193,9 @@ function RootLayoutContent() {
           clearTimeout(retryLoadTimer.current);
           retryLoadTimer.current = null;
         }
+        if (storageInitError) {
+          return;
+        }
         // Verify critical polyfills
         verifyPolyfills();
 
@@ -232,6 +235,10 @@ function RootLayoutContent() {
       }
     };
 
+    if (storageInitError) {
+      setIsDataLoaded(true);
+      return;
+    }
     loadData();
   }, [storageWarningShown]);
 
@@ -260,6 +267,24 @@ function RootLayoutContent() {
       SplashScreen.hideAsync().catch(console.warn);
     }
   }, [isAppReady]);
+
+  if (storageInitError) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
+        <View style={{ flex: 1, padding: 24, justifyContent: 'center' }}>
+          <Text style={{ fontSize: 20, fontWeight: '600', color: isDark ? '#e2e8f0' : '#0f172a', marginBottom: 12 }}>
+            Storage unavailable
+          </Text>
+          <Text style={{ fontSize: 14, color: isDark ? '#94a3b8' : '#475569', lineHeight: 20 }}>
+            Mindwtr could not initialize local storage, so changes won&apos;t be saved. Please restart the app or reinstall if the problem persists.
+          </Text>
+          <Text style={{ fontSize: 12, color: isDark ? '#64748b' : '#94a3b8', marginTop: 16 }}>
+            {storageInitError.message}
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (!isAppReady) {
     return null;
