@@ -287,12 +287,6 @@ export function SettingsView() {
             .catch(console.error);
     };
 
-    const updateFeatureFlags = (next: Partial<NonNullable<typeof settings.features>>) => {
-        updateSettings({ features: { ...(settings.features ?? {}), ...next } })
-            .then(showSaved)
-            .catch(console.error);
-    };
-
     const handleAIProviderChange = (provider: AIProviderId) => {
         updateAISettings({
             provider,
@@ -1021,9 +1015,6 @@ export function SettingsView() {
                     updateSettings={updateSettings}
                     showSaved={showSaved}
                     autoArchiveDays={autoArchiveDays}
-                    prioritiesEnabled={prioritiesEnabled}
-                    timeEstimatesEnabled={timeEstimatesEnabled}
-                    updateFeatureFlags={updateFeatureFlags}
                 />
             );
         }

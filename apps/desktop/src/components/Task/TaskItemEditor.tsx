@@ -32,6 +32,7 @@ interface TaskItemEditorProps {
     setEditProjectId: (value: string) => void;
     onCreateProject: (title: string) => Promise<string | null>;
     showProjectField: boolean;
+    showDueDate: boolean;
     editDueDate: string;
     setEditDueDate: (value: string) => void;
     alwaysFields: TaskEditorFieldId[];
@@ -81,6 +82,7 @@ export function TaskItemEditor({
     setEditProjectId,
     onCreateProject,
     showProjectField,
+    showDueDate,
     editDueDate,
     setEditDueDate,
     alwaysFields,
@@ -274,25 +276,27 @@ export function TaskItemEditor({
                         />
                     </div>
                 )}
-                <div className="flex flex-col gap-1">
-                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.dueDateLabel')}</label>
-                    <div className="flex items-center gap-2">
-                        <input
-                            type="date"
-                            aria-label="Deadline date"
-                            value={dueDateValue}
-                            onChange={(e) => handleDueDateChange(e.target.value)}
-                            className="text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
-                        />
-                        <input
-                            type="time"
-                            aria-label="Deadline time"
-                            value={dueTimeValue}
-                            onChange={(e) => handleDueTimeChange(e.target.value)}
-                            className="text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
-                        />
+                {showDueDate && (
+                    <div className="flex flex-col gap-1">
+                        <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.dueDateLabel')}</label>
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="date"
+                                aria-label="Deadline date"
+                                value={dueDateValue}
+                                onChange={(e) => handleDueDateChange(e.target.value)}
+                                className="text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
+                            />
+                            <input
+                                type="time"
+                                aria-label="Deadline time"
+                                value={dueTimeValue}
+                                onChange={(e) => handleDueTimeChange(e.target.value)}
+                                className="text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
+                            />
+                        </div>
                     </div>
-                </div>
+                )}
             </div>
             {alwaysFields.length > 0 && (
                 <div className="space-y-3">

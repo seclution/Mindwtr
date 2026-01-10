@@ -306,8 +306,11 @@ export const TaskItem = memo(function TaskItem({
     }, [savedOrder, disabledFields]);
     const hiddenSet = useMemo(() => {
         const known = new Set(taskEditorOrder);
-        return new Set(savedHidden.filter((id) => known.has(id)));
-    }, [savedHidden, taskEditorOrder]);
+        const next = new Set(savedHidden.filter((id) => known.has(id)));
+        if (settings?.features?.priorities === false) next.add('priority');
+        if (settings?.features?.timeEstimates === false) next.add('timeEstimate');
+        return next;
+    }, [savedHidden, settings?.features?.priorities, settings?.features?.timeEstimates, taskEditorOrder]);
 
     const hasValue = useCallback((fieldId: TaskEditorFieldId) => {
         switch (fieldId) {
@@ -359,7 +362,12 @@ export const TaskItem = memo(function TaskItem({
         visibleEditAttachments.length,
     ]);
 
-    const showProjectField = true;
+    const isFieldVisible = useCallback(
+        (fieldId: TaskEditorFieldId) => !hiddenSet.has(fieldId) || hasValue(fieldId),
+        [hasValue, hiddenSet]
+    );
+    const showProjectField = isFieldVisible('project');
+    const showDueDate = isFieldVisible('dueDate');
     const orderFields = useCallback(
         (fields: TaskEditorFieldId[]) => {
             const ordered = taskEditorOrder.filter((id) => fields.includes(id));
@@ -373,8 +381,8 @@ export const TaskItem = memo(function TaskItem({
         [hiddenSet, hasValue]
     );
     const alwaysFields = useMemo(
-        () => orderFields(['status']),
-        [orderFields]
+        () => orderFields(['status']).filter(isFieldVisible),
+        [orderFields, isFieldVisible]
     );
     const schedulingFields = useMemo(
         () => filterVisibleFields(orderFields(['startTime', 'recurrence', 'reviewAt'])),
@@ -831,6 +839,7 @@ export const TaskItem = memo(function TaskItem({
                                 setEditProjectId={setEditProjectId}
                                 onCreateProject={handleCreateProject}
                                 showProjectField={showProjectField}
+                                showDueDate={showDueDate}
                                 editDueDate={editDueDate}
                                 setEditDueDate={setEditDueDate}
                                 alwaysFields={alwaysFields}
