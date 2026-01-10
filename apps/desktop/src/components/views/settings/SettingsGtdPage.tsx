@@ -108,7 +108,14 @@ export function SettingsGtdPage({
         'checklist',
     ];
     const defaultTaskEditorOrder = baseTaskEditorOrder.filter((fieldId) => !featureHiddenFields.has(fieldId));
-    const defaultTaskEditorHidden = [...defaultTaskEditorOrder];
+    const defaultVisibleFields = new Set<TaskEditorFieldId>([
+        'status',
+        'project',
+        'description',
+        'checklist',
+        'dueDate',
+    ]);
+    const defaultTaskEditorHidden = defaultTaskEditorOrder.filter((fieldId) => !defaultVisibleFields.has(fieldId));
     const savedOrder = settings.gtd?.taskEditor?.order ?? [];
     const savedHidden = settings.gtd?.taskEditor?.hidden ?? defaultTaskEditorHidden;
     const taskEditorOrder: TaskEditorFieldId[] = [

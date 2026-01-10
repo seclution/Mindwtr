@@ -60,10 +60,8 @@ const DEFAULT_TASK_EDITOR_HIDDEN: TaskEditorFieldId[] = [
     'timeEstimate',
     'recurrence',
     'startTime',
-    'dueDate',
     'reviewAt',
     'attachments',
-    'checklist',
 ];
 
 // Convert stored ISO or datetime-local strings into datetime-local input values.
