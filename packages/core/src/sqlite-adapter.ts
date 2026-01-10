@@ -14,7 +14,8 @@ const fromJson = <T>(value: unknown, fallback: T): T => {
     if (value === null || value === undefined || value === '') return fallback;
     try {
         return JSON.parse(String(value)) as T;
-    } catch {
+    } catch (error) {
+        console.warn('[SQLite] Failed to parse JSON value, falling back to defaults.', error);
         return fallback;
     }
 };
@@ -142,7 +143,7 @@ export class SqliteAdapter {
             title: String(row.title ?? ''),
             status: row.status as Project['status'],
             color: String(row.color ?? '#6B7280'),
-            order: row.orderNum === null || row.orderNum === undefined ? NaN : Number(row.orderNum),
+            order: row.orderNum === null || row.orderNum === undefined ? 0 : Number(row.orderNum),
             tagIds: fromJson<string[]>(row.tagIds, []),
             isSequential: fromBool(row.isSequential),
             isFocused: fromBool(row.isFocused),
@@ -221,7 +222,14 @@ export class SqliteAdapter {
         if (!cleaned) {
             return { tasks: [], projects: [] };
         }
-        const tokens = cleaned.split(/\s+/).filter(Boolean);
+        const reservedTokens = new Set(['AND', 'OR', 'NOT', 'NEAR']);
+        const tokens = cleaned
+            .split(/\s+/)
+            .filter(Boolean)
+            .filter((token) => !reservedTokens.has(token.toUpperCase()));
+        if (tokens.length === 0) {
+            return { tasks: [], projects: [] };
+        }
         const ftsQuery = tokens.map((token) => `${token}*`).join(' ');
         const runSearch = async (): Promise<SearchResults> => {
             const taskRows = await this.client.all<Record<string, unknown>>(
