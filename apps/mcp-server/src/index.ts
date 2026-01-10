@@ -9,6 +9,17 @@ import { runCoreService } from './core-service.js';
 
 const args = process.argv.slice(2);
 
+// Filter out undefined values from an object to prevent overwriting defaults
+const filterUndefined = <T extends Record<string, unknown>>(obj: T): Partial<T> => {
+  const result: Partial<T> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      (result as Record<string, unknown>)[key] = value;
+    }
+  }
+  return result;
+};
+
 const parseArgs = (argv: string[]) => {
   const flags: Record<string, string | boolean> = {};
   for (let i = 0; i < argv.length; i += 1) {
@@ -52,21 +63,25 @@ const listTasksSchema = z.object({
   sortOrder: z.enum(['asc', 'desc']).optional(),
 });
 
+// Note: Don't use .refine() as it breaks MCP SDK's JSON schema conversion
 const addTaskSchema = z.object({
-  title: z.string().optional(),
-  quickAdd: z.string().optional(),
-  status: z.string().optional(),
-  projectId: z.string().optional(),
-  dueDate: z.string().optional(),
-  startTime: z.string().optional(),
-  contexts: z.array(z.string()).optional(),
-  tags: z.array(z.string()).optional(),
-  description: z.string().optional(),
-  priority: z.string().optional(),
-  timeEstimate: z.string().optional(),
-}).refine((data) => data.title || data.quickAdd, {
-  message: 'Either title or quickAdd is required',
+  title: z.string().optional().describe('Task title'),
+  quickAdd: z.string().optional().describe('Quick-add string with natural language parsing (e.g. "Buy milk @errands #shopping /due:tomorrow +ProjectName")'),
+  status: z.string().optional().describe('Task status: inbox, next, waiting, someday, done, archived'),
+  projectId: z.string().optional().describe('Project ID to assign the task to'),
+  dueDate: z.string().optional().describe('Due date in ISO format'),
+  startTime: z.string().optional().describe('Start time in ISO format'),
+  contexts: z.array(z.string()).optional().describe('Context tags (e.g. ["@home", "@work"])'),
+  tags: z.array(z.string()).optional().describe('Tags (e.g. ["#urgent", "#personal"])'),
+  description: z.string().optional().describe('Task description/notes'),
+  priority: z.string().optional().describe('Priority level'),
+  timeEstimate: z.string().optional().describe('Time estimate (e.g. "30m", "2h")'),
 });
+const validateAddTask = (data: z.infer<typeof addTaskSchema>) => {
+  if (!data.title && !data.quickAdd) {
+    throw new Error('Either title or quickAdd is required');
+  }
+};
 
 const completeTaskSchema = z.object({
   id: z.string(),
@@ -152,13 +167,14 @@ server.registerTool(
   },
   async (input) => {
     if (readonly) throw new Error('Database opened read-only. Start the server with --write to enable edits.');
+    validateAddTask(input);
     const task = useCoreWrites
       ? await runCoreService({ dbPath, readonly }, async (core) => {
           if (input.quickAdd) {
             const projects = await withDb((db) => listProjects(db));
             const quick = parseQuickAdd(input.quickAdd, projects);
             const title = input.title ?? quick.title ?? input.quickAdd;
-            const props = {
+            const props = filterUndefined({
               ...quick.props,
               status: (input.status as any) ?? quick.props.status,
               projectId: input.projectId ?? quick.props.projectId,
@@ -169,12 +185,12 @@ server.registerTool(
               description: input.description ?? quick.props.description,
               priority: input.priority ?? quick.props.priority,
               timeEstimate: input.timeEstimate ?? quick.props.timeEstimate,
-            };
+            });
             return core.addTask({ title, props });
           }
           return core.addTask({
             title: input.title ?? '',
-            props: {
+            props: filterUndefined({
               status: input.status as any,
               projectId: input.projectId,
               dueDate: input.dueDate,
@@ -184,7 +200,7 @@ server.registerTool(
               description: input.description,
               priority: input.priority,
               timeEstimate: input.timeEstimate,
-            },
+            }),
           });
         })
       : await withDb((db) => addTask(db, { ...input, status: input.status as any }));

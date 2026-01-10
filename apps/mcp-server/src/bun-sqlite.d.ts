@@ -7,6 +7,7 @@ declare module 'bun:sqlite' {
       run: (...args: any[]) => { changes?: number };
     };
     pragma?(sql: string): void;
+    exec(sql: string): void;
     close(): void;
   }
 }

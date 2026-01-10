@@ -288,8 +288,40 @@ export function getTask(db: DbClient, input: GetTaskInput): TaskRow {
   return mapTaskRow(row);
 }
 
+const BASE_PROJECT_COLUMNS = [
+  'id',
+  'title',
+  'status',
+  'areaId',
+  'areaTitle',
+  'color',
+  'orderNum',
+  'tagIds',
+  'isSequential',
+  'isFocused',
+  'supportNotes',
+  'attachments',
+  'reviewAt',
+  'createdAt',
+  'updatedAt',
+  'deletedAt',
+];
+
+const getProjectColumns = (db: DbClient) => {
+  try {
+    const columns = db.prepare('PRAGMA table_info(projects)').all();
+    const names = new Set<string>(columns.map((col: any) => String(col.name)));
+    const hasOrderNum = names.has('orderNum');
+    const selectColumns = BASE_PROJECT_COLUMNS.filter((name) => hasOrderNum || name !== 'orderNum');
+    return { hasOrderNum, selectColumns };
+  } catch {
+    return { hasOrderNum: true, selectColumns: BASE_PROJECT_COLUMNS };
+  }
+};
+
 export function listProjects(db: DbClient): Project[] {
-  const rows = db.prepare('SELECT id, title, status, areaId, areaTitle, color, orderNum, tagIds, isSequential, isFocused, supportNotes, attachments, reviewAt, createdAt, updatedAt, deletedAt FROM projects WHERE deletedAt IS NULL').all();
+  const { selectColumns } = getProjectColumns(db);
+  const rows = db.prepare(`SELECT ${selectColumns.join(', ')} FROM projects WHERE deletedAt IS NULL`).all();
   return rows.map((row: any) => ({
     id: row.id,
     title: row.title,
