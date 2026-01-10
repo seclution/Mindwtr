@@ -1,6 +1,7 @@
 import type { AppData, Area, Attachment, Project, Task } from './types';
 import type { TaskQueryOptions, SearchResults } from './storage';
 import { SQLITE_SCHEMA } from './sqlite-schema';
+import { normalizeTaskStatus } from './task-status';
 
 export interface SqliteClient {
     run(sql: string, params?: unknown[]): Promise<void>;
@@ -35,6 +36,19 @@ const fromBool = (value: unknown) => Boolean(value);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const normalizeProjectStatus = (value: unknown): Project['status'] => {
+    if (value === 'active' || value === 'someday' || value === 'waiting' || value === 'archived') {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const lowered = value.toLowerCase().trim();
+        if (lowered === 'active' || lowered === 'someday' || lowered === 'waiting' || lowered === 'archived') {
+            return lowered as Project['status'];
+        }
+    }
+    return 'active';
+};
 
 const toStringArray = (value: unknown): string[] => {
     if (!Array.isArray(value)) return [];
@@ -201,7 +215,7 @@ export class SqliteAdapter {
         return {
             id: String(row.id),
             title: String(row.title ?? ''),
-            status: row.status as Task['status'],
+            status: normalizeTaskStatus(row.status),
             priority: row.priority as Task['priority'] | undefined,
             taskMode: row.taskMode as Task['taskMode'] | undefined,
             startTime: row.startTime as string | undefined,
@@ -234,7 +248,7 @@ export class SqliteAdapter {
         return {
             id: String(row.id),
             title: String(row.title ?? ''),
-            status: row.status as Project['status'],
+            status: normalizeProjectStatus(row.status),
             color: String(row.color ?? '#6B7280'),
             order: row.orderNum === null || row.orderNum === undefined ? 0 : Number(row.orderNum),
             tagIds: toStringArray(fromJson<unknown>(row.tagIds, [])),
