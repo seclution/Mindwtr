@@ -90,6 +90,7 @@ Mindwtr is built to be **simple by default and powerful when you need it**. We f
 - 🔌 **CLI** - Add, list, complete, search from terminal
 - 🌐 **REST API** - Local API server for scripting
 - 🌍 **Web App (PWA)** - Browser access with offline support
+- 🧠 **MCP Server** - Local Model Context Protocol server for LLM automation
 
 ### Cross-Platform
 - 🖥️ **Desktop** - Tauri v2 (macOS, Linux, Windows)
