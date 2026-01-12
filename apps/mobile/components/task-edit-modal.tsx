@@ -36,6 +36,7 @@ import { useLanguage } from '../contexts/language-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { MarkdownText } from './markdown-text';
 import { buildAIConfig, buildCopilotConfig, loadAIKey } from '../lib/ai-config';
+import { ensureAttachmentAvailable } from '../lib/attachment-sync';
 import { AIResponseModal, type AIResponseAction } from './ai-response-modal';
 import { styles } from './task-edit/task-edit-modal.styles';
 import { TaskEditViewTab } from './task-edit/TaskEditViewTab';
@@ -629,12 +630,27 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
     }, [audioStatus]);
 
     const openAttachment = async (attachment: Attachment) => {
-        if (attachment.kind === 'link') {
-            Linking.openURL(attachment.uri).catch(console.error);
+        const resolved = await ensureAttachmentAvailable(attachment);
+        if (!resolved) {
+            Alert.alert(t('attachments.title'), t('attachments.fileNotSupported'));
             return;
         }
-        if (isAudioAttachment(attachment)) {
-            openAudioAttachment(attachment).catch(console.error);
+        if (resolved.uri !== attachment.uri || resolved.localStatus !== attachment.localStatus) {
+            setEditedTask((prev) => {
+                const nextAttachments = (prev.attachments || []).map((item) =>
+                    item.id === resolved.id ? { ...item, ...resolved } : item
+                );
+                return { ...prev, attachments: nextAttachments };
+            }, false);
+        }
+
+        const nextAttachment = resolved;
+        if (attachment.kind === 'link') {
+            Linking.openURL(nextAttachment.uri).catch(console.error);
+            return;
+        }
+        if (isAudioAttachment(nextAttachment)) {
+            openAudioAttachment(nextAttachment).catch(console.error);
             return;
         }
         const available = await Sharing.isAvailableAsync().catch((error) => {
@@ -642,9 +658,9 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
             return false;
         });
         if (available) {
-            Sharing.shareAsync(attachment.uri).catch(console.error);
+            Sharing.shareAsync(nextAttachment.uri).catch(console.error);
         } else {
-            Linking.openURL(attachment.uri).catch(console.error);
+            Linking.openURL(nextAttachment.uri).catch(console.error);
         }
     };
 

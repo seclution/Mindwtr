@@ -179,3 +179,62 @@ export async function webdavPutJson(
         throw new Error(`WebDAV PUT failed (${res.status}): ${text || res.statusText}`);
     }
 }
+
+export async function webdavMakeDirectory(
+    url: string,
+    options: WebDavOptions = {}
+): Promise<void> {
+    assertSecureUrl(url);
+    const fetcher = options.fetcher ?? fetch;
+    const res = await fetchWithTimeout(
+        url,
+        { method: 'MKCOL', headers: buildHeaders(options) },
+        options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        fetcher,
+    );
+    if (!res.ok && res.status !== 405) {
+        throw new Error(`WebDAV MKCOL failed (${res.status})`);
+    }
+}
+
+export async function webdavPutFile(
+    url: string,
+    data: ArrayBuffer | Uint8Array | Blob,
+    contentType: string,
+    options: WebDavOptions = {}
+): Promise<void> {
+    assertSecureUrl(url);
+    const fetcher = options.fetcher ?? fetch;
+    const headers = buildHeaders(options);
+    headers['Content-Type'] = contentType || 'application/octet-stream';
+
+    const res = await fetchWithTimeout(
+        url,
+        { method: 'PUT', headers, body: data },
+        options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        fetcher,
+    );
+
+    if (!res.ok) {
+        throw new Error(`WebDAV File PUT failed (${res.status})`);
+    }
+}
+
+export async function webdavGetFile(
+    url: string,
+    options: WebDavOptions = {}
+): Promise<ArrayBuffer> {
+    assertSecureUrl(url);
+    const fetcher = options.fetcher ?? fetch;
+    const res = await fetchWithTimeout(
+        url,
+        { method: 'GET', headers: buildHeaders(options) },
+        options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        fetcher,
+    );
+
+    if (!res.ok) {
+        throw new Error(`WebDAV File GET failed (${res.status})`);
+    }
+    return await res.arrayBuffer();
+}

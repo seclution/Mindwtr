@@ -15,6 +15,7 @@ import { useLanguage } from '../../contexts/language-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { MarkdownText } from '../../components/markdown-text';
 import { ListSectionHeader, defaultListContentStyle } from '@/components/list-layout';
+import { ensureAttachmentAvailable } from '../../lib/attachment-sync';
 
 export default function ProjectsScreen() {
   const { projects, tasks, areas, addProject, updateProject, deleteProject, toggleProjectFocus, addArea, updateArea, deleteArea, reorderAreas } = useTaskStore();
@@ -323,8 +324,24 @@ export default function ProjectsScreen() {
   };
 
   const openAttachment = async (attachment: Attachment) => {
-    if (attachment.kind === 'link') {
-      Linking.openURL(attachment.uri).catch(console.error);
+    const resolved = await ensureAttachmentAvailable(attachment);
+    if (!resolved) {
+      Alert.alert(t('attachments.title'), t('attachments.fileNotSupported'));
+      return;
+    }
+    if (resolved.uri !== attachment.uri || resolved.localStatus !== attachment.localStatus) {
+      const next = (selectedProject?.attachments || []).map((item) =>
+        item.id === resolved.id ? { ...item, ...resolved } : item
+      );
+      if (selectedProject) {
+        updateProject(selectedProject.id, { attachments: next });
+        setSelectedProject({ ...selectedProject, attachments: next });
+      }
+    }
+
+    const nextAttachment = resolved;
+    if (nextAttachment.kind === 'link') {
+      Linking.openURL(nextAttachment.uri).catch(console.error);
       return;
     }
 
@@ -333,9 +350,9 @@ export default function ProjectsScreen() {
       return false;
     });
     if (available) {
-      Sharing.shareAsync(attachment.uri).catch(console.error);
+      Sharing.shareAsync(nextAttachment.uri).catch(console.error);
     } else {
-      Linking.openURL(attachment.uri).catch(console.error);
+      Linking.openURL(nextAttachment.uri).catch(console.error);
     }
   };
 

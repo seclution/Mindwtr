@@ -3,14 +3,16 @@ import { AppData, MergeStats, useTaskStore, webdavGetJson, webdavPutJson, cloudG
 import { mobileStorage } from './storage-adapter';
 import { logSyncError, sanitizeLogMessage } from './app-log';
 import { readSyncFile, writeSyncFile } from './storage-file';
-
-export const SYNC_PATH_KEY = '@mindwtr_sync_path';
-export const SYNC_BACKEND_KEY = '@mindwtr_sync_backend';
-export const WEBDAV_URL_KEY = '@mindwtr_webdav_url';
-export const WEBDAV_USERNAME_KEY = '@mindwtr_webdav_username';
-export const WEBDAV_PASSWORD_KEY = '@mindwtr_webdav_password';
-export const CLOUD_URL_KEY = '@mindwtr_cloud_url';
-export const CLOUD_TOKEN_KEY = '@mindwtr_cloud_token';
+import { getBaseSyncUrl, sanitizeAppDataForRemote, syncMobileAttachments } from './attachment-sync';
+import {
+  SYNC_PATH_KEY,
+  SYNC_BACKEND_KEY,
+  WEBDAV_URL_KEY,
+  WEBDAV_USERNAME_KEY,
+  WEBDAV_PASSWORD_KEY,
+  CLOUD_URL_KEY,
+  CLOUD_TOKEN_KEY,
+} from './sync-constants';
 
 const DEFAULT_SYNC_TIMEOUT_MS = 30_000;
 
@@ -75,23 +77,34 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
           wroteLocal = true;
         },
         writeRemote: async (data) => {
+          const sanitized = sanitizeAppDataForRemote(data);
           if (backend === 'webdav') {
             if (!webdavConfig?.url) throw new Error('WebDAV URL not configured');
-            await webdavPutJson(webdavConfig.url, data, { username: webdavConfig.username, password: webdavConfig.password, timeoutMs: DEFAULT_SYNC_TIMEOUT_MS });
+            await webdavPutJson(webdavConfig.url, sanitized, { username: webdavConfig.username, password: webdavConfig.password, timeoutMs: DEFAULT_SYNC_TIMEOUT_MS });
             return;
           }
           if (backend === 'cloud') {
             if (!cloudConfig?.url) throw new Error('Self-hosted URL not configured');
-            await cloudPutJson(cloudConfig.url, data, { token: cloudConfig.token, timeoutMs: DEFAULT_SYNC_TIMEOUT_MS });
+            await cloudPutJson(cloudConfig.url, sanitized, { token: cloudConfig.token, timeoutMs: DEFAULT_SYNC_TIMEOUT_MS });
             return;
           }
           if (!fileSyncPath) throw new Error('No sync file configured');
-          await writeSyncFile(fileSyncPath, data);
+          await writeSyncFile(fileSyncPath, sanitized);
         },
         onStep: (next) => {
           step = next;
         },
       });
+
+      if (backend === 'webdav' && webdavConfig?.url) {
+        step = 'attachments';
+        const baseSyncUrl = getBaseSyncUrl(webdavConfig.url);
+        const mutated = await syncMobileAttachments(syncResult.data, webdavConfig, baseSyncUrl);
+        if (mutated) {
+          await mobileStorage.saveData(syncResult.data);
+          wroteLocal = true;
+        }
+      }
 
       step = 'refresh';
       await useTaskStore.getState().fetchData();

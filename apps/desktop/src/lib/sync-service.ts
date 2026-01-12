@@ -1,5 +1,20 @@
 
-import { AppData, useTaskStore, MergeStats, webdavGetJson, webdavPutJson, cloudGetJson, cloudPutJson, flushPendingSave, performSyncCycle, normalizeAppData } from '@mindwtr/core';
+import {
+    AppData,
+    Attachment,
+    useTaskStore,
+    MergeStats,
+    webdavGetJson,
+    webdavPutJson,
+    webdavGetFile,
+    webdavPutFile,
+    webdavMakeDirectory,
+    cloudGetJson,
+    cloudPutJson,
+    flushPendingSave,
+    performSyncCycle,
+    normalizeAppData,
+} from '@mindwtr/core';
 import { isTauriRuntime } from './runtime';
 import { logSyncError, sanitizeLogMessage } from './app-log';
 import { webStorage } from './storage-adapter-web';
@@ -51,6 +66,70 @@ const isSyncFilePath = (path: string) => {
     return normalized.endsWith(`/${SYNC_FILE_NAME}`) || normalized.endsWith(`/${LEGACY_SYNC_FILE_NAME}`);
 };
 
+const ATTACHMENTS_DIR_NAME = 'attachments';
+
+const stripFileScheme = (uri: string): string => {
+    if (!/^file:\/\//i.test(uri)) return uri;
+    try {
+        const parsed = new URL(uri);
+        let path = decodeURIComponent(parsed.pathname);
+        if (/^\/[A-Za-z]:\//.test(path)) {
+            path = path.slice(1);
+        }
+        return path;
+    } catch {
+        return uri.replace(/^file:\/\//i, '');
+    }
+};
+
+const extractExtension = (value?: string): string => {
+    if (!value) return '';
+    const stripped = value.split('?')[0].split('#')[0];
+    const leaf = stripped.split(/[\\/]/).pop() || '';
+    const match = leaf.match(/\.[A-Za-z0-9]{1,8}$/);
+    return match ? match[0].toLowerCase() : '';
+};
+
+const buildCloudKey = (attachment: Attachment): string => {
+    const ext = extractExtension(attachment.title) || extractExtension(attachment.uri);
+    return `${ATTACHMENTS_DIR_NAME}/${attachment.id}${ext}`;
+};
+
+const getBaseSyncUrl = (fullUrl: string): string => {
+    const trimmed = fullUrl.replace(/\/+$/, '');
+    if (trimmed.toLowerCase().endsWith('.json')) {
+        const lastSlash = trimmed.lastIndexOf('/');
+        return lastSlash >= 0 ? trimmed.slice(0, lastSlash) : trimmed;
+    }
+    return trimmed;
+};
+
+const sanitizeAppDataForRemote = (data: AppData): AppData => {
+    const sanitizeAttachments = (attachments?: Attachment[]): Attachment[] | undefined => {
+        if (!attachments) return attachments;
+        return attachments.map((attachment) => {
+            if (attachment.kind !== 'file') return attachment;
+            return {
+                ...attachment,
+                uri: '',
+                localStatus: undefined,
+            };
+        });
+    };
+
+    return {
+        ...data,
+        tasks: data.tasks.map((task) => ({
+            ...task,
+            attachments: sanitizeAttachments(task.attachments),
+        })),
+        projects: data.projects.map((project) => ({
+            ...project,
+            attachments: sanitizeAttachments(project.attachments),
+        })),
+    };
+};
+
 async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
     const mod = await import('@tauri-apps/api/core');
     return mod.invoke<T>(command as any, args as any);
@@ -72,6 +151,134 @@ async function getTauriFetch(): Promise<typeof fetch | undefined> {
         console.warn('Failed to load tauri http fetch', error);
         return undefined;
     }
+}
+
+async function syncAttachments(
+    appData: AppData,
+    webDavConfig: WebDavConfig,
+    baseSyncUrl: string
+): Promise<boolean> {
+    if (!isTauriRuntime()) return false;
+    if (!webDavConfig.url) return false;
+
+    const fetcher = await getTauriFetch();
+    const { BaseDirectory, exists, mkdir, readFile, writeFile } = await import('@tauri-apps/plugin-fs');
+    const { dataDir, join } = await import('@tauri-apps/api/path');
+
+    const attachmentsDirUrl = `${baseSyncUrl}/${ATTACHMENTS_DIR_NAME}`;
+    try {
+        await webdavMakeDirectory(attachmentsDirUrl, {
+            username: webDavConfig.username,
+            password: webDavConfig.password || '',
+            fetcher,
+        });
+    } catch (error) {
+        console.warn('Failed to ensure WebDAV attachments directory', error);
+    }
+
+    try {
+        await mkdir(ATTACHMENTS_DIR_NAME, { baseDir: BaseDirectory.Data, recursive: true });
+    } catch (error) {
+        console.warn('Failed to ensure local attachments directory', error);
+    }
+
+    const baseDataDir = await dataDir();
+
+    const attachmentsById = new Map<string, Attachment>();
+    for (const task of appData.tasks) {
+        for (const attachment of task.attachments || []) {
+            attachmentsById.set(attachment.id, attachment);
+        }
+    }
+    for (const project of appData.projects) {
+        for (const attachment of project.attachments || []) {
+            attachmentsById.set(attachment.id, attachment);
+        }
+    }
+
+    const readLocalFile = async (path: string): Promise<Uint8Array> => {
+        if (path.startsWith(baseDataDir)) {
+            const relative = path.slice(baseDataDir.length).replace(/^[\\/]/, '');
+            return await readFile(relative, { baseDir: BaseDirectory.Data });
+        }
+        return await readFile(path);
+    };
+
+    const localFileExists = async (path: string): Promise<boolean> => {
+        try {
+            if (path.startsWith(baseDataDir)) {
+                const relative = path.slice(baseDataDir.length).replace(/^[\\/]/, '');
+                return await exists(relative, { baseDir: BaseDirectory.Data });
+            }
+            return await exists(path);
+        } catch (error) {
+            console.warn('Failed to check attachment file', error);
+            return false;
+        }
+    };
+
+    let didMutate = false;
+
+    for (const attachment of attachmentsById.values()) {
+        if (attachment.kind !== 'file') continue;
+        if (attachment.deletedAt) continue;
+
+        const rawUri = attachment.uri ? stripFileScheme(attachment.uri) : '';
+        const isHttp = /^https?:\/\//i.test(rawUri);
+        const localPath = isHttp ? '' : rawUri;
+        const hasLocalPath = Boolean(localPath);
+        const existsLocally = hasLocalPath ? await localFileExists(localPath) : false;
+
+        const nextStatus: Attachment['localStatus'] = existsLocally ? 'available' : 'missing';
+        if (attachment.localStatus !== nextStatus) {
+            attachment.localStatus = nextStatus;
+            didMutate = true;
+        }
+
+        if (!attachment.cloudKey && existsLocally) {
+            const cloudKey = buildCloudKey(attachment);
+            try {
+                const fileData = await readLocalFile(localPath);
+                await webdavPutFile(
+                    `${baseSyncUrl}/${cloudKey}`,
+                    fileData,
+                    attachment.mimeType || 'application/octet-stream',
+                    {
+                        username: webDavConfig.username,
+                        password: webDavConfig.password || '',
+                        fetcher,
+                    }
+                );
+                attachment.cloudKey = cloudKey;
+                attachment.localStatus = 'available';
+                didMutate = true;
+            } catch (error) {
+                console.warn(`Failed to upload attachment ${attachment.title}`, error);
+            }
+        }
+
+        if (attachment.cloudKey && !existsLocally) {
+            try {
+                const downloadUrl = `${baseSyncUrl}/${attachment.cloudKey}`;
+                const fileData = await webdavGetFile(downloadUrl, {
+                    username: webDavConfig.username,
+                    password: webDavConfig.password || '',
+                    fetcher,
+                });
+                const filename = attachment.cloudKey.split('/').pop() || `${attachment.id}${extractExtension(attachment.uri)}`;
+                const relativePath = `${ATTACHMENTS_DIR_NAME}/${filename}`;
+                await writeFile(relativePath, new Uint8Array(fileData), { baseDir: BaseDirectory.Data });
+                const absolutePath = await join(baseDataDir, relativePath);
+                attachment.uri = absolutePath;
+                attachment.localStatus = 'available';
+                didMutate = true;
+            } catch (error) {
+                console.warn(`Failed to download attachment ${attachment.title}`, error);
+            }
+        }
+    }
+
+    return didMutate;
 }
 
 export class SyncService {
@@ -446,30 +653,48 @@ export class SyncService {
                     }
                 },
                 writeRemote: async (data) => {
+                    const sanitized = sanitizeAppDataForRemote(data);
                     if (backend === 'webdav') {
                         if (isTauriRuntime()) {
-                            await tauriInvoke('webdav_put_json', { data });
+                            await tauriInvoke('webdav_put_json', { data: sanitized });
                             return;
                         }
                         const { url, username, password } = await SyncService.getWebDavConfig();
                         const fetcher = await getTauriFetch();
-                        await webdavPutJson(url, data, { username, password: password || '', fetcher });
+                        await webdavPutJson(url, sanitized, { username, password: password || '', fetcher });
                         return;
                     }
                     if (backend === 'cloud') {
                         const { url, token } = await SyncService.getCloudConfig();
                         const fetcher = await getTauriFetch();
-                        await cloudPutJson(url, data, { token, fetcher });
+                        await cloudPutJson(url, sanitized, { token, fetcher });
                         return;
                     }
-                    SyncService.markSyncWrite(data);
-                    await tauriInvoke('write_sync_file', { data });
+                    SyncService.markSyncWrite(sanitized);
+                    await tauriInvoke('write_sync_file', { data: sanitized });
                 },
                 onStep: (next) => {
                     step = next;
                 },
             });
             const stats = syncResult.stats;
+            const mergedData = syncResult.data;
+
+            if (backend === 'webdav' && isTauriRuntime()) {
+                step = 'attachments';
+                try {
+                    const config = await SyncService.getWebDavConfig();
+                    const baseUrl = config.url ? getBaseSyncUrl(config.url) : '';
+                    if (baseUrl) {
+                        const mutated = await syncAttachments(mergedData, config, baseUrl);
+                        if (mutated) {
+                            await tauriInvoke('save_data', { data: mergedData });
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Attachment sync warning', error);
+                }
+            }
 
             // 7. Refresh UI Store
             step = 'refresh';
