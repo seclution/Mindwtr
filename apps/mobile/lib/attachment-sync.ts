@@ -6,6 +6,7 @@ import {
   cloudGetFile,
   cloudPutFile,
   computeSha256Hex,
+  globalProgressTracker,
   webdavGetFile,
   webdavMakeDirectory,
   webdavPutFile,
@@ -40,6 +41,25 @@ const downloadLocks = new Map<string, Promise<Attachment | null>>();
 const FILE_BACKEND_VALIDATION_CONFIG = {
   maxFileSizeBytes: Number.POSITIVE_INFINITY,
   blockedMimeTypes: [],
+};
+
+const reportProgress = (
+  attachmentId: string,
+  operation: 'upload' | 'download',
+  loaded: number,
+  total: number,
+  status: 'active' | 'completed' | 'failed',
+  error?: string
+) => {
+  const percentage = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+  globalProgressTracker.updateProgress(attachmentId, {
+    operation,
+    bytesTransferred: loaded,
+    totalBytes: total,
+    percentage,
+    status,
+    error,
+  });
 };
 
 const bytesToBase64 = (bytes: Uint8Array): string => {
@@ -350,6 +370,7 @@ export const syncWebdavAttachments = async (
           console.warn(`Attachment validation failed (${validation.error}) for ${attachment.title}`);
           continue;
         }
+        reportProgress(attachment.id, 'upload', 0, fileData.byteLength, 'active');
         const buffer = fileData.byteOffset === 0 && fileData.byteLength === fileData.buffer.byteLength
           ? fileData.buffer
           : fileData.buffer.slice(fileData.byteOffset, fileData.byteOffset + fileData.byteLength);
@@ -358,12 +379,25 @@ export const syncWebdavAttachments = async (
           `${baseSyncUrl}/${cloudKey}`,
           buffer,
           attachment.mimeType || DEFAULT_CONTENT_TYPE,
-          { username: webDavConfig.username, password: webDavConfig.password }
+          {
+            username: webDavConfig.username,
+            password: webDavConfig.password,
+            onProgress: (loaded, total) => reportProgress(attachment.id, 'upload', loaded, total, 'active'),
+          }
         );
         attachment.cloudKey = cloudKey;
         attachment.localStatus = 'available';
         didMutate = true;
+        reportProgress(attachment.id, 'upload', fileData.byteLength, fileData.byteLength, 'completed');
       } catch (error) {
+        reportProgress(
+          attachment.id,
+          'upload',
+          0,
+          attachment.size ?? 0,
+          'failed',
+          error instanceof Error ? error.message : String(error)
+        );
         console.warn(`Failed to upload attachment ${attachment.title}`, error);
       }
     }
@@ -415,6 +449,7 @@ export const syncCloudAttachments = async (
           console.warn(`Attachment validation failed (${validation.error}) for ${attachment.title}`);
           continue;
         }
+        reportProgress(attachment.id, 'upload', 0, fileData.byteLength, 'active');
         const buffer = fileData.byteOffset === 0 && fileData.byteLength === fileData.buffer.byteLength
           ? fileData.buffer
           : fileData.buffer.slice(fileData.byteOffset, fileData.byteOffset + fileData.byteLength);
@@ -423,12 +458,24 @@ export const syncCloudAttachments = async (
           `${baseSyncUrl}/${cloudKey}`,
           buffer,
           attachment.mimeType || DEFAULT_CONTENT_TYPE,
-          { token: cloudConfig.token }
+          {
+            token: cloudConfig.token,
+            onProgress: (loaded, total) => reportProgress(attachment.id, 'upload', loaded, total, 'active'),
+          }
         );
         attachment.cloudKey = cloudKey;
         attachment.localStatus = 'available';
         didMutate = true;
+        reportProgress(attachment.id, 'upload', fileData.byteLength, fileData.byteLength, 'completed');
       } catch (error) {
+        reportProgress(
+          attachment.id,
+          'upload',
+          0,
+          attachment.size ?? 0,
+          'failed',
+          error instanceof Error ? error.message : String(error)
+        );
         console.warn(`Failed to upload attachment ${attachment.title}`, error);
       }
     }
@@ -585,14 +632,24 @@ const ensureAttachmentAvailableInternal = async (attachment: Attachment): Promis
       const data = await withRetry(() =>
         cloudGetFile(`${baseSyncUrl}/${attachment.cloudKey}`, {
           token: config.token,
+          onProgress: (loaded, total) => reportProgress(attachment.id, 'download', loaded, total, 'active'),
         })
       );
       const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data as ArrayBuffer);
       await validateAttachmentHash(attachment, bytes);
       const base64 = bytesToBase64(bytes);
       await FileSystem.writeAsStringAsync(targetUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+      reportProgress(attachment.id, 'download', bytes.length, bytes.length, 'completed');
       return { ...attachment, uri: targetUri, localStatus: 'available' };
     } catch (error) {
+      reportProgress(
+        attachment.id,
+        'download',
+        0,
+        attachment.size ?? 0,
+        'failed',
+        error instanceof Error ? error.message : String(error)
+      );
       console.warn(`Failed to download attachment ${attachment.title}`, error);
       return null;
     }
@@ -615,14 +672,24 @@ const ensureAttachmentAvailableInternal = async (attachment: Attachment): Promis
         webdavGetFile(`${baseSyncUrl}/${attachment.cloudKey}`, {
           username: config.username,
           password: config.password,
+          onProgress: (loaded, total) => reportProgress(attachment.id, 'download', loaded, total, 'active'),
         })
       );
       const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data as ArrayBuffer);
       await validateAttachmentHash(attachment, bytes);
       const base64 = bytesToBase64(bytes);
       await FileSystem.writeAsStringAsync(targetUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+      reportProgress(attachment.id, 'download', bytes.length, bytes.length, 'completed');
       return { ...attachment, uri: targetUri, localStatus: 'available' };
     } catch (error) {
+      reportProgress(
+        attachment.id,
+        'download',
+        0,
+        attachment.size ?? 0,
+        'failed',
+        error instanceof Error ? error.message : String(error)
+      );
       console.warn(`Failed to download attachment ${attachment.title}`, error);
       return null;
     }

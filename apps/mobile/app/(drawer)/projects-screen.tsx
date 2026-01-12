@@ -16,6 +16,7 @@ import { useThemeColors } from '@/hooks/use-theme-colors';
 import { MarkdownText } from '../../components/markdown-text';
 import { ListSectionHeader, defaultListContentStyle } from '@/components/list-layout';
 import { ensureAttachmentAvailable } from '../../lib/attachment-sync';
+import { AttachmentProgressIndicator } from '../../components/AttachmentProgressIndicator';
 
 export default function ProjectsScreen() {
   const { projects, tasks, areas, addProject, updateProject, deleteProject, toggleProjectFocus, addArea, updateArea, deleteArea, reorderAreas } = useTaskStore();
@@ -929,6 +930,7 @@ export default function ProjectsScreen() {
                                     <Text style={[styles.attachmentTitle, { color: tc.tint }]} numberOfLines={1}>
                                       {attachment.title}
                                     </Text>
+                                    <AttachmentProgressIndicator attachmentId={attachment.id} />
                                   </TouchableOpacity>
                                   {isDownloading ? (
                                     <Text style={[styles.attachmentStatus, { color: tc.secondaryText }]}>

@@ -10,6 +10,7 @@ import type {
 } from '@mindwtr/core';
 import type { ThemeColors } from '@/hooks/use-theme-colors';
 import { MarkdownText } from '../markdown-text';
+import { AttachmentProgressIndicator } from '../AttachmentProgressIndicator';
 
 type TaskEditViewTabProps = {
   t: (key: string) => string;
@@ -198,6 +199,7 @@ export function TaskEditViewTab({
                           {t('attachments.missing')}
                         </Text>
                       ) : null}
+                      <AttachmentProgressIndicator attachmentId={attachment.id} />
                     </View>
                   );
                 })()}

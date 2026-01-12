@@ -25,6 +25,7 @@ export * from './cloud';
 export * from './retry-utils';
 export * from './attachment-hash';
 export * from './attachment-validation';
+export * from './attachment-progress';
 export * from './ics';
 export * from './task-status';
 export * from './text-direction';

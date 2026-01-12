@@ -5,6 +5,7 @@ import {
     useTaskStore,
     MergeStats,
     computeSha256Hex,
+    globalProgressTracker,
     validateAttachmentForUpload,
     webdavGetJson,
     webdavPutJson,
@@ -112,6 +113,25 @@ const validateAttachmentHash = async (attachment: Attachment, bytes: Uint8Array)
     if (computed.toLowerCase() !== expected.toLowerCase()) {
         throw new Error('Integrity validation failed');
     }
+};
+
+const reportProgress = (
+    attachmentId: string,
+    operation: 'upload' | 'download',
+    loaded: number,
+    total: number,
+    status: 'active' | 'completed' | 'failed',
+    error?: string,
+) => {
+    const percentage = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+    globalProgressTracker.updateProgress(attachmentId, {
+        operation,
+        bytesTransferred: loaded,
+        totalBytes: total,
+        percentage,
+        status,
+        error,
+    });
 };
 
 const getBaseSyncUrl = (fullUrl: string): string => {
@@ -281,6 +301,7 @@ async function syncAttachments(
                     console.warn(`Attachment validation failed (${validation.error}) for ${attachment.title}`);
                     continue;
                 }
+                reportProgress(attachment.id, 'upload', 0, fileData.length, 'active');
                 await webdavPutFile(
                     `${baseSyncUrl}/${cloudKey}`,
                     fileData,
@@ -289,12 +310,22 @@ async function syncAttachments(
                         username: webDavConfig.username,
                         password: webDavConfig.password || '',
                         fetcher,
+                        onProgress: (loaded, total) => reportProgress(attachment.id, 'upload', loaded, total, 'active'),
                     }
                 );
                 attachment.cloudKey = cloudKey;
                 attachment.localStatus = 'available';
                 didMutate = true;
+                reportProgress(attachment.id, 'upload', fileData.length, fileData.length, 'completed');
             } catch (error) {
+                reportProgress(
+                    attachment.id,
+                    'upload',
+                    0,
+                    attachment.size ?? 0,
+                    'failed',
+                    error instanceof Error ? error.message : String(error)
+                );
                 console.warn(`Failed to upload attachment ${attachment.title}`, error);
             }
         }
@@ -311,6 +342,7 @@ async function syncAttachments(
                         username: webDavConfig.username,
                         password: webDavConfig.password || '',
                         fetcher,
+                        onProgress: (loaded, total) => reportProgress(attachment.id, 'download', loaded, total, 'active'),
                     })
                 );
                 const bytes = fileData instanceof ArrayBuffer ? new Uint8Array(fileData) : new Uint8Array(fileData as ArrayBuffer);
@@ -322,9 +354,18 @@ async function syncAttachments(
                 attachment.uri = absolutePath;
                 attachment.localStatus = 'available';
                 didMutate = true;
+                reportProgress(attachment.id, 'download', bytes.length, bytes.length, 'completed');
             } catch (error) {
                 attachment.localStatus = 'missing';
                 didMutate = true;
+                reportProgress(
+                    attachment.id,
+                    'download',
+                    0,
+                    attachment.size ?? 0,
+                    'failed',
+                    error instanceof Error ? error.message : String(error)
+                );
                 console.warn(`Failed to download attachment ${attachment.title}`, error);
             }
         }
@@ -413,6 +454,7 @@ async function syncCloudAttachments(
                     console.warn(`Attachment validation failed (${validation.error}) for ${attachment.title}`);
                     continue;
                 }
+                reportProgress(attachment.id, 'upload', 0, fileData.length, 'active');
                 await cloudPutFile(
                     `${baseSyncUrl}/${cloudKey}`,
                     fileData,
@@ -420,12 +462,22 @@ async function syncCloudAttachments(
                     {
                         token: cloudConfig.token,
                         fetcher,
+                        onProgress: (loaded, total) => reportProgress(attachment.id, 'upload', loaded, total, 'active'),
                     }
                 );
                 attachment.cloudKey = cloudKey;
                 attachment.localStatus = 'available';
                 didMutate = true;
+                reportProgress(attachment.id, 'upload', fileData.length, fileData.length, 'completed');
             } catch (error) {
+                reportProgress(
+                    attachment.id,
+                    'upload',
+                    0,
+                    attachment.size ?? 0,
+                    'failed',
+                    error instanceof Error ? error.message : String(error)
+                );
                 console.warn(`Failed to upload attachment ${attachment.title}`, error);
             }
         }
@@ -441,6 +493,7 @@ async function syncCloudAttachments(
                     cloudGetFile(downloadUrl, {
                         token: cloudConfig.token,
                         fetcher,
+                        onProgress: (loaded, total) => reportProgress(attachment.id, 'download', loaded, total, 'active'),
                     })
                 );
                 const bytes = fileData instanceof ArrayBuffer ? new Uint8Array(fileData) : new Uint8Array(fileData as ArrayBuffer);
@@ -452,9 +505,18 @@ async function syncCloudAttachments(
                 attachment.uri = absolutePath;
                 attachment.localStatus = 'available';
                 didMutate = true;
+                reportProgress(attachment.id, 'download', bytes.length, bytes.length, 'completed');
             } catch (error) {
                 attachment.localStatus = 'missing';
                 didMutate = true;
+                reportProgress(
+                    attachment.id,
+                    'download',
+                    0,
+                    attachment.size ?? 0,
+                    'failed',
+                    error instanceof Error ? error.message : String(error)
+                );
                 console.warn(`Failed to download attachment ${attachment.title}`, error);
             }
         }
