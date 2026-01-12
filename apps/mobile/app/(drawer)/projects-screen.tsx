@@ -329,13 +329,24 @@ export default function ProjectsScreen() {
     );
   };
 
+  const updateAttachmentStatus = (
+    attachments: Attachment[],
+    id: string,
+    status: Attachment['localStatus']
+  ): Attachment[] =>
+    attachments.map((item): Attachment =>
+      item.id === id ? { ...item, localStatus: status } : item
+    );
+
   const openAttachment = async (attachment: Attachment) => {
     const shouldDownload = attachment.kind === 'file'
       && attachment.cloudKey
       && (attachment.localStatus === 'missing' || !attachment.uri);
     if (shouldDownload && selectedProject) {
-      const next = (selectedProject.attachments || []).map((item) =>
-        item.id === attachment.id ? { ...item, localStatus: 'downloading' } : item
+      const next = updateAttachmentStatus(
+        selectedProject.attachments || [],
+        attachment.id,
+        'downloading'
       );
       updateProject(selectedProject.id, { attachments: next });
       setSelectedProject({ ...selectedProject, attachments: next });
@@ -344,8 +355,10 @@ export default function ProjectsScreen() {
     const resolved = await ensureAttachmentAvailable(attachment);
     if (!resolved) {
       if (shouldDownload && selectedProject) {
-        const next = (selectedProject.attachments || []).map((item) =>
-          item.id === attachment.id ? { ...item, localStatus: 'missing' } : item
+        const next = updateAttachmentStatus(
+          selectedProject.attachments || [],
+          attachment.id,
+          'missing'
         );
         updateProject(selectedProject.id, { attachments: next });
         setSelectedProject({ ...selectedProject, attachments: next });
@@ -355,7 +368,7 @@ export default function ProjectsScreen() {
       return;
     }
     if (resolved.uri !== attachment.uri || resolved.localStatus !== attachment.localStatus) {
-      const next = (selectedProject?.attachments || []).map((item) =>
+      const next = (selectedProject?.attachments || []).map((item): Attachment =>
         item.id === resolved.id ? { ...item, ...resolved } : item
       );
       if (selectedProject) {
@@ -386,8 +399,10 @@ export default function ProjectsScreen() {
       && attachment.cloudKey
       && (attachment.localStatus === 'missing' || !attachment.uri);
     if (shouldDownload) {
-      const next = (selectedProject.attachments || []).map((item) =>
-        item.id === attachment.id ? { ...item, localStatus: 'downloading' } : item
+      const next = updateAttachmentStatus(
+        selectedProject.attachments || [],
+        attachment.id,
+        'downloading'
       );
       updateProject(selectedProject.id, { attachments: next });
       setSelectedProject({ ...selectedProject, attachments: next });
@@ -395,8 +410,10 @@ export default function ProjectsScreen() {
 
     const resolved = await ensureAttachmentAvailable(attachment);
     if (!resolved) {
-      const next = (selectedProject.attachments || []).map((item) =>
-        item.id === attachment.id ? { ...item, localStatus: 'missing' } : item
+      const next = updateAttachmentStatus(
+        selectedProject.attachments || [],
+        attachment.id,
+        'missing'
       );
       updateProject(selectedProject.id, { attachments: next });
       setSelectedProject({ ...selectedProject, attachments: next });
@@ -405,7 +422,7 @@ export default function ProjectsScreen() {
       return;
     }
     if (resolved.uri !== attachment.uri || resolved.localStatus !== attachment.localStatus) {
-      const next = (selectedProject.attachments || []).map((item) =>
+      const next = (selectedProject.attachments || []).map((item): Attachment =>
         item.id === resolved.id ? { ...item, ...resolved } : item
       );
       updateProject(selectedProject.id, { attachments: next });

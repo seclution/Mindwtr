@@ -437,10 +437,8 @@ async function syncAttachments(
         }
 
         if (attachment.cloudKey && !existsLocally) {
-            if (attachment.localStatus !== 'downloading') {
-                attachment.localStatus = 'downloading';
-                didMutate = true;
-            }
+            attachment.localStatus = 'downloading';
+            didMutate = true;
             try {
                 const downloadUrl = `${baseSyncUrl}/${attachment.cloudKey}`;
                 const fileData = await withRetry(() =>
@@ -589,10 +587,8 @@ async function syncCloudAttachments(
         }
 
         if (attachment.cloudKey && !existsLocally) {
-            if (attachment.localStatus !== 'downloading') {
-                attachment.localStatus = 'downloading';
-                didMutate = true;
-            }
+            attachment.localStatus = 'downloading';
+            didMutate = true;
             try {
                 const downloadUrl = `${baseSyncUrl}/${attachment.cloudKey}`;
                 const fileData = await withRetry(() =>
@@ -727,10 +723,8 @@ async function syncFileAttachments(
         }
 
         if (attachment.cloudKey && !existsLocally) {
-            if (attachment.localStatus !== 'downloading') {
-                attachment.localStatus = 'downloading';
-                didMutate = true;
-            }
+            attachment.localStatus = 'downloading';
+            didMutate = true;
             try {
                 const sourcePath = await join(baseSyncDir, attachment.cloudKey);
                 const hasRemote = await exists(sourcePath);

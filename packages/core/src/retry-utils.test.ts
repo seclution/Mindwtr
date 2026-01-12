@@ -9,7 +9,6 @@ describe('withRetry', () => {
     });
 
     it('retries after a failure and succeeds', async () => {
-        vi.useFakeTimers();
         let attempts = 0;
         const fn = vi.fn().mockImplementation(async () => {
             attempts += 1;
@@ -19,30 +18,24 @@ describe('withRetry', () => {
             return 'ok';
         });
 
-        const promise = withRetry(fn, { baseDelayMs: 50, maxDelayMs: 50 });
-        await vi.advanceTimersByTimeAsync(50);
+        const promise = withRetry(fn, { baseDelayMs: 1, maxDelayMs: 1 });
         await expect(promise).resolves.toBe('ok');
         expect(fn).toHaveBeenCalledTimes(2);
-        vi.useRealTimers();
     });
 
     it('uses exponential backoff delays', async () => {
-        vi.useFakeTimers();
         const delays: number[] = [];
         const fn = vi.fn().mockRejectedValue(new Error('timeout'));
 
         const promise = withRetry(fn, {
             maxAttempts: 3,
-            baseDelayMs: 100,
-            maxDelayMs: 1000,
+            baseDelayMs: 1,
+            maxDelayMs: 4,
             onRetry: (_err, _attempt, delayMs) => delays.push(delayMs),
         });
 
-        const expectation = expect(promise).rejects.toBeDefined();
-        await vi.advanceTimersByTimeAsync(300);
-        await expectation;
-        expect(delays).toEqual([100, 200]);
-        vi.useRealTimers();
+        await expect(promise).rejects.toBeDefined();
+        expect(delays).toEqual([1, 2]);
     });
 
     it('stops after max attempts', async () => {

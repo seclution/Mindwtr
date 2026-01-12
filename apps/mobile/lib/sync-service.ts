@@ -48,6 +48,20 @@ const getFileSyncBaseDir = (syncPath: string) => {
   return trimmed;
 };
 
+type SyncBackend = 'file' | 'webdav' | 'cloud' | 'off';
+
+const resolveBackend = (value: string | null): SyncBackend => {
+  switch (value) {
+    case 'webdav':
+    case 'cloud':
+    case 'off':
+    case 'file':
+      return value;
+    default:
+      return 'file';
+  }
+};
+
 let syncInFlight: Promise<{ success: boolean; stats?: MergeStats; error?: string }> | null = null;
 let syncQueued = false;
 
@@ -58,7 +72,7 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
   }
   syncInFlight = (async () => {
     const rawBackend = await AsyncStorage.getItem(SYNC_BACKEND_KEY);
-    const backend = rawBackend === 'webdav' || rawBackend === 'cloud' || rawBackend === 'off' ? rawBackend : 'file';
+    const backend: SyncBackend = resolveBackend(rawBackend);
 
     if (backend === 'off') {
       return { success: true };
@@ -130,20 +144,23 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
 
       let mergedData = syncResult.data;
 
-      if (backend === 'webdav' && webdavConfig?.url) {
+      const webdavConfigValue = webdavConfig as { url: string; username: string; password: string } | null;
+      const cloudConfigValue = cloudConfig as { url: string; token: string } | null;
+
+      if (backend === 'webdav' && webdavConfigValue?.url) {
         step = 'attachments';
-        const baseSyncUrl = getBaseSyncUrl(webdavConfig.url);
-        const mutated = await syncWebdavAttachments(mergedData, webdavConfig, baseSyncUrl);
+        const baseSyncUrl = getBaseSyncUrl(webdavConfigValue.url);
+        const mutated = await syncWebdavAttachments(mergedData, webdavConfigValue, baseSyncUrl);
         if (mutated) {
           await mobileStorage.saveData(mergedData);
           wroteLocal = true;
         }
       }
 
-      if (backend === 'cloud' && cloudConfig?.url) {
+      if (backend === 'cloud' && cloudConfigValue?.url) {
         step = 'attachments';
-        const baseSyncUrl = getCloudBaseUrl(cloudConfig.url);
-        const mutated = await syncCloudAttachments(mergedData, cloudConfig, baseSyncUrl);
+        const baseSyncUrl = getCloudBaseUrl(cloudConfigValue.url);
+        const mutated = await syncCloudAttachments(mergedData, cloudConfigValue, baseSyncUrl);
         if (mutated) {
           await mobileStorage.saveData(mergedData);
           wroteLocal = true;
@@ -164,8 +181,8 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
         const orphaned = findOrphanedAttachments(mergedData);
         if (orphaned.length > 0) {
           const isFileBackend = backend === 'file';
-          const isWebdavBackend = backend === 'webdav' && webdavConfig?.url;
-          const isCloudBackend = backend === 'cloud' && cloudConfig?.url;
+          const isWebdavBackend = backend === 'webdav' && webdavConfigValue?.url;
+          const isCloudBackend = backend === 'cloud' && cloudConfigValue?.url;
           const fileBaseDir = isFileBackend && fileSyncPath && !fileSyncPath.startsWith('content://')
             ? getFileSyncBaseDir(fileSyncPath)
             : null;
@@ -174,17 +191,17 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
             await deleteAttachmentFile(attachment.uri);
             if (attachment.cloudKey) {
               try {
-                if (isWebdavBackend && webdavConfig) {
-                  const baseSyncUrl = getBaseSyncUrl(webdavConfig.url);
+                if (isWebdavBackend && webdavConfigValue) {
+                  const baseSyncUrl = getBaseSyncUrl(webdavConfigValue.url);
                   await webdavDeleteFile(`${baseSyncUrl}/${attachment.cloudKey}`, {
-                    username: webdavConfig.username,
-                    password: webdavConfig.password,
+                    username: webdavConfigValue.username,
+                    password: webdavConfigValue.password,
                     timeoutMs: DEFAULT_SYNC_TIMEOUT_MS,
                   });
-                } else if (isCloudBackend && cloudConfig) {
-                  const baseSyncUrl = getCloudBaseUrl(cloudConfig.url);
+                } else if (isCloudBackend && cloudConfigValue) {
+                  const baseSyncUrl = getCloudBaseUrl(cloudConfigValue.url);
                   await cloudDeleteFile(`${baseSyncUrl}/${attachment.cloudKey}`, {
-                    token: cloudConfig.token,
+                    token: cloudConfigValue.token,
                     timeoutMs: DEFAULT_SYNC_TIMEOUT_MS,
                   });
                 } else if (fileBaseDir) {

@@ -235,7 +235,10 @@ const resolveFileSyncDir = async (
     } catch (error) {
       try {
         const entries = await StorageAccessFramework.readDirectoryAsync(parentTreeUri);
-        const decoded = entries.map((entry: string) => ({ entry, decoded: decodeURIComponent(entry) }));
+        const decoded: Array<{ entry: string; decoded: string }> = entries.map((entry: string) => ({
+          entry,
+          decoded: decodeURIComponent(entry),
+        }));
         const matchEntry = decoded.find((item) =>
           item.decoded.endsWith(`/${ATTACHMENTS_DIR_NAME}`) || item.decoded.endsWith(`:${ATTACHMENTS_DIR_NAME}`)
         );
@@ -269,7 +272,10 @@ const findSafEntry = async (dirUri: string, fileName: string): Promise<string | 
   if (!StorageAccessFramework?.readDirectoryAsync) return null;
   try {
     const entries = await StorageAccessFramework.readDirectoryAsync(dirUri);
-    const decoded = entries.map((entry: string) => ({ entry, decoded: decodeURIComponent(entry) }));
+    const decoded: Array<{ entry: string; decoded: string }> = entries.map((entry: string) => ({
+      entry,
+      decoded: decodeURIComponent(entry),
+    }));
     const matchEntry = decoded.find((item) =>
       item.decoded.endsWith(`/${fileName}`) || item.decoded.endsWith(`:${fileName}`)
     );
@@ -299,11 +305,20 @@ const getAttachmentByteSize = async (attachment: Attachment, uri: string): Promi
   if (uri.startsWith('content://')) return attachment.size ?? null;
   try {
     const info = await FileSystem.getInfoAsync(uri);
-    return typeof info.size === 'number' ? info.size : null;
+    return info.exists && typeof info.size === 'number' ? info.size : null;
   } catch (error) {
     console.warn('Failed to read attachment size', error);
     return attachment.size ?? null;
   }
+};
+
+const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
+  if (bytes.buffer instanceof ArrayBuffer && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+    return bytes.buffer;
+  }
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
 };
 
 const fileExists = async (uri: string): Promise<boolean> => {
@@ -371,9 +386,7 @@ export const syncWebdavAttachments = async (
           continue;
         }
         reportProgress(attachment.id, 'upload', 0, fileData.byteLength, 'active');
-        const buffer = fileData.byteOffset === 0 && fileData.byteLength === fileData.buffer.byteLength
-          ? fileData.buffer
-          : fileData.buffer.slice(fileData.byteOffset, fileData.byteOffset + fileData.byteLength);
+        const buffer = toArrayBuffer(fileData);
         const cloudKey = buildCloudKey(attachment);
         await webdavPutFile(
           `${baseSyncUrl}/${cloudKey}`,
@@ -450,9 +463,7 @@ export const syncCloudAttachments = async (
           continue;
         }
         reportProgress(attachment.id, 'upload', 0, fileData.byteLength, 'active');
-        const buffer = fileData.byteOffset === 0 && fileData.byteLength === fileData.buffer.byteLength
-          ? fileData.buffer
-          : fileData.buffer.slice(fileData.byteOffset, fileData.byteOffset + fileData.byteLength);
+        const buffer = toArrayBuffer(fileData);
         const cloudKey = buildCloudKey(attachment);
         await cloudPutFile(
           `${baseSyncUrl}/${cloudKey}`,
