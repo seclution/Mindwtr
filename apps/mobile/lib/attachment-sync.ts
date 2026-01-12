@@ -2,7 +2,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import type { AppData, Attachment } from '@mindwtr/core';
 import { webdavGetFile, webdavMakeDirectory, webdavPutFile } from '@mindwtr/core';
-import { WEBDAV_PASSWORD_KEY, WEBDAV_URL_KEY, WEBDAV_USERNAME_KEY } from './sync-constants';
+import {
+  SYNC_BACKEND_KEY,
+  SYNC_PATH_KEY,
+  WEBDAV_PASSWORD_KEY,
+  WEBDAV_URL_KEY,
+  WEBDAV_USERNAME_KEY,
+} from './sync-constants';
 
 const ATTACHMENTS_DIR_NAME = 'attachments';
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
@@ -140,6 +146,74 @@ const getAttachmentsDir = async (): Promise<string | null> => {
   return dir;
 };
 
+const isSyncFilePath = (path: string) =>
+  /(?:^|[\\/])(data\.json|mindwtr-sync\.json)$/i.test(path);
+
+const resolveFileSyncDir = async (
+  syncPath: string
+): Promise<{ type: 'file'; dirUri: string; attachmentsDirUri: string } | { type: 'saf'; dirUri: string; attachmentsDirUri: string } | null> => {
+  if (!syncPath) return null;
+  if (syncPath.startsWith('content://')) {
+    if (!StorageAccessFramework?.readDirectoryAsync) return null;
+    const match = syncPath.match(/^(content:\/\/[^/]+)\/document\/(.+)$/);
+    if (!match) return null;
+    const prefix = match[1];
+    const docId = decodeURIComponent(match[2]);
+    const parts = docId.split('/');
+    if (parts.length < 2) return null;
+    const parentId = parts.slice(0, -1).join('/');
+    const parentTreeUri = `${prefix}/tree/${encodeURIComponent(parentId)}`;
+    let attachmentsDirUri: string | null = null;
+    try {
+      attachmentsDirUri = await StorageAccessFramework.makeDirectoryAsync(parentTreeUri, ATTACHMENTS_DIR_NAME);
+    } catch (error) {
+      try {
+        const entries = await StorageAccessFramework.readDirectoryAsync(parentTreeUri);
+        const decoded = entries.map((entry: string) => ({ entry, decoded: decodeURIComponent(entry) }));
+        const matchEntry = decoded.find((item) =>
+          item.decoded.endsWith(`/${ATTACHMENTS_DIR_NAME}`) || item.decoded.endsWith(`:${ATTACHMENTS_DIR_NAME}`)
+        );
+        attachmentsDirUri = matchEntry?.entry ?? null;
+      } catch (innerError) {
+        console.warn('Failed to resolve SAF attachments directory', innerError);
+      }
+    }
+    if (!attachmentsDirUri) return null;
+    return { type: 'saf', dirUri: parentTreeUri, attachmentsDirUri };
+  }
+
+  const normalized = syncPath.replace(/\/+$/, '');
+  const isFilePath = isSyncFilePath(normalized);
+  const baseDir = isFilePath ? normalized.replace(/\/[^/]+$/, '') : normalized;
+  if (!baseDir) return null;
+  const dirUri = baseDir.endsWith('/') ? baseDir : `${baseDir}/`;
+  const attachmentsDirUri = `${dirUri}${ATTACHMENTS_DIR_NAME}/`;
+  try {
+    await FileSystem.makeDirectoryAsync(attachmentsDirUri, { intermediates: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.toLowerCase().includes('already exists')) {
+      console.warn('Failed to ensure sync attachments directory', error);
+    }
+  }
+  return { type: 'file', dirUri, attachmentsDirUri };
+};
+
+const findSafEntry = async (dirUri: string, fileName: string): Promise<string | null> => {
+  if (!StorageAccessFramework?.readDirectoryAsync) return null;
+  try {
+    const entries = await StorageAccessFramework.readDirectoryAsync(dirUri);
+    const decoded = entries.map((entry: string) => ({ entry, decoded: decodeURIComponent(entry) }));
+    const matchEntry = decoded.find((item) =>
+      item.decoded.endsWith(`/${fileName}`) || item.decoded.endsWith(`:${fileName}`)
+    );
+    return matchEntry?.entry ?? null;
+  } catch (error) {
+    console.warn('Failed to read SAF directory', error);
+    return null;
+  }
+};
+
 const readFileAsBytes = async (uri: string): Promise<Uint8Array> => {
   if (uri.startsWith('content://')) {
     if (!StorageAccessFramework?.readAsStringAsync) {
@@ -165,7 +239,7 @@ const fileExists = async (uri: string): Promise<boolean> => {
   }
 };
 
-export const syncMobileAttachments = async (
+export const syncWebdavAttachments = async (
   appData: AppData,
   webDavConfig: WebDavConfig,
   baseSyncUrl: string
@@ -235,6 +309,104 @@ export const syncMobileAttachments = async (
   return didMutate;
 };
 
+export const syncFileAttachments = async (
+  appData: AppData,
+  syncPath: string
+): Promise<boolean> => {
+  const syncDir = await resolveFileSyncDir(syncPath);
+  if (!syncDir) return false;
+
+  const attachmentsDir = await getAttachmentsDir();
+  if (!attachmentsDir) return false;
+
+  const attachmentsById = new Map<string, Attachment>();
+  for (const task of appData.tasks) {
+    for (const attachment of task.attachments || []) {
+      attachmentsById.set(attachment.id, attachment);
+    }
+  }
+  for (const project of appData.projects) {
+    for (const attachment of project.attachments || []) {
+      attachmentsById.set(attachment.id, attachment);
+    }
+  }
+
+  let didMutate = false;
+  for (const attachment of attachmentsById.values()) {
+    if (attachment.kind !== 'file') continue;
+    if (attachment.deletedAt) continue;
+
+    const uri = attachment.uri || '';
+    const isHttp = /^https?:\/\//i.test(uri);
+    const hasLocal = Boolean(uri) && !isHttp;
+    const existsLocally = hasLocal ? await fileExists(uri) : false;
+    const nextStatus: Attachment['localStatus'] = (existsLocally || uri.startsWith('content://') || isHttp) ? 'available' : 'missing';
+    if (attachment.localStatus !== nextStatus) {
+      attachment.localStatus = nextStatus;
+      didMutate = true;
+    }
+
+    if (!attachment.cloudKey && hasLocal && existsLocally && !isHttp) {
+      const cloudKey = buildCloudKey(attachment);
+      const filename = cloudKey.split('/').pop() || `${attachment.id}${extractExtension(attachment.title)}`;
+      try {
+        if (syncDir.type === 'file') {
+          const targetUri = `${syncDir.attachmentsDirUri}${filename}`;
+          await FileSystem.copyAsync({ from: uri, to: targetUri });
+        } else {
+          const base64 = await readFileAsBytes(uri).then(bytesToBase64);
+          let targetUri = await findSafEntry(syncDir.attachmentsDirUri, filename);
+          if (!targetUri && StorageAccessFramework?.createFileAsync) {
+            targetUri = await StorageAccessFramework.createFileAsync(syncDir.attachmentsDirUri, filename, attachment.mimeType || DEFAULT_CONTENT_TYPE);
+          }
+          if (targetUri && StorageAccessFramework?.writeAsStringAsync) {
+            await StorageAccessFramework.writeAsStringAsync(targetUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+          }
+        }
+        attachment.cloudKey = cloudKey;
+        attachment.localStatus = 'available';
+        didMutate = true;
+      } catch (error) {
+        console.warn(`Failed to copy attachment ${attachment.title} to sync folder`, error);
+      }
+    }
+  }
+
+  return didMutate;
+};
+
+const ensureFileAttachmentAvailable = async (attachment: Attachment, syncPath: string): Promise<Attachment | null> => {
+  const syncDir = await resolveFileSyncDir(syncPath);
+  if (!syncDir) return null;
+  if (!attachment.cloudKey) return null;
+  const attachmentsDir = await getAttachmentsDir();
+  if (!attachmentsDir) return null;
+  const filename = attachment.cloudKey.split('/').pop() || `${attachment.id}${extractExtension(attachment.title)}`;
+  const targetUri = `${attachmentsDir}${filename}`;
+  const existing = await fileExists(targetUri);
+  if (existing) {
+    return { ...attachment, uri: targetUri, localStatus: 'available' };
+  }
+
+  try {
+    if (syncDir.type === 'file') {
+      const sourceUri = `${syncDir.attachmentsDirUri}${filename}`;
+      const exists = await fileExists(sourceUri);
+      if (!exists) return null;
+      await FileSystem.copyAsync({ from: sourceUri, to: targetUri });
+      return { ...attachment, uri: targetUri, localStatus: 'available' };
+    }
+    const entry = await findSafEntry(syncDir.attachmentsDirUri, filename);
+    if (!entry || !StorageAccessFramework?.readAsStringAsync) return null;
+    const base64 = await StorageAccessFramework.readAsStringAsync(entry, { encoding: FileSystem.EncodingType.Base64 });
+    await FileSystem.writeAsStringAsync(targetUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+    return { ...attachment, uri: targetUri, localStatus: 'available' };
+  } catch (error) {
+    console.warn(`Failed to copy attachment ${attachment.title} from sync folder`, error);
+    return null;
+  }
+};
+
 export const ensureAttachmentAvailable = async (attachment: Attachment): Promise<Attachment | null> => {
   if (attachment.kind !== 'file') return attachment;
   const uri = attachment.uri || '';
@@ -249,6 +421,16 @@ export const ensureAttachmentAvailable = async (attachment: Attachment): Promise
     if (exists) {
       return { ...attachment, localStatus: 'available' };
     }
+  }
+
+  const backend = await AsyncStorage.getItem(SYNC_BACKEND_KEY);
+  if (backend === 'file') {
+    const syncPath = await AsyncStorage.getItem(SYNC_PATH_KEY);
+    if (syncPath) {
+      const resolved = await ensureFileAttachmentAvailable(attachment, syncPath);
+      if (resolved) return resolved;
+    }
+    return null;
   }
 
   if (attachment.cloudKey) {

@@ -3,7 +3,7 @@ import { AppData, MergeStats, useTaskStore, webdavGetJson, webdavPutJson, cloudG
 import { mobileStorage } from './storage-adapter';
 import { logSyncError, sanitizeLogMessage } from './app-log';
 import { readSyncFile, writeSyncFile } from './storage-file';
-import { getBaseSyncUrl, sanitizeAppDataForRemote, syncMobileAttachments } from './attachment-sync';
+import { getBaseSyncUrl, sanitizeAppDataForRemote, syncFileAttachments, syncWebdavAttachments } from './attachment-sync';
 import {
   SYNC_PATH_KEY,
   SYNC_BACKEND_KEY,
@@ -99,7 +99,16 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
       if (backend === 'webdav' && webdavConfig?.url) {
         step = 'attachments';
         const baseSyncUrl = getBaseSyncUrl(webdavConfig.url);
-        const mutated = await syncMobileAttachments(syncResult.data, webdavConfig, baseSyncUrl);
+        const mutated = await syncWebdavAttachments(syncResult.data, webdavConfig, baseSyncUrl);
+        if (mutated) {
+          await mobileStorage.saveData(syncResult.data);
+          wroteLocal = true;
+        }
+      }
+
+      if (backend === 'file' && fileSyncPath) {
+        step = 'attachments';
+        const mutated = await syncFileAttachments(syncResult.data, fileSyncPath);
         if (mutated) {
           await mobileStorage.saveData(syncResult.data);
           wroteLocal = true;
