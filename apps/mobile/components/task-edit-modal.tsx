@@ -499,6 +499,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
             size: asset.size,
             createdAt: now,
             updatedAt: now,
+            localStatus: 'available',
         };
         setEditedTask((prev) => ({ ...prev, attachments: [...(prev.attachments || []), attachment] }));
     };
@@ -535,6 +536,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
             size: (asset as { fileSize?: number }).fileSize,
             createdAt: now,
             updatedAt: now,
+            localStatus: 'available',
         };
         setEditedTask((prev) => ({ ...prev, attachments: [...(prev.attachments || []), attachment] }));
     };
@@ -629,28 +631,58 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         }
     }, [audioStatus]);
 
-    const openAttachment = async (attachment: Attachment) => {
-        const resolved = await ensureAttachmentAvailable(attachment);
-        if (!resolved) {
-            Alert.alert(t('attachments.title'), t('attachments.fileNotSupported'));
-            return;
+    const updateAttachmentState = useCallback((nextAttachment: Attachment) => {
+        setEditedTask((prev) => {
+            const nextAttachments = (prev.attachments || []).map((item) =>
+                item.id === nextAttachment.id ? { ...item, ...nextAttachment } : item
+            );
+            return { ...prev, attachments: nextAttachments };
+        }, false);
+    }, [setEditedTask]);
+
+    const resolveAttachment = useCallback(async (attachment: Attachment): Promise<Attachment | null> => {
+        if (attachment.kind !== 'file') return attachment;
+        const shouldDownload =
+            attachment.cloudKey &&
+            (attachment.localStatus === 'missing' || !attachment.uri);
+        if (shouldDownload && attachment.localStatus !== 'downloading') {
+            updateAttachmentState({ ...attachment, localStatus: 'downloading' });
         }
-        if (resolved.uri !== attachment.uri || resolved.localStatus !== attachment.localStatus) {
-            setEditedTask((prev) => {
-                const nextAttachments = (prev.attachments || []).map((item) =>
-                    item.id === resolved.id ? { ...item, ...resolved } : item
-                );
-                return { ...prev, attachments: nextAttachments };
-            }, false);
+        const resolved = await ensureAttachmentAvailable(attachment);
+        if (resolved) {
+            if (resolved.uri !== attachment.uri || resolved.localStatus !== attachment.localStatus) {
+                updateAttachmentState(resolved);
+            }
+            return resolved;
+        }
+        if (shouldDownload) {
+            updateAttachmentState({ ...attachment, localStatus: 'missing' });
+        }
+        return null;
+    }, [updateAttachmentState]);
+
+    const downloadAttachment = useCallback(async (attachment: Attachment) => {
+        const resolved = await resolveAttachment(attachment);
+        if (!resolved) {
+            const message = attachment.kind === 'file' ? t('attachments.missing') : t('attachments.fileNotSupported');
+            Alert.alert(t('attachments.title'), message);
+        }
+    }, [resolveAttachment, t]);
+
+    const openAttachment = async (attachment: Attachment) => {
+        const resolved = await resolveAttachment(attachment);
+        if (!resolved) {
+            const message = attachment.kind === 'file' ? t('attachments.missing') : t('attachments.fileNotSupported');
+            Alert.alert(t('attachments.title'), message);
+            return;
         }
 
-        const nextAttachment = resolved;
-        if (attachment.kind === 'link') {
-            Linking.openURL(nextAttachment.uri).catch(console.error);
+        if (resolved.kind === 'link') {
+            Linking.openURL(resolved.uri).catch(console.error);
             return;
         }
-        if (isAudioAttachment(nextAttachment)) {
-            openAudioAttachment(nextAttachment).catch(console.error);
+        if (isAudioAttachment(resolved)) {
+            openAudioAttachment(resolved).catch(console.error);
             return;
         }
         const available = await Sharing.isAvailableAsync().catch((error) => {
@@ -658,9 +690,9 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
             return false;
         });
         if (available) {
-            Sharing.shareAsync(nextAttachment.uri).catch(console.error);
+            Sharing.shareAsync(resolved.uri).catch(console.error);
         } else {
-            Linking.openURL(nextAttachment.uri).catch(console.error);
+            Linking.openURL(resolved.uri).catch(console.error);
         }
     };
 
@@ -1725,23 +1757,45 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                             <Text style={[styles.helperText, { color: tc.secondaryText }]}>{t('common.none')}</Text>
                         ) : (
                             <View style={[styles.attachmentsList, { borderColor: tc.border, backgroundColor: tc.cardBg }]}>
-                                {visibleAttachments.map((attachment) => (
-                                    <View key={attachment.id} style={[styles.attachmentRow, { borderBottomColor: tc.border }]}>
-                                        <TouchableOpacity
-                                            style={styles.attachmentTitleWrap}
-                                            onPress={() => openAttachment(attachment)}
-                                        >
-                                            <Text style={[styles.attachmentTitle, { color: tc.tint }]} numberOfLines={1}>
-                                                {attachment.title}
-                                            </Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity onPress={() => removeAttachment(attachment.id)}>
-                                            <Text style={[styles.attachmentRemove, { color: tc.secondaryText }]}>
-                                                {t('attachments.remove')}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    </View>
-                                ))}
+                                {visibleAttachments.map((attachment) => {
+                                    const isMissing = attachment.kind === 'file'
+                                        && (!attachment.uri || attachment.localStatus === 'missing');
+                                    const canDownload = isMissing && Boolean(attachment.cloudKey);
+                                    const isDownloading = attachment.localStatus === 'downloading';
+                                    return (
+                                        <View key={attachment.id} style={[styles.attachmentRow, { borderBottomColor: tc.border }]}>
+                                            <TouchableOpacity
+                                                style={styles.attachmentTitleWrap}
+                                                onPress={() => openAttachment(attachment)}
+                                                disabled={isDownloading}
+                                            >
+                                                <Text style={[styles.attachmentTitle, { color: tc.tint }]} numberOfLines={1}>
+                                                    {attachment.title}
+                                                </Text>
+                                            </TouchableOpacity>
+                                            {isDownloading ? (
+                                                <Text style={[styles.attachmentStatus, { color: tc.secondaryText }]}>
+                                                    {t('common.loading')}
+                                                </Text>
+                                            ) : canDownload ? (
+                                                <TouchableOpacity onPress={() => downloadAttachment(attachment)}>
+                                                    <Text style={[styles.attachmentDownload, { color: tc.tint }]}>
+                                                        {t('attachments.download')}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            ) : isMissing ? (
+                                                <Text style={[styles.attachmentStatus, { color: tc.secondaryText }]}>
+                                                    {t('attachments.missing')}
+                                                </Text>
+                                            ) : null}
+                                            <TouchableOpacity onPress={() => removeAttachment(attachment.id)}>
+                                                <Text style={[styles.attachmentRemove, { color: tc.secondaryText }]}>
+                                                    {t('attachments.remove')}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                    );
+                                })}
                             </View>
                         )}
                     </View>

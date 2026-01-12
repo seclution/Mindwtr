@@ -324,9 +324,28 @@ export default function ProjectsScreen() {
   };
 
   const openAttachment = async (attachment: Attachment) => {
+    const shouldDownload = attachment.kind === 'file'
+      && attachment.cloudKey
+      && (attachment.localStatus === 'missing' || !attachment.uri);
+    if (shouldDownload && selectedProject) {
+      const next = (selectedProject.attachments || []).map((item) =>
+        item.id === attachment.id ? { ...item, localStatus: 'downloading' } : item
+      );
+      updateProject(selectedProject.id, { attachments: next });
+      setSelectedProject({ ...selectedProject, attachments: next });
+    }
+
     const resolved = await ensureAttachmentAvailable(attachment);
     if (!resolved) {
-      Alert.alert(t('attachments.title'), t('attachments.fileNotSupported'));
+      if (shouldDownload && selectedProject) {
+        const next = (selectedProject.attachments || []).map((item) =>
+          item.id === attachment.id ? { ...item, localStatus: 'missing' } : item
+        );
+        updateProject(selectedProject.id, { attachments: next });
+        setSelectedProject({ ...selectedProject, attachments: next });
+      }
+      const message = attachment.kind === 'file' ? t('attachments.missing') : t('attachments.fileNotSupported');
+      Alert.alert(t('attachments.title'), message);
       return;
     }
     if (resolved.uri !== attachment.uri || resolved.localStatus !== attachment.localStatus) {
@@ -339,9 +358,8 @@ export default function ProjectsScreen() {
       }
     }
 
-    const nextAttachment = resolved;
-    if (nextAttachment.kind === 'link') {
-      Linking.openURL(nextAttachment.uri).catch(console.error);
+    if (resolved.kind === 'link') {
+      Linking.openURL(resolved.uri).catch(console.error);
       return;
     }
 
@@ -350,9 +368,42 @@ export default function ProjectsScreen() {
       return false;
     });
     if (available) {
-      Sharing.shareAsync(nextAttachment.uri).catch(console.error);
+      Sharing.shareAsync(resolved.uri).catch(console.error);
     } else {
-      Linking.openURL(nextAttachment.uri).catch(console.error);
+      Linking.openURL(resolved.uri).catch(console.error);
+    }
+  };
+
+  const downloadAttachment = async (attachment: Attachment) => {
+    if (!selectedProject) return;
+    const shouldDownload = attachment.kind === 'file'
+      && attachment.cloudKey
+      && (attachment.localStatus === 'missing' || !attachment.uri);
+    if (shouldDownload) {
+      const next = (selectedProject.attachments || []).map((item) =>
+        item.id === attachment.id ? { ...item, localStatus: 'downloading' } : item
+      );
+      updateProject(selectedProject.id, { attachments: next });
+      setSelectedProject({ ...selectedProject, attachments: next });
+    }
+
+    const resolved = await ensureAttachmentAvailable(attachment);
+    if (!resolved) {
+      const next = (selectedProject.attachments || []).map((item) =>
+        item.id === attachment.id ? { ...item, localStatus: 'missing' } : item
+      );
+      updateProject(selectedProject.id, { attachments: next });
+      setSelectedProject({ ...selectedProject, attachments: next });
+      const message = attachment.kind === 'file' ? t('attachments.missing') : t('attachments.fileNotSupported');
+      Alert.alert(t('attachments.title'), message);
+      return;
+    }
+    if (resolved.uri !== attachment.uri || resolved.localStatus !== attachment.localStatus) {
+      const next = (selectedProject.attachments || []).map((item) =>
+        item.id === resolved.id ? { ...item, ...resolved } : item
+      );
+      updateProject(selectedProject.id, { attachments: next });
+      setSelectedProject({ ...selectedProject, attachments: next });
     }
   };
 
@@ -374,6 +425,7 @@ export default function ProjectsScreen() {
       size: asset.size,
       createdAt: now,
       updatedAt: now,
+      localStatus: 'available',
     };
     const next = [...(selectedProject.attachments || []), attachment];
     updateProject(selectedProject.id, { attachments: next });
@@ -838,23 +890,45 @@ export default function ProjectsScreen() {
                         <View style={[styles.attachmentsList, { borderColor: tc.border, backgroundColor: tc.cardBg }]}>
                           {((selectedProject.attachments || []) as Attachment[])
                             .filter((a) => !a.deletedAt)
-                            .map((attachment) => (
-                              <View key={attachment.id} style={[styles.attachmentRow, { borderBottomColor: tc.border }]}>
-                                <TouchableOpacity
-                                  style={styles.attachmentTitleWrap}
-                                  onPress={() => openAttachment(attachment)}
-                                >
-                                  <Text style={[styles.attachmentTitle, { color: tc.tint }]} numberOfLines={1}>
-                                    {attachment.title}
-                                  </Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={() => removeProjectAttachment(attachment.id)}>
-                                  <Text style={[styles.attachmentRemove, { color: tc.secondaryText }]}>
-                                    {t('attachments.remove')}
-                                  </Text>
-                                </TouchableOpacity>
-                              </View>
-                            ))}
+                            .map((attachment) => {
+                              const isMissing = attachment.kind === 'file'
+                                && (!attachment.uri || attachment.localStatus === 'missing');
+                              const canDownload = isMissing && Boolean(attachment.cloudKey);
+                              const isDownloading = attachment.localStatus === 'downloading';
+                              return (
+                                <View key={attachment.id} style={[styles.attachmentRow, { borderBottomColor: tc.border }]}>
+                                  <TouchableOpacity
+                                    style={styles.attachmentTitleWrap}
+                                    onPress={() => openAttachment(attachment)}
+                                    disabled={isDownloading}
+                                  >
+                                    <Text style={[styles.attachmentTitle, { color: tc.tint }]} numberOfLines={1}>
+                                      {attachment.title}
+                                    </Text>
+                                  </TouchableOpacity>
+                                  {isDownloading ? (
+                                    <Text style={[styles.attachmentStatus, { color: tc.secondaryText }]}>
+                                      {t('common.loading')}
+                                    </Text>
+                                  ) : canDownload ? (
+                                    <TouchableOpacity onPress={() => downloadAttachment(attachment)}>
+                                      <Text style={[styles.attachmentDownload, { color: tc.tint }]}>
+                                        {t('attachments.download')}
+                                      </Text>
+                                    </TouchableOpacity>
+                                  ) : isMissing ? (
+                                    <Text style={[styles.attachmentStatus, { color: tc.secondaryText }]}>
+                                      {t('attachments.missing')}
+                                    </Text>
+                                  ) : null}
+                                  <TouchableOpacity onPress={() => removeProjectAttachment(attachment.id)}>
+                                    <Text style={[styles.attachmentRemove, { color: tc.secondaryText }]}>
+                                      {t('attachments.remove')}
+                                    </Text>
+                                  </TouchableOpacity>
+                                </View>
+                              );
+                            })}
                         </View>
                       )}
                     </View>
@@ -1580,6 +1654,16 @@ const styles = StyleSheet.create({
   attachmentTitle: {
     fontSize: 13,
     fontWeight: '600',
+  },
+  attachmentDownload: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginRight: 10,
+  },
+  attachmentStatus: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginRight: 10,
   },
   attachmentRemove: {
     fontSize: 12,
