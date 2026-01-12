@@ -14,6 +14,7 @@ import { isTauriRuntime } from '../../lib/runtime';
 import { normalizeAttachmentInput } from '../../lib/attachment-utils';
 import { invoke } from '@tauri-apps/api/core';
 import { size } from '@tauri-apps/plugin-fs';
+import { AttachmentProgressIndicator } from '../AttachmentProgressIndicator';
 
 function toDateTimeLocalValue(dateStr: string | undefined): string {
     if (!dateStr) return '';
@@ -1080,25 +1081,28 @@ export function ProjectsView() {
 			                                            <div className="text-xs text-muted-foreground">{t('common.none')}</div>
 			                                        ) : (
 			                                            <div className="space-y-1">
-			                                                {visibleAttachments.map((attachment) => (
-			                                                    <div key={attachment.id} className="flex items-center justify-between gap-2 text-xs">
-			                                                        <button
-			                                                            type="button"
-			                                                            onClick={() => openAttachment(attachment)}
-			                                                            className="truncate text-primary hover:underline"
-			                                                            title={attachment.title}
-			                                                        >
-			                                                            {attachment.title}
-			                                                        </button>
-			                                                        <button
-			                                                            type="button"
-			                                                            onClick={() => removeProjectAttachment(attachment.id)}
-			                                                            className="text-muted-foreground hover:text-foreground"
-			                                                        >
-			                                                            {t('attachments.remove')}
-			                                                        </button>
-			                                                    </div>
-			                                                ))}
+                                                    {visibleAttachments.map((attachment) => (
+                                                        <div key={attachment.id} className="flex items-center justify-between gap-2 text-xs">
+                                                            <div className="min-w-0 flex-1">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => openAttachment(attachment)}
+                                                                    className="truncate text-primary hover:underline"
+                                                                    title={attachment.title}
+                                                                >
+                                                                    {attachment.title}
+                                                                </button>
+                                                                <AttachmentProgressIndicator attachmentId={attachment.id} className="mt-1" />
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeProjectAttachment(attachment.id)}
+                                                                className="text-muted-foreground hover:text-foreground"
+                                                            >
+                                                                {t('attachments.remove')}
+                                                            </button>
+                                                        </div>
+                                                    ))}
 			                                            </div>
 			                                        )}
 			                                    </div>
