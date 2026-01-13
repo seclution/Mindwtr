@@ -50,6 +50,7 @@ import { SettingsNotificationsPage } from './settings/SettingsNotificationsPage'
 import { SettingsCalendarPage } from './settings/SettingsCalendarPage';
 import { SettingsSyncPage } from './settings/SettingsSyncPage';
 import { SettingsAboutPage } from './settings/SettingsAboutPage';
+import { useSyncSettings } from './settings/useSyncSettings';
 import { BaseDirectory, exists, mkdir, remove, size, writeFile } from '@tauri-apps/plugin-fs';
 import { dataDir, join } from '@tauri-apps/api/path';
 
@@ -161,16 +162,38 @@ export function SettingsView() {
     const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
     const [linuxDistro, setLinuxDistro] = useState<LinuxDistroInfo | null>(null);
 
-    const [syncPath, setSyncPath] = useState<string>('');
-    const [isSyncing, setIsSyncing] = useState(false);
-    const [syncError, setSyncError] = useState<string | null>(null);
-    const [syncBackend, setSyncBackend] = useState<'file' | 'webdav' | 'cloud'>('file');
-    const [webdavUrl, setWebdavUrl] = useState('');
-    const [webdavUsername, setWebdavUsername] = useState('');
-    const [webdavPassword, setWebdavPassword] = useState('');
-    const [webdavHasPassword, setWebdavHasPassword] = useState(false);
-    const [cloudUrl, setCloudUrl] = useState('');
-    const [cloudToken, setCloudToken] = useState('');
+    const {
+        syncPath,
+        setSyncPath,
+        isSyncing,
+        syncError,
+        syncBackend,
+        setSyncBackend,
+        webdavUrl,
+        setWebdavUrl,
+        webdavUsername,
+        setWebdavUsername,
+        webdavPassword,
+        setWebdavPassword,
+        webdavHasPassword,
+        cloudUrl,
+        setCloudUrl,
+        cloudToken,
+        setCloudToken,
+        handleSaveSyncPath,
+        handleChangeSyncLocation,
+        handleSetSyncBackend,
+        handleSaveWebDav,
+        handleSaveCloud,
+        handleSync,
+    } = useSyncSettings({
+        isTauri,
+        showSaved: () => {
+            setSaved(true);
+            setTimeout(() => setSaved(false), 2000);
+        },
+        selectSyncFolderTitle: t.selectSyncFolderTitle,
+    });
     const [externalCalendars, setExternalCalendars] = useState<ExternalCalendarSubscription[]>([]);
     const [newCalendarName, setNewCalendarName] = useState('');
     const [newCalendarUrl, setNewCalendarUrl] = useState('');
@@ -221,25 +244,6 @@ export function SettingsView() {
             })
             .catch(console.error);
     }, [isTauri]);
-
-    useEffect(() => {
-        SyncService.getSyncPath().then(setSyncPath).catch(console.error);
-        SyncService.getSyncBackend().then(setSyncBackend).catch(console.error);
-        SyncService.getWebDavConfig()
-            .then((cfg) => {
-                setWebdavUrl(cfg.url);
-                setWebdavUsername(cfg.username);
-                setWebdavPassword(cfg.password ?? '');
-                setWebdavHasPassword(cfg.hasPassword === true);
-            })
-            .catch(console.error);
-        SyncService.getCloudConfig()
-            .then((cfg) => {
-                setCloudUrl(cfg.url);
-                setCloudToken(cfg.token);
-            })
-            .catch(console.error);
-    }, []);
 
     useEffect(() => {
         if (!loggingEnabled) {
@@ -551,14 +555,6 @@ export function SettingsView() {
         persistCalendars(next);
     };
 
-    const handleSaveSyncPath = async () => {
-        if (!syncPath.trim()) return;
-        const result = await SyncService.setSyncPath(syncPath.trim());
-        if (result.success) {
-            showSaved();
-        }
-    };
-
     const openLink = async (url: string) => {
         if (isTauri) {
             try {
@@ -571,89 +567,6 @@ export function SettingsView() {
         }
 
         window.open(url, '_blank', 'noopener,noreferrer');
-    };
-
-    const handleChangeSyncLocation = async () => {
-        try {
-            if (!isTauri) return;
-
-            const { open } = await import('@tauri-apps/plugin-dialog');
-            const selected = await open({
-                directory: true,
-                multiple: false,
-                title: t.selectSyncFolderTitle,
-            });
-
-            if (selected && typeof selected === 'string') {
-                setSyncPath(selected);
-                const result = await SyncService.setSyncPath(selected);
-                if (result.success) {
-                    showSaved();
-                }
-            }
-        } catch (error) {
-            console.error('Failed to change sync location:', error);
-        }
-    };
-
-    const handleSetSyncBackend = async (backend: 'file' | 'webdav' | 'cloud') => {
-        setSyncBackend(backend);
-        await SyncService.setSyncBackend(backend);
-        showSaved();
-    };
-
-    const handleSaveWebDav = async () => {
-        const trimmedUrl = webdavUrl.trim();
-        const trimmedPassword = webdavPassword.trim();
-        await SyncService.setWebDavConfig({
-            url: trimmedUrl,
-            username: webdavUsername.trim(),
-            ...(trimmedPassword ? { password: trimmedPassword } : {}),
-        });
-        if (!trimmedUrl) {
-            setWebdavHasPassword(false);
-            setWebdavPassword('');
-        } else if (trimmedPassword) {
-            setWebdavHasPassword(true);
-        }
-        showSaved();
-    };
-
-    const handleSaveCloud = async () => {
-        await SyncService.setCloudConfig({
-            url: cloudUrl.trim(),
-            token: cloudToken.trim(),
-        });
-        showSaved();
-    };
-
-    const handleSync = async () => {
-        try {
-            setIsSyncing(true);
-            setSyncError(null);
-
-            if (syncBackend === 'webdav') {
-                if (!webdavUrl.trim()) return;
-                await handleSaveWebDav();
-            }
-            if (syncBackend === 'cloud') {
-                if (!cloudUrl.trim()) return;
-                await handleSaveCloud();
-            }
-            if (syncBackend === 'file') {
-                const path = syncPath.trim();
-                if (path) {
-                    await SyncService.setSyncPath(path);
-                }
-            }
-
-            await SyncService.performSync();
-        } catch (error) {
-            console.error('Sync failed:', error);
-            setSyncError(String(error));
-        } finally {
-            setIsSyncing(false);
-        }
     };
 
     const handleAttachmentsCleanup = useCallback(async () => {
