@@ -225,28 +225,9 @@ const cloneSettings = (settings: AppData['settings']): AppData['settings'] => {
     return JSON.parse(JSON.stringify(settings)) as AppData['settings'];
 };
 
-const cloneTask = (task: Task): Task => ({
-    ...task,
-    tags: task.tags ? [...task.tags] : [],
-    contexts: task.contexts ? [...task.contexts] : [],
-    checklist: task.checklist ? task.checklist.map((item) => ({ ...item })) : [],
-    attachments: task.attachments ? task.attachments.map((item) => ({ ...item })) : [],
-});
-
-const cloneProject = (project: Project): Project => ({
-    ...project,
-    tagIds: project.tagIds ? [...project.tagIds] : [],
-    attachments: project.attachments ? project.attachments.map((item) => ({ ...item })) : [],
-});
-
-const cloneArea = (area: Area): Area => ({ ...area });
-
 const sanitizeAppDataForStorage = (data: AppData): AppData => ({
     ...data,
     settings: stripSensitiveSettings(cloneSettings(data.settings)),
-    tasks: data.tasks.map(cloneTask),
-    projects: data.projects.map(cloneProject),
-    areas: (data.areas || []).map(cloneArea),
 });
 
 const projectOrderCache = new WeakMap<Task[], Map<string, number>>();
