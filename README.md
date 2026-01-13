@@ -106,6 +106,20 @@ Mindwtr is built to be **simple by default and powerful when you need it**. We f
 
 ## Installation
 
+<p align="center">
+  <a href="https://github.com/dongdongbh/homebrew-mindwtr">
+    <img src="https://img.shields.io/scoop/v/mindwtr?bucket=https://github.com/dongdongbh/homebrew-mindwtr&label=Scoop&logo=scoop&logoColor=white&color=E6E6E6" alt="Scoop Version">
+  </a>
+
+  <a href="https://github.com/dongdongbh/homebrew-mindwtr">
+    <img src="https://img.shields.io/badge/Homebrew-Install-orange?logo=homebrew&logoColor=white" alt="Homebrew">
+  </a>
+
+  <a href="https://aur.archlinux.org/packages/mindwtr-bin">
+    <img src="https://img.shields.io/aur/version/mindwtr-bin?logo=arch-linux&logoColor=white&color=1793d1&label=AUR" alt="AUR Version">
+  </a>
+</p>
+
 ### Desktop (Linux)
 
 **Arch Linux (AUR):**
