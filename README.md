@@ -152,9 +152,23 @@ sudo rpm -i mindwtr-*.rpm
 ```
 
 ### Desktop (Windows)
+**Scoop (recommended):**
+```powershell
+scoop bucket add mindwtr https://github.com/dongdongbh/homebrew-mindwtr
+scoop install mindwtr
+```
+
+**Installer:**
 Download the installer (`.msi` or `.exe`) from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) and run it.
 
 ### Desktop (macOS)
+**Homebrew (recommended):**
+```bash
+brew tap dongdongbh/mindwtr
+brew install --cask mindwtr
+```
+
+**DMG:**
 Download the disk image (`.dmg`) from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases), open it, and drag the application to your Applications folder.
 
 > **Note:** If macOS says the app is "damaged" or from an "unidentified developer", run:

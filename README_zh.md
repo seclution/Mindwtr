@@ -130,9 +130,23 @@ sudo rpm -i mindwtr-*.rpm
 ```
 
 ### 桌面端（Windows）
+**Scoop（推荐）：**
+```powershell
+scoop bucket add mindwtr https://github.com/dongdongbh/homebrew-mindwtr
+scoop install mindwtr
+```
+
+**安装包：**
 从 [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) 下载安装包（`.msi` 或 `.exe`）并运行。
 
 ### 桌面端（macOS）
+**Homebrew（推荐）：**
+```bash
+brew tap dongdongbh/mindwtr
+brew install --cask mindwtr
+```
+
+**DMG：**
 从 [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) 下载 `.dmg`，打开后拖拽到“应用程序”文件夹。
 
 > **注意：** 如果 macOS 提示应用“已损坏”或“来自未知开发者”，请执行：
