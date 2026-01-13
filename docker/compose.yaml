@@ -1,6 +1,6 @@
 services:
   mindwtr-cloud:
-    image: mindwtr-cloud:latest
+    image: ghcr.io/dongdongbh/mindwtr-cloud:latest
     build:
       context: ..
       dockerfile: docker/cloud/Dockerfile
@@ -21,7 +21,7 @@ services:
       - /path/data_dir:/app/cloud_data
 
   mindwtr-app:
-    image: mindwtr-app:latest
+    image: ghcr.io/dongdongbh/mindwtr-app:latest
     build:
       context: ..
       dockerfile: docker/app/Dockerfile
