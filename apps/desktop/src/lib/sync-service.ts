@@ -859,7 +859,7 @@ export class SyncService {
                 sessionStorage.removeItem(CLOUD_TOKEN_KEY);
             }
         } catch (error) {
-            console.error('Failed to migrate legacy sync config:', error);
+            reportError('Failed to migrate legacy sync config', error);
         }
     }
 
@@ -870,7 +870,7 @@ export class SyncService {
             const backend = await tauriInvoke<string>('get_sync_backend');
             return normalizeSyncBackend(backend);
         } catch (error) {
-            console.error('Failed to get sync backend:', error);
+            reportError('Failed to get sync backend', error);
             return 'file';
         }
     }
@@ -884,7 +884,7 @@ export class SyncService {
             await tauriInvoke('set_sync_backend', { backend });
             await SyncService.startFileWatcher();
         } catch (error) {
-            console.error('Failed to set sync backend:', error);
+            reportError('Failed to set sync backend', error);
         }
     }
 
@@ -894,7 +894,7 @@ export class SyncService {
         try {
             return await tauriInvoke<WebDavConfig>('get_webdav_config');
         } catch (error) {
-            console.error('Failed to get WebDAV config:', error);
+            reportError('Failed to get WebDAV config', error);
             return { url: '', username: '', hasPassword: false };
         }
     }
@@ -911,7 +911,7 @@ export class SyncService {
                 password: config.password || '',
             });
         } catch (error) {
-            console.error('Failed to set WebDAV config:', error);
+            reportError('Failed to set WebDAV config', error);
         }
     }
 
@@ -921,7 +921,7 @@ export class SyncService {
         try {
             return await tauriInvoke<CloudConfig>('get_cloud_config');
         } catch (error) {
-            console.error('Failed to get Self-Hosted config:', error);
+            reportError('Failed to get Self-Hosted config', error);
             return { url: '', token: '' };
         }
     }
@@ -937,7 +937,7 @@ export class SyncService {
                 token: config.token || '',
             });
         } catch (error) {
-            console.error('Failed to set Self-Hosted config:', error);
+            reportError('Failed to set Self-Hosted config', error);
         }
     }
 
@@ -949,7 +949,7 @@ export class SyncService {
         try {
             return await tauriInvoke<string>('get_sync_path');
         } catch (error) {
-            console.error('Failed to get sync path:', error);
+            reportError('Failed to get sync path', error);
             return '';
         }
     }
@@ -966,7 +966,7 @@ export class SyncService {
             }
             return result;
         } catch (error) {
-            console.error('Failed to set sync path:', error);
+            reportError('Failed to set sync path', error);
             return { success: false, path: '' };
         }
     }
