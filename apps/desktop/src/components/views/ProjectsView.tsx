@@ -1,7 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { useTaskStore, Attachment, Task, type Project, generateUUID, parseQuickAdd, PRESET_CONTEXTS, validateAttachmentForUpload } from '@mindwtr/core';
-import { TaskInput } from '../Task/TaskInput';
 import { Folder } from 'lucide-react';
 import { DndContext, PointerSensor, useSensor, useSensors, closestCenter, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
@@ -16,6 +15,7 @@ import { ProjectsSidebar } from './projects/ProjectsSidebar';
 import { AreaManagerModal } from './projects/AreaManagerModal';
 import { ProjectNotesSection } from './projects/ProjectNotesSection';
 import { ProjectDetailsHeader } from './projects/ProjectDetailsHeader';
+import { ProjectDetailsFields } from './projects/ProjectDetailsFields';
 import {
     DEFAULT_AREA_COLOR,
     getProjectColor,
@@ -496,133 +496,54 @@ export function ProjectsView() {
                             onUpdateNotes={(value) => updateProject(selectedProject.id, { supportNotes: value })}
                             t={t}
                         />
-
-                        <div className="mb-6 bg-card border border-border rounded-lg p-3 space-y-2">
-                            <div className="flex items-center justify-between">
-                                <label className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
-                                    {t('projects.areaLabel')}
-                                </label>
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            if (selectedProject) {
-                                                setPendingAreaAssignProjectId(selectedProject.id);
-                                            }
-                                            setShowQuickAreaPrompt(true);
-                                        }}
-                                        className="text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors"
-                                    >
-                                        + New
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowAreaManager(true)}
-                                        className="text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors"
-                                    >
-                                        Manage Areas
-                                    </button>
-                                </div>
-                            </div>
-                            <select
-                                key={`${selectedProject.id}-area`}
-                                value={selectedProject.areaId && areaById.has(selectedProject.areaId) ? selectedProject.areaId : NO_AREA}
-                                onChange={(e) => {
-                                    const value = e.target.value;
-                                    updateProject(selectedProject.id, { areaId: value === NO_AREA ? undefined : value });
-                                }}
-                                className="w-full text-sm bg-muted/50 border border-border rounded px-2 py-1"
-                            >
-                                <option value={NO_AREA}>{t('projects.noArea')}</option>
-                                {sortedAreas.map((area) => (
-                                    <option key={area.id} value={area.id}>
-                                        {area.name}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
-
-                        <div className="mb-6 bg-card border border-border rounded-lg p-3 space-y-2">
-                            <label className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
-                                {t('taskEdit.tagsLabel')}
-                            </label>
-                            <input
-                                key={`${selectedProject.id}-tags`}
-                                type="text"
-                                value={tagDraft}
-                                onChange={(e) => setTagDraft(e.target.value)}
-                                onBlur={() => {
-                                    const tags = parseTagInput(tagDraft);
-                                    updateProject(selectedProject.id, { tagIds: tags });
-                                }}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                        e.preventDefault();
-                                        const tags = parseTagInput(tagDraft);
-                                        updateProject(selectedProject.id, { tagIds: tags });
-                                        e.currentTarget.blur();
-                                    }
-                                }}
-                                placeholder="#feature, #client"
-                                className="w-full text-sm bg-muted/50 border border-border rounded px-2 py-1"
-                            />
-                        </div>
-
-                                <div className="mb-6 bg-card border border-border rounded-lg p-3 space-y-2">
-                                    <label className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
-                                        {t('projects.reviewAt')}
-                                    </label>
-                                    <input
-                                        key={selectedProject.id}
-                                        type="datetime-local"
-                                        defaultValue={toDateTimeLocalValue(selectedProject.reviewAt)}
-                                        onBlur={(e) => updateProject(selectedProject.id, { reviewAt: e.target.value || undefined })}
-                                        className="w-full text-sm bg-muted/50 border border-border rounded px-2 py-1"
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                        {t('projects.reviewAtHint')}
-                                    </p>
-                                </div>
-
-                                <div className="mb-6">
-                            <form
-                                onSubmit={async (e) => {
-                                    e.preventDefault();
-                                    if (!projectTaskTitle.trim()) return;
-                                    const { title: parsedTitle, props, projectTitle } = parseQuickAdd(projectTaskTitle, projects);
-                                    const finalTitle = parsedTitle || projectTaskTitle;
-                                    const initialProps: Partial<Task> = { projectId: selectedProject.id, status: 'next', ...props };
-                                    if (!props.status) initialProps.status = 'next';
-                                    if (!props.projectId) initialProps.projectId = selectedProject.id;
-                                    if (!initialProps.projectId && projectTitle) {
-                                        const created = await addProject(projectTitle, '#94a3b8');
-                                        initialProps.projectId = created.id;
-                                    }
-                                    await addTask(finalTitle, initialProps);
-                                    setProjectTaskTitle('');
-                                }}
-                                className="flex gap-2"
-                            >
-                                <TaskInput
-                                    value={projectTaskTitle}
-                                    projects={projects}
-                                    contexts={allContexts}
-                                    onCreateProject={async (title) => {
-                                        const created = await addProject(title, '#94a3b8');
-                                        return created.id;
-                                    }}
-                                    onChange={(next) => setProjectTaskTitle(next)}
-                                    placeholder={t('projects.addTaskPlaceholder')}
-                                    className="flex-1 bg-card border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-                                />
-                                <button
-                                    type="submit"
-                                    className="bg-primary text-primary-foreground px-4 py-2 rounded-md text-sm font-medium hover:bg-primary/90 transition-colors"
-                                >
-                                    {t('projects.addTask')}
-                                </button>
-                            </form>
-                        </div>
+                        <ProjectDetailsFields
+                            project={selectedProject}
+                            selectedAreaId={
+                                selectedProject.areaId && areaById.has(selectedProject.areaId)
+                                    ? selectedProject.areaId
+                                    : NO_AREA
+                            }
+                            sortedAreas={sortedAreas}
+                            noAreaId={NO_AREA}
+                            t={t}
+                            tagDraft={tagDraft}
+                            onTagDraftChange={setTagDraft}
+                            onCommitTags={() => {
+                                const tags = parseTagInput(tagDraft);
+                                updateProject(selectedProject.id, { tagIds: tags });
+                            }}
+                            onNewArea={() => {
+                                setPendingAreaAssignProjectId(selectedProject.id);
+                                setShowQuickAreaPrompt(true);
+                            }}
+                            onManageAreas={() => setShowAreaManager(true)}
+                            onAreaChange={(value) => {
+                                updateProject(selectedProject.id, { areaId: value === NO_AREA ? undefined : value });
+                            }}
+                            reviewAtValue={toDateTimeLocalValue(selectedProject.reviewAt)}
+                            onReviewAtChange={(value) => updateProject(selectedProject.id, { reviewAt: value || undefined })}
+                            projectTaskTitle={projectTaskTitle}
+                            onProjectTaskTitleChange={setProjectTaskTitle}
+                            onSubmitProjectTask={async (value) => {
+                                const { title: parsedTitle, props, projectTitle } = parseQuickAdd(value, projects);
+                                const finalTitle = parsedTitle || value;
+                                const initialProps: Partial<Task> = { projectId: selectedProject.id, status: 'next', ...props };
+                                if (!props.status) initialProps.status = 'next';
+                                if (!props.projectId) initialProps.projectId = selectedProject.id;
+                                if (!initialProps.projectId && projectTitle) {
+                                    const created = await addProject(projectTitle, '#94a3b8');
+                                    initialProps.projectId = created.id;
+                                }
+                                await addTask(finalTitle, initialProps);
+                                setProjectTaskTitle('');
+                            }}
+                            projects={projects}
+                            contexts={allContexts}
+                            onCreateProject={async (title) => {
+                                const created = await addProject(title, '#94a3b8');
+                                return created.id;
+                            }}
+                        />
 
                                 <div className="flex-1 overflow-y-auto pr-2">
                                     {orderedProjectTasks.length > 0 ? (
