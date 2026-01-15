@@ -85,10 +85,10 @@ winget install dongdongbh.Mindwtr
 
 ### Alternative: Scoop
 
-If you use [Scoop](https://scoop.sh/):
+If you use Scoop:
 
 ```powershell
-scoop bucket add mindwtr https://github.com/dongdongbh/homebrew-mindwtr
+scoop bucket add mindwtr <your-scoop-bucket-url>
 scoop install mindwtr
 ```
 
