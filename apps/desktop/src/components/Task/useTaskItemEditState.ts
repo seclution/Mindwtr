@@ -1,0 +1,135 @@
+import { useCallback, useState, type Dispatch, type SetStateAction } from 'react';
+import type { Task, TaskPriority, TaskStatus, TimeEstimate, RecurrenceRule, RecurrenceStrategy } from '@mindwtr/core';
+import {
+    getRecurrenceRuleValue,
+    getRecurrenceStrategyValue,
+    getRecurrenceRRuleValue,
+    toDateTimeLocalValue,
+} from './task-item-helpers';
+
+type UseTaskItemEditStateOptions = {
+    task: Task;
+    resetAttachmentState: (attachments?: Task['attachments']) => void;
+};
+
+type TaskItemEditState = {
+    editTitle: string;
+    setEditTitle: (value: string) => void;
+    editDueDate: string;
+    setEditDueDate: (value: string) => void;
+    editStartTime: string;
+    setEditStartTime: (value: string) => void;
+    editProjectId: string;
+    setEditProjectId: (value: string) => void;
+    editStatus: TaskStatus;
+    setEditStatus: (value: TaskStatus) => void;
+    editContexts: string;
+    setEditContexts: (value: string) => void;
+    editTags: string;
+    setEditTags: (value: string) => void;
+    editDescription: string;
+    setEditDescription: (value: string) => void;
+    editTextDirection: Task['textDirection'];
+    setEditTextDirection: (value: Task['textDirection']) => void;
+    editLocation: string;
+    setEditLocation: (value: string) => void;
+    editRecurrence: RecurrenceRule | '';
+    setEditRecurrence: (value: RecurrenceRule | '') => void;
+    editRecurrenceStrategy: RecurrenceStrategy;
+    setEditRecurrenceStrategy: (value: RecurrenceStrategy) => void;
+    editRecurrenceRRule: string;
+    setEditRecurrenceRRule: (value: string) => void;
+    editTimeEstimate: TimeEstimate | '';
+    setEditTimeEstimate: (value: TimeEstimate | '') => void;
+    editPriority: TaskPriority | '';
+    setEditPriority: (value: TaskPriority | '') => void;
+    editReviewAt: string;
+    setEditReviewAt: (value: string) => void;
+    showDescriptionPreview: boolean;
+    setShowDescriptionPreview: Dispatch<SetStateAction<boolean>>;
+    resetEditState: () => void;
+};
+
+export function useTaskItemEditState({
+    task,
+    resetAttachmentState,
+}: UseTaskItemEditStateOptions): TaskItemEditState {
+    const [editTitle, setEditTitle] = useState(task.title);
+    const [editDueDate, setEditDueDate] = useState(toDateTimeLocalValue(task.dueDate));
+    const [editStartTime, setEditStartTime] = useState(toDateTimeLocalValue(task.startTime));
+    const [editProjectId, setEditProjectId] = useState(task.projectId || '');
+    const [editStatus, setEditStatus] = useState<TaskStatus>(task.status);
+    const [editContexts, setEditContexts] = useState(task.contexts?.join(', ') || '');
+    const [editTags, setEditTags] = useState(task.tags?.join(', ') || '');
+    const [editDescription, setEditDescription] = useState(task.description || '');
+    const [editTextDirection, setEditTextDirection] = useState<Task['textDirection']>(task.textDirection ?? 'auto');
+    const [showDescriptionPreview, setShowDescriptionPreview] = useState(false);
+    const [editLocation, setEditLocation] = useState(task.location || '');
+    const [editRecurrence, setEditRecurrence] = useState<RecurrenceRule | ''>(getRecurrenceRuleValue(task.recurrence));
+    const [editRecurrenceStrategy, setEditRecurrenceStrategy] = useState<RecurrenceStrategy>(
+        getRecurrenceStrategyValue(task.recurrence),
+    );
+    const [editRecurrenceRRule, setEditRecurrenceRRule] = useState<string>(getRecurrenceRRuleValue(task.recurrence));
+    const [editTimeEstimate, setEditTimeEstimate] = useState<TimeEstimate | ''>(task.timeEstimate || '');
+    const [editPriority, setEditPriority] = useState<TaskPriority | ''>(task.priority || '');
+    const [editReviewAt, setEditReviewAt] = useState(toDateTimeLocalValue(task.reviewAt));
+
+    const resetEditState = useCallback(() => {
+        setEditTitle(task.title);
+        setEditDueDate(toDateTimeLocalValue(task.dueDate));
+        setEditStartTime(toDateTimeLocalValue(task.startTime));
+        setEditProjectId(task.projectId || '');
+        setEditStatus(task.status);
+        setEditContexts(task.contexts?.join(', ') || '');
+        setEditTags(task.tags?.join(', ') || '');
+        setEditDescription(task.description || '');
+        setEditTextDirection(task.textDirection ?? 'auto');
+        setEditLocation(task.location || '');
+        setEditRecurrence(getRecurrenceRuleValue(task.recurrence));
+        setEditRecurrenceStrategy(getRecurrenceStrategyValue(task.recurrence));
+        setEditRecurrenceRRule(getRecurrenceRRuleValue(task.recurrence));
+        setEditTimeEstimate(task.timeEstimate || '');
+        setEditPriority(task.priority || '');
+        setEditReviewAt(toDateTimeLocalValue(task.reviewAt));
+        resetAttachmentState(task.attachments);
+        setShowDescriptionPreview(false);
+    }, [resetAttachmentState, task]);
+
+    return {
+        editTitle,
+        setEditTitle,
+        editDueDate,
+        setEditDueDate,
+        editStartTime,
+        setEditStartTime,
+        editProjectId,
+        setEditProjectId,
+        editStatus,
+        setEditStatus,
+        editContexts,
+        setEditContexts,
+        editTags,
+        setEditTags,
+        editDescription,
+        setEditDescription,
+        editTextDirection,
+        setEditTextDirection,
+        editLocation,
+        setEditLocation,
+        editRecurrence,
+        setEditRecurrence,
+        editRecurrenceStrategy,
+        setEditRecurrenceStrategy,
+        editRecurrenceRRule,
+        setEditRecurrenceRRule,
+        editTimeEstimate,
+        setEditTimeEstimate,
+        editPriority,
+        setEditPriority,
+        editReviewAt,
+        setEditReviewAt,
+        showDescriptionPreview,
+        setShowDescriptionPreview,
+        resetEditState,
+    };
+}

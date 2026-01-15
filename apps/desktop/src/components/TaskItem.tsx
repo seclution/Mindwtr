@@ -3,13 +3,8 @@ import {
     useTaskStore,
     generateUUID,
     Task,
-    TaskStatus,
-    TaskPriority,
-    TimeEstimate,
     TaskEditorFieldId,
     type Recurrence,
-    type RecurrenceRule,
-    type RecurrenceStrategy,
     parseRRuleString,
     getStatusColor,
     Project,
@@ -30,14 +25,13 @@ import { WEEKDAY_FULL_LABELS, WEEKDAY_ORDER } from './Task/recurrence-constants'
 import {
     DEFAULT_TASK_EDITOR_HIDDEN,
     DEFAULT_TASK_EDITOR_ORDER,
-    getRecurrenceRRuleValue,
     getRecurrenceRuleValue,
     getRecurrenceStrategyValue,
-    toDateTimeLocalValue,
 } from './Task/task-item-helpers';
 import { useTaskItemAttachments } from './Task/useTaskItemAttachments';
 import { useTaskItemRecurrence } from './Task/useTaskItemRecurrence';
 import { useTaskItemAi } from './Task/useTaskItemAi';
+import { useTaskItemEditState } from './Task/useTaskItemEditState';
 
 interface TaskItemProps {
     task: Task;
@@ -67,23 +61,6 @@ export const TaskItem = memo(function TaskItem({
     const { updateTask, deleteTask, moveTask, projects, tasks, areas, settings, duplicateTask, resetTaskChecklist, highlightTaskId, setHighlightTask, addProject } = useTaskStore();
     const { t } = useLanguage();
     const [isEditing, setIsEditing] = useState(false);
-    const [editTitle, setEditTitle] = useState(task.title);
-    const [editDueDate, setEditDueDate] = useState(toDateTimeLocalValue(task.dueDate));
-    const [editStartTime, setEditStartTime] = useState(toDateTimeLocalValue(task.startTime));
-    const [editProjectId, setEditProjectId] = useState(task.projectId || '');
-    const [editStatus, setEditStatus] = useState<TaskStatus>(task.status);
-    const [editContexts, setEditContexts] = useState(task.contexts?.join(', ') || '');
-    const [editTags, setEditTags] = useState(task.tags?.join(', ') || '');
-    const [editDescription, setEditDescription] = useState(task.description || '');
-    const [editTextDirection, setEditTextDirection] = useState(task.textDirection ?? 'auto');
-    const [showDescriptionPreview, setShowDescriptionPreview] = useState(false);
-    const [editLocation, setEditLocation] = useState(task.location || '');
-    const [editRecurrence, setEditRecurrence] = useState<RecurrenceRule | ''>(getRecurrenceRuleValue(task.recurrence));
-    const [editRecurrenceStrategy, setEditRecurrenceStrategy] = useState<RecurrenceStrategy>(getRecurrenceStrategyValue(task.recurrence));
-    const [editRecurrenceRRule, setEditRecurrenceRRule] = useState<string>(getRecurrenceRRuleValue(task.recurrence));
-    const [editTimeEstimate, setEditTimeEstimate] = useState<TimeEstimate | ''>(task.timeEstimate || '');
-    const [editPriority, setEditPriority] = useState<TaskPriority | ''>(task.priority || '');
-    const [editReviewAt, setEditReviewAt] = useState(toDateTimeLocalValue(task.reviewAt));
     const {
         editAttachments,
         attachmentError,
@@ -113,6 +90,43 @@ export const TaskItem = memo(function TaskItem({
         openImageExternally,
         closeText,
     } = useTaskItemAttachments({ task, t });
+    const {
+        editTitle,
+        setEditTitle,
+        editDueDate,
+        setEditDueDate,
+        editStartTime,
+        setEditStartTime,
+        editProjectId,
+        setEditProjectId,
+        editStatus,
+        setEditStatus,
+        editContexts,
+        setEditContexts,
+        editTags,
+        setEditTags,
+        editDescription,
+        setEditDescription,
+        editTextDirection,
+        setEditTextDirection,
+        editLocation,
+        setEditLocation,
+        editRecurrence,
+        setEditRecurrence,
+        editRecurrenceStrategy,
+        setEditRecurrenceStrategy,
+        editRecurrenceRRule,
+        setEditRecurrenceRRule,
+        editTimeEstimate,
+        setEditTimeEstimate,
+        editPriority,
+        setEditPriority,
+        editReviewAt,
+        setEditReviewAt,
+        showDescriptionPreview,
+        setShowDescriptionPreview,
+        resetEditState: resetLocalEditState,
+    } = useTaskItemEditState({ task, resetAttachmentState });
     const [isViewOpen, setIsViewOpen] = useState(false);
     const prioritiesEnabled = settings?.features?.priorities === true;
     const timeEstimatesEnabled = settings?.features?.timeEstimates === true;
@@ -215,6 +229,12 @@ export const TaskItem = memo(function TaskItem({
         setEditTags,
         setEditTimeEstimate,
     });
+
+    const resetEditState = useCallback(() => {
+        resetLocalEditState();
+        setShowCustomRecurrence(false);
+        resetAiState();
+    }, [resetLocalEditState, resetAiState, setShowCustomRecurrence]);
 
     const popularTagOptions = useMemo(() => {
         const counts = new Map<string, number>();
@@ -434,30 +454,6 @@ export const TaskItem = memo(function TaskItem({
             setIsViewOpen(false);
         }
     }, [isEditing]);
-
-    const resetEditState = () => {
-        setEditTitle(task.title);
-        setEditDueDate(toDateTimeLocalValue(task.dueDate));
-        setEditStartTime(toDateTimeLocalValue(task.startTime));
-        setEditProjectId(task.projectId || '');
-        setEditStatus(task.status);
-        setEditContexts(task.contexts?.join(', ') || '');
-        setEditTags(task.tags?.join(', ') || '');
-        setEditDescription(task.description || '');
-        setEditTextDirection(task.textDirection ?? 'auto');
-        setEditLocation(task.location || '');
-        setEditRecurrence(getRecurrenceRuleValue(task.recurrence));
-        setEditRecurrenceStrategy(getRecurrenceStrategyValue(task.recurrence));
-        setEditRecurrenceRRule(getRecurrenceRRuleValue(task.recurrence));
-        setShowCustomRecurrence(false);
-        setEditTimeEstimate(task.timeEstimate || '');
-        setEditPriority(task.priority || '');
-        setEditReviewAt(toDateTimeLocalValue(task.reviewAt));
-        resetAttachmentState(task.attachments);
-        setShowDescriptionPreview(false);
-        resetAiState();
-    };
-
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
