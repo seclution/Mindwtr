@@ -244,7 +244,7 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
         await useTaskStore.getState().updateSettings({
           lastSyncAt: now,
           lastSyncStatus: syncResult.status,
-          lastSyncError: syncResult.status === 'error' ? useTaskStore.getState().settings?.lastSyncError : undefined,
+          lastSyncError: undefined,
         });
       } catch (error) {
         console.warn('[Mobile] Failed to persist sync status', error);
