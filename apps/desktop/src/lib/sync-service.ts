@@ -188,8 +188,8 @@ const cleanupAttachmentTempFiles = async (): Promise<void> => {
         const { BaseDirectory, readDir, remove } = await import('@tauri-apps/plugin-fs');
         const entries = await readDir(ATTACHMENTS_DIR_NAME, { baseDir: BaseDirectory.Data });
         for (const entry of entries) {
-            if (entry.children) continue;
-            const name = entry.name || '';
+            if (!entry.isFile) continue;
+            const name = entry.name;
             if (!isTempAttachmentFile(name)) continue;
             try {
                 await remove(`${ATTACHMENTS_DIR_NAME}/${name}`, { baseDir: BaseDirectory.Data });
