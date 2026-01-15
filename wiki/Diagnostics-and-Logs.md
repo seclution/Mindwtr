@@ -11,6 +11,15 @@ Mindwtr includes built-in diagnostics logging to help troubleshoot sync and cras
 2. Toggle **Debug logging**
 3. Reproduce the issue
 
+**Release diagnostics builds:** Devtools and extra logging are only available if the
+desktop app was built with the `diagnostics` feature.
+
+```bash
+cd apps/desktop
+cargo tauri build --features diagnostics
+MINDWTR_DIAGNOSTICS=1 ./src-tauri/target/release/mindwtr
+```
+
 ### Mobile
 1. Open **Settings → Diagnostics**
 2. Toggle **Debug logging**

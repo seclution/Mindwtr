@@ -206,6 +206,17 @@ bun run build
 # Output: src-tauri/target/release/
 ```
 
+### Desktop (diagnostics build)
+
+Release builds disable devtools by default. To enable diagnostics/devtools, build with the
+`diagnostics` feature and opt-in at runtime:
+
+```bash
+cd apps/desktop
+cargo tauri build --features diagnostics
+MINDWTR_DIAGNOSTICS=1 ./src-tauri/target/release/mindwtr
+```
+
 ### Mobile (Android APK)
 
 ```bash
