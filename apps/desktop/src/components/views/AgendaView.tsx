@@ -56,20 +56,40 @@ export function AgendaView() {
         if (estimate.endsWith('hr')) return estimate.replace('hr', 'h');
         return estimate;
     };
+    const matchesFilters = useCallback((task: Task) => {
+        const taskTokens = [...(task.contexts || []), ...(task.tags || [])];
+        if (selectedTokens.length > 0) {
+            const matchesAll = selectedTokens.every((token) =>
+                taskTokens.some((taskToken) => matchesHierarchicalToken(token, taskToken))
+            );
+            if (!matchesAll) return false;
+        }
+        if (activePriorities.length > 0 && (!task.priority || !activePriorities.includes(task.priority))) return false;
+        if (activeTimeEstimates.length > 0 && (!task.timeEstimate || !activeTimeEstimates.includes(task.timeEstimate))) return false;
+        return true;
+    }, [selectedTokens, activePriorities, activeTimeEstimates]);
+
     const filteredActiveTasks = useMemo(() => {
-        return activeTasks.filter((task) => {
-            const taskTokens = [...(task.contexts || []), ...(task.tags || [])];
-            if (selectedTokens.length > 0) {
-                const matchesAll = selectedTokens.every((token) =>
-                    taskTokens.some((taskToken) => matchesHierarchicalToken(token, taskToken))
-                );
-                if (!matchesAll) return false;
-            }
-            if (activePriorities.length > 0 && (!task.priority || !activePriorities.includes(task.priority))) return false;
-            if (activeTimeEstimates.length > 0 && (!task.timeEstimate || !activeTimeEstimates.includes(task.timeEstimate))) return false;
-            return true;
-        });
-    }, [activeTasks, selectedTokens, activePriorities, activeTimeEstimates]);
+        return activeTasks.filter(matchesFilters);
+    }, [activeTasks, matchesFilters]);
+
+    const reviewDueCandidates = useMemo(() => {
+        const now = new Date();
+        return tasks
+            .filter((task) => {
+                if (task.deletedAt) return false;
+                if (task.status === 'done' || task.status === 'archived') return false;
+                if (task.status !== 'waiting' && task.status !== 'someday') return false;
+                if (!isDueForReview(task.reviewAt, now)) return false;
+                if (task.projectId) {
+                    const project = projectMap.get(task.projectId);
+                    if (project?.deletedAt) return false;
+                    if (project?.status === 'archived') return false;
+                }
+                return true;
+            })
+            .filter(matchesFilters);
+    }, [tasks, projectMap, matchesFilters]);
     const hasFilters = selectedTokens.length > 0 || activePriorities.length > 0 || activeTimeEstimates.length > 0;
     const showFiltersPanel = filtersOpen || hasFilters;
     const toggleTokenFilter = (token: string) => {
@@ -219,11 +239,7 @@ export function AgendaView() {
             return true;
         });
 
-        const reviewDue = filteredActiveTasks.filter(t =>
-            (t.status === 'waiting' || t.status === 'someday') &&
-            isDueForReview(t.reviewAt, now) &&
-            !t.isFocusedToday
-        );
+        const reviewDue = reviewDueCandidates.filter(t => !t.isFocusedToday);
 
         return {
             overdue: sortWith(overdue, (task) => safeParseDueDate(task.dueDate)?.getTime() ?? Number.POSITIVE_INFINITY),
@@ -231,7 +247,7 @@ export function AgendaView() {
             nextActions: sortByProjectOrder(nextActions),
             reviewDue: sortWith(reviewDue, (task) => safeParseDate(task.reviewAt)?.getTime() ?? Number.POSITIVE_INFINITY),
         };
-    }, [filteredActiveTasks, projects, prioritiesEnabled, sortByProjectOrder]);
+    }, [filteredActiveTasks, reviewDueCandidates, projects, prioritiesEnabled, sortByProjectOrder]);
     const focusedCount = focusedTasks.length;
     const top3Candidates = useMemo(() => {
         const byId = new Map<string, Task>();
