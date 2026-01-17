@@ -3,14 +3,17 @@ import { View, Text, TextInput, StyleSheet, TouchableOpacity, Modal, Alert, Pres
 import DraggableFlatList, { type RenderItemParams } from 'react-native-draggable-flatlist';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { Area, Attachment, generateUUID, Project, PRESET_TAGS, useTaskStore, validateAttachmentForUpload } from '@mindwtr/core';
+import { Area, Attachment, generateUUID, Project, PRESET_TAGS, Task, TaskStatus, useTaskStore, validateAttachmentForUpload } from '@mindwtr/core';
 import { Trash2 } from 'lucide-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Linking from 'expo-linking';
 import * as Sharing from 'expo-sharing';
 
+import { SwipeableTaskItem } from '@/components/swipeable-task-item';
+import { TaskEditModal } from '@/components/task-edit-modal';
 import { TaskList } from '../../components/task-list';
+import { useTheme } from '../../contexts/theme-context';
 import { useLanguage } from '../../contexts/language-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { MarkdownText } from '../../components/markdown-text';
@@ -18,8 +21,11 @@ import { ListSectionHeader, defaultListContentStyle } from '@/components/list-la
 import { ensureAttachmentAvailable } from '../../lib/attachment-sync';
 import { AttachmentProgressIndicator } from '../../components/AttachmentProgressIndicator';
 
+type ProjectSectionItem = { type: 'project'; data: Project } | { type: 'task'; data: Task };
+
 export default function ProjectsScreen() {
-  const { projects, tasks, areas, addProject, updateProject, deleteProject, toggleProjectFocus, addArea, updateArea, deleteArea, reorderAreas } = useTaskStore();
+  const { projects, tasks, areas, addProject, updateProject, deleteProject, toggleProjectFocus, addArea, updateArea, deleteArea, reorderAreas, updateTask, deleteTask } = useTaskStore();
+  const { isDark } = useTheme();
   const { t } = useLanguage();
   const tc = useThemeColors();
   const statusPalette: Record<Project['status'], { text: string; bg: string; border: string }> = {
@@ -38,6 +44,7 @@ export default function ProjectsScreen() {
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [linkModalVisible, setLinkModalVisible] = useState(false);
   const [linkInput, setLinkInput] = useState('');
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [showAreaPicker, setShowAreaPicker] = useState(false);
   const [showAreaManager, setShowAreaManager] = useState(false);
   const [newAreaName, setNewAreaName] = useState('');
@@ -140,6 +147,22 @@ export default function ProjectsScreen() {
     setSelectedProject({ ...selectedProject, tagIds: next });
   };
 
+  const areaTasksById = useMemo(() => {
+    const map = new Map<string, Task[]>();
+    tasks.forEach((task) => {
+      if (task.deletedAt) return;
+      if (task.status === 'done' || task.status === 'archived') return;
+      if (task.projectId) return;
+      const areaKey = task.areaId && areaById.has(task.areaId) ? task.areaId : 'no-area';
+      if (!map.has(areaKey)) map.set(areaKey, []);
+      map.get(areaKey)!.push(task);
+    });
+    map.forEach((list) => {
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    });
+    return map;
+  }, [tasks, areaById]);
+
   const groupedProjects = useMemo(() => {
     const visible = projects.filter(p => !p.deletedAt);
     const sorted = [...visible].sort((a, b) => {
@@ -163,19 +186,30 @@ export default function ProjectsScreen() {
     }
 
     const sections = sortedAreas
-      .filter((area) => (groups.get(area.id) || []).length > 0)
-      .map((area) => ({ title: area.name, areaId: area.id, data: groups.get(area.id) || [] }));
+      .filter((area) => (groups.get(area.id) || []).length > 0 || (areaTasksById.get(area.id) || []).length > 0)
+      .map((area) => {
+        const projectItems = (groups.get(area.id) || []).map((project) => ({ type: 'project' as const, data: project }));
+        const taskItems = (areaTasksById.get(area.id) || []).map((task) => ({ type: 'task' as const, data: task }));
+        return { title: area.name, areaId: area.id, data: [...projectItems, ...taskItems] };
+      });
 
     const noAreaProjects = groups.get('no-area') || [];
-    if (noAreaProjects.length > 0) {
-      sections.push({ title: t('projects.noArea'), areaId: 'no-area', data: noAreaProjects });
+    const noAreaTasks = areaTasksById.get('no-area') || [];
+    if (noAreaProjects.length > 0 || noAreaTasks.length > 0) {
+      sections.push({
+        title: t('projects.noArea'),
+        areaId: 'no-area',
+        data: [
+          ...noAreaProjects.map((project) => ({ type: 'project' as const, data: project })),
+          ...noAreaTasks.map((task) => ({ type: 'task' as const, data: task })),
+        ],
+      });
     }
 
     return sections;
-  }, [projects, t, sortedAreas, areaById, selectedTagFilter, ALL_TAGS, NO_TAGS]);
+  }, [projects, t, sortedAreas, areaById, selectedTagFilter, ALL_TAGS, NO_TAGS, areaTasksById]);
 
-  const renderProjectItem = ({ item }: { item: Project }) => {
-    const project = item;
+  const renderProjectRow = (project: Project) => {
     const projTasks = tasks.filter(t => t.projectId === project.id && t.status !== 'done' && !t.deletedAt);
     const nextAction = projTasks.find((task) => task.status === 'next');
     const showFocusedWarning = project.isFocused && !nextAction && projTasks.length > 0;
@@ -268,6 +302,27 @@ export default function ProjectsScreen() {
         </TouchableOpacity>
       </View>
     );
+  };
+
+  const renderTaskRow = (task: Task) => (
+    <View style={styles.areaTaskRow}>
+      <SwipeableTaskItem
+        task={task}
+        isDark={isDark}
+        tc={tc}
+        onPress={() => setEditingTask(task)}
+        onStatusChange={(status: TaskStatus) => updateTask(task.id, { status })}
+        onDelete={() => deleteTask(task.id)}
+        hideStatusBadge
+      />
+    </View>
+  );
+
+  const renderSectionItem = ({ item }: { item: ProjectSectionItem }) => {
+    if (item.type === 'task') {
+      return renderTaskRow(item.data);
+    }
+    return renderProjectRow(item.data);
   };
 
 
@@ -667,7 +722,7 @@ export default function ProjectsScreen() {
 
       <SectionList
         sections={groupedProjects}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => `${item.type}-${item.data.id}`}
         stickySectionHeadersEnabled={false}
         contentContainerStyle={defaultListContentStyle}
         style={{ flex: 1 }}
@@ -679,7 +734,7 @@ export default function ProjectsScreen() {
         renderSectionHeader={({ section }) => (
           <ListSectionHeader title={section.title} tc={tc} />
         )}
-        renderItem={({ item }) => renderProjectItem({ item })}
+        renderItem={({ item }) => renderSectionItem({ item })}
       />
 
       <Modal
@@ -1037,6 +1092,14 @@ export default function ProjectsScreen() {
                 </SafeAreaView>
       </Modal>
 
+      <TaskEditModal
+        visible={editingTask !== null}
+        task={editingTask}
+        onClose={() => setEditingTask(null)}
+        onSave={(taskId, updates) => updateTask(taskId, updates)}
+        defaultTab="view"
+      />
+
       <Modal
         visible={linkModalVisible}
         transparent
@@ -1355,6 +1418,9 @@ const styles = StyleSheet.create({
   areaChipText: {
     fontSize: 12,
     fontWeight: '600',
+  },
+  areaTaskRow: {
+    marginTop: 6,
   },
   input: {
     borderWidth: 1,
