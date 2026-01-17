@@ -263,12 +263,11 @@ export function ListView({ title, statusFilter }: ListViewProps) {
     }, [baseTasks, statusFilter, selectedTokens, activePriorities, activeTimeEstimates, sequentialProjectFirstTasks, projectMap, sortBy, sortByProjectOrder]);
 
     const showDeferredProjects = statusFilter === 'someday' || statusFilter === 'waiting';
-    const deferredProjects = useMemo(() => {
-        if (!showDeferredProjects) return [] as typeof projects;
-        return [...projects]
+    const deferredProjects = showDeferredProjects
+        ? [...projects]
             .filter((project) => !project.deletedAt && project.status === statusFilter)
-            .sort((a, b) => (a.order - b.order) || a.title.localeCompare(b.title));
-    }, [projects, showDeferredProjects, statusFilter]);
+            .sort((a, b) => (a.order - b.order) || a.title.localeCompare(b.title))
+        : [];
     const showDeferredProjectSection = showDeferredProjects && deferredProjects.length > 0;
     const showEmptyState = filteredTasks.length === 0 && !showDeferredProjectSection;
 

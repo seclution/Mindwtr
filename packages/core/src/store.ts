@@ -191,6 +191,7 @@ type DerivedCache = {
     key: number;
     tasksRef: Task[];
     projectsRef: Project[];
+    areasRef: Area[];
     value: DerivedState;
 };
 
@@ -1273,6 +1274,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
             updatedAt: now,
         };
         const newAllAreas = [...allAreas, newArea].sort((a, b) => a.order - b.order);
+        derivedCache = null;
         set({ areas: newAllAreas, _allAreas: newAllAreas, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: get()._allTasks, projects: get()._allProjects, areas: newAllAreas, settings: get().settings },
@@ -1302,6 +1304,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
                     return { ...project, areaId: existing.id, updatedAt: now };
                 });
                 const newVisibleProjects = newAllProjects.filter(p => !p.deletedAt);
+                derivedCache = null;
                 set({
                     areas: newAllAreas,
                     _allAreas: newAllAreas,
@@ -1323,6 +1326,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         const newAllAreas = allAreas
             .map(a => (a.id === id ? { ...a, ...updates, name: nextName, order: nextOrder, updatedAt: now } : a))
             .sort((a, b) => a.order - b.order);
+        derivedCache = null;
         set({ areas: newAllAreas, _allAreas: newAllAreas, lastDataChangeAt: changeAt });
         debouncedSave(
             { tasks: get()._allTasks, projects: get()._allProjects, areas: newAllAreas, settings: get().settings },
@@ -1347,6 +1351,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         });
         const newVisibleProjects = newAllProjects.filter(p => !p.deletedAt);
         const newVisibleTasks = newAllTasks.filter((task) => !task.deletedAt && task.status !== 'archived');
+        derivedCache = null;
         set({
             areas: newAllAreas,
             _allAreas: newAllAreas,
@@ -1387,6 +1392,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
             }));
 
         const newAllAreas = [...reordered, ...remaining];
+        derivedCache = null;
         set({ areas: newAllAreas, _allAreas: newAllAreas, lastDataChangeAt: Date.now() });
         debouncedSave(
             { tasks: get()._allTasks, projects: get()._allProjects, areas: newAllAreas, settings: get().settings },
@@ -1573,6 +1579,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
             && derivedCache.key === state.lastDataChangeAt
             && derivedCache.tasksRef === state.tasks
             && derivedCache.projectsRef === state.projects
+            && derivedCache.areasRef === state.areas
         ) {
             return derivedCache.value;
         }
@@ -1581,6 +1588,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
             key: state.lastDataChangeAt,
             tasksRef: state.tasks,
             projectsRef: state.projects,
+            areasRef: state.areas,
             value: derived,
         };
         return derived;
