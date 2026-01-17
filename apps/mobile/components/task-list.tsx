@@ -134,6 +134,7 @@ function TaskListComponent({
     const filtered = tasks.filter(t => {
       // Filter out soft-deleted tasks
       if (t.deletedAt) return false;
+      if (statusFilter === 'all' && t.status === 'reference') return false;
       const matchesStatus = statusFilter === 'all' ? true : t.status === statusFilter;
       const matchesProject = projectId ? t.projectId === projectId : true;
       if (statusFilter === 'inbox') {
@@ -513,7 +514,7 @@ function TaskListComponent({
             {selectedIdsArray.length} {t('bulk.selected')}
           </Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bulkMoveRow}>
-            {(['inbox', 'next', 'waiting', 'someday', 'done'] as TaskStatus[]).map((status) => (
+            {(['inbox', 'next', 'waiting', 'someday', 'reference', 'done'] as TaskStatus[]).map((status) => (
               <TouchableOpacity
                 key={status}
                 onPress={() => handleBatchMove(status)}

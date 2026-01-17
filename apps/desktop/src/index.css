@@ -37,6 +37,7 @@
     --status-next: 142 70% 40%;
     --status-waiting: 45 93% 47%;
     --status-someday: 270 70% 60%;
+    --status-reference: 199 89% 49%;
     --status-done: 220 10% 60%;
 
     --badge-project-bg: 214 100% 96%;
@@ -92,6 +93,7 @@
     --status-next: 142 60% 50%;
     --status-waiting: 45 90% 55%;
     --status-someday: 270 65% 70%;
+    --status-reference: 199 75% 60%;
     --status-done: 220 10% 60%;
 
     --badge-project-bg: 220 18% 24%;
@@ -135,6 +137,7 @@
     --status-next: 0 0% 0%;
     --status-waiting: 0 0% 0%;
     --status-someday: 0 0% 0%;
+    --status-reference: 0 0% 0%;
     --status-done: 0 0% 0%;
     --badge-project-bg: 0 0% 100%;
     --badge-project-fg: 0 0% 0%;
@@ -181,6 +184,7 @@
     --status-next: 140 40% 62%;
     --status-waiting: 40 70% 64%;
     --status-someday: 280 35% 70%;
+    --status-reference: 199 55% 70%;
     --status-done: 220 10% 70%;
     --badge-project-bg: 220 16% 31%;
     --badge-project-fg: 217.5 26.7% 94.1%;
@@ -223,6 +227,7 @@
     --status-next: 120 30% 45%;
     --status-waiting: 40 70% 45%;
     --status-someday: 270 40% 55%;
+    --status-reference: 199 60% 45%;
     --status-done: 0 11.3% 40%;
     --badge-project-bg: 41.7 69.7% 90%;
     --badge-project-fg: 0 11.3% 20.8%;

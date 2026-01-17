@@ -32,7 +32,7 @@ export function buildWidgetPayload(data: AppData, language: Language): TasksWidg
 
     const activeTasks = tasks.filter((task) => {
         if (task.deletedAt) return false;
-        if (task.status === 'archived' || task.status === 'done') return false;
+        if (task.status === 'archived' || task.status === 'done' || task.status === 'reference') return false;
         if (task.startTime) {
             const start = safeParseDate(task.startTime);
             if (start && start > now) return false;

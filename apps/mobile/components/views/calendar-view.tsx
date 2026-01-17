@@ -191,7 +191,7 @@ export function CalendarView() {
 	    for (const task of tasks) {
 	      if (task.deletedAt) continue;
 	      if (task.id === excludeTaskId) continue;
-	      if (task.status === 'done') continue;
+	      if (task.status === 'done' || task.status === 'reference') continue;
 	      const start = task.startTime ? safeParseDate(task.startTime) : null;
 	      if (!start) continue;
 	      if (!isSameDay(start, day)) continue;
@@ -246,7 +246,7 @@ export function CalendarView() {
 	    for (const task of tasks) {
 	      if (task.deletedAt) continue;
 	      if (task.id === excludeTaskId) continue;
-	      if (task.status === 'done') continue;
+	      if (task.status === 'done' || task.status === 'reference') continue;
 	      const start = task.startTime ? safeParseDate(task.startTime) : null;
 	      if (!start) continue;
 	      if (!isSameDay(start, day)) continue;
@@ -312,7 +312,7 @@ export function CalendarView() {
 	    return tasks
 	      .filter((task) => {
 	        if (task.deletedAt) return false;
-	        if (task.status === 'done') return false;
+	        if (task.status === 'done' || task.status === 'reference') return false;
 	        if (task.status === 'next') return false;
 	        return task.title.toLowerCase().includes(query);
 	      })
@@ -554,7 +554,7 @@ export function CalendarView() {
     const dayEvents = getExternalEventsForDate(selectedDate);
     const allDayEvents = dayEvents.filter((e) => e.allDay);
     const timedEvents = dayEvents.filter((e) => !e.allDay);
-	    const scheduledTasks = getScheduledForDate(selectedDate).filter((task) => !task.deletedAt && task.status !== 'done');
+	    const scheduledTasks = getScheduledForDate(selectedDate).filter((task) => !task.deletedAt && task.status !== 'done' && task.status !== 'reference');
 
     return (
       <View style={[styles.container, { backgroundColor: tc.bg }]}>

@@ -21,7 +21,7 @@ function normalizeReviewAtForNotifications(reviewAt: string | undefined | null):
  */
 export function getNextScheduledAt(task: Task, now: Date = new Date(), options: ScheduleOptions = {}): Date | null {
     if (task.deletedAt) return null;
-    if (task.status === 'done' || task.status === 'archived') return null;
+    if (task.status === 'done' || task.status === 'archived' || task.status === 'reference') return null;
 
     const candidates: Date[] = [];
     const start = safeParseDate(task.startTime);

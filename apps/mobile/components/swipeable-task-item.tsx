@@ -59,7 +59,7 @@ export function SwipeableTaskItem({
     const timeEstimatesEnabled = settings?.features?.timeEstimates === true;
 
     const focusedCount = useMemo(
-        () => tasks.filter((taskItem) => taskItem.isFocusedToday && !taskItem.deletedAt && taskItem.status !== 'done').length,
+        () => tasks.filter((taskItem) => taskItem.isFocusedToday && !taskItem.deletedAt && taskItem.status !== 'done' && taskItem.status !== 'reference').length,
         [tasks]
     );
 
@@ -89,7 +89,7 @@ export function SwipeableTaskItem({
             return { label: `↩ ${t('archived.restoreToInbox')}`, color: getStatusColor('inbox').text, action: 'inbox' };
         } else if (task.status === 'next') {
             return { label: `✓ ${t('common.done')}`, color: getStatusColor('done').text, action: 'done' };
-        } else if (task.status === 'waiting' || task.status === 'someday') {
+        } else if (task.status === 'waiting' || task.status === 'someday' || task.status === 'reference') {
             return { label: `▶️ ${t('status.next')}`, color: getStatusColor('next').text, action: 'next' };
         } else if (task.status === 'inbox') {
             return { label: `▶️ ${t('status.next')}`, color: getStatusColor('next').text, action: 'next' };
@@ -179,7 +179,7 @@ export function SwipeableTaskItem({
     })();
     const isStagnant = (task.pushCount ?? 0) > 3;
     const staleness = getTaskStaleness(task.createdAt);
-    const showAge = task.status !== 'done' && (staleness === 'stale' || staleness === 'very-stale');
+    const showAge = task.status !== 'done' && task.status !== 'reference' && (staleness === 'stale' || staleness === 'very-stale');
 
     const metaParts: ReactNode[] = [];
     const addMetaPart = (node: ReactNode, key: string) => {
@@ -267,7 +267,7 @@ export function SwipeableTaskItem({
         </Pressable>
     );
 
-    const quickStatusOptions: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'done'];
+    const quickStatusOptions: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'reference', 'done'];
 
     const accessibilityLabel = [
         task.title,

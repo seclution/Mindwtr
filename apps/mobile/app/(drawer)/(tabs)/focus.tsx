@@ -23,7 +23,7 @@ export default function FocusScreen() {
 
     const scheduleItems = tasks.filter((task) => {
       if (task.deletedAt) return false;
-      if (task.status === 'done') return false;
+      if (task.status === 'done' || task.status === 'reference') return false;
       const due = safeParseDueDate(task.dueDate);
       const start = safeParseDate(task.startTime);
       return Boolean(task.isFocusedToday)

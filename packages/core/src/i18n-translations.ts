@@ -14,6 +14,7 @@ const en: Record<string, string> = {
         'nav.next': 'Next Actions',
         'nav.waiting': 'Waiting For',
         'nav.someday': 'Someday/Maybe',
+        'nav.reference': 'Reference',
         'nav.calendar': 'Calendar',
         'nav.review': 'Review',
         'nav.agenda': 'Focus',
@@ -92,6 +93,7 @@ const en: Record<string, string> = {
         'list.inProgress': 'In Progress',
         'list.next': 'Next Actions',
         'list.someday': 'Someday/Maybe',
+        'list.reference': 'Reference',
         'list.waiting': 'Waiting For',
         'list.done': 'Completed',
         'list.tasks': 'Task list',
@@ -100,6 +102,7 @@ const en: Record<string, string> = {
         'list.details': 'Details',
         'list.detailsOff': 'Details off',
         'list.compact': 'Compact',
+        'reference.empty': 'No reference items yet.',
 
         // Status Labels
         'status.inbox': 'Inbox',
@@ -108,6 +111,7 @@ const en: Record<string, string> = {
         'status.in-progress': 'In Progress',
         'status.waiting': 'Waiting',
         'status.someday': 'Someday',
+        'status.reference': 'Reference',
         'status.done': 'Done',
         'status.archived': 'Archived',
         'status.active': 'Active',
@@ -850,6 +854,8 @@ const en: Record<string, string> = {
         'search.noSavedSearches': 'No saved searches yet.',
         'search.deleteConfirm': 'Delete this saved search?',
         'search.helpOperators': 'Use operators like status:, context:, tag:, project:, due:<=7d.',
+        'search.includeCompleted': 'Include Done and Archived tasks',
+        'search.includeReference': 'Include Reference tasks',
 
         // Archived
         'archived.title': 'Archived',
@@ -888,6 +894,7 @@ const zh: Record<string, string> = {
         'nav.next': '下一步行动',
         'nav.waiting': '等待中',
         'nav.someday': '将来/也许',
+        'nav.reference': '参考',
         'nav.calendar': '日历',
         'nav.review': '回顾',
         'nav.agenda': '日程',
@@ -966,6 +973,7 @@ const zh: Record<string, string> = {
         'list.inProgress': '进行中',
         'list.next': '下一步行动',
         'list.someday': '将来/也许',
+        'list.reference': '参考',
         'list.waiting': '等待中',
         'list.done': '已完成',
         'list.tasks': '任务列表',
@@ -974,6 +982,7 @@ const zh: Record<string, string> = {
         'list.details': '详情',
         'list.detailsOff': '详情关闭',
         'list.compact': '紧凑',
+        'reference.empty': '暂无参考条目。',
 
         // Status Labels
         'status.inbox': '收集箱',
@@ -982,6 +991,7 @@ const zh: Record<string, string> = {
         'status.in-progress': '进行中',
         'status.waiting': '等待中',
         'status.someday': '将来',
+        'status.reference': '参考',
         'status.done': '已完成',
         'status.archived': '归档',
         'status.active': '活跃',
@@ -1712,6 +1722,8 @@ const zh: Record<string, string> = {
         'search.noSavedSearches': '暂无已保存的搜索。',
         'search.deleteConfirm': '删除此已保存的搜索？',
         'search.helpOperators': '可用操作符：status:、context:、tag:、project:、due:<=7d 等。',
+        'search.includeCompleted': '包含已完成和归档任务',
+        'search.includeReference': '包含参考任务',
 
         // Archived
         'archived.title': '归档',

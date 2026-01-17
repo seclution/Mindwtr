@@ -8,7 +8,7 @@ type ListBulkActionsProps = {
     t: (key: string) => string;
 };
 
-const BULK_STATUS_OPTIONS: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'done'];
+const BULK_STATUS_OPTIONS: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'reference', 'done'];
 
 export function ListBulkActions({
     selectionCount,

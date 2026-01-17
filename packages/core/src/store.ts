@@ -42,6 +42,15 @@ export function applyTaskUpdates(oldTask: Task, updates: Partial<Task>, now: str
         };
     }
 
+    if (incomingStatus === 'reference') {
+        finalUpdates = {
+            ...finalUpdates,
+            status: incomingStatus,
+            projectId: undefined,
+            orderNum: undefined,
+        };
+    }
+
     if (Object.prototype.hasOwnProperty.call(updates, 'dueDate')) {
         const rescheduled = rescheduleTask(oldTask, updates.dueDate);
         finalUpdates = {
@@ -681,8 +690,9 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
      */
     addTask: async (title: string, initialProps?: Partial<Task>) => {
         const changeAt = Date.now();
+        const resolvedStatus = (initialProps?.status ?? 'inbox') as TaskStatus;
         const hasOrderNum = Object.prototype.hasOwnProperty.call(initialProps ?? {}, 'orderNum');
-        const resolvedProjectId = initialProps?.projectId;
+        const resolvedProjectId = resolvedStatus === 'reference' ? undefined : initialProps?.projectId;
         const resolvedAreaId = resolvedProjectId ? undefined : initialProps?.areaId;
         const resolvedOrderNum = !hasOrderNum && resolvedProjectId
             ? getNextProjectOrder(resolvedProjectId, get()._allTasks)
@@ -690,7 +700,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         const newTask: Task = {
             id: uuidv4(),
             title,
-            status: 'inbox',
+            status: resolvedStatus,
             taskMode: 'task',
             tags: [],
             contexts: [],
@@ -699,7 +709,8 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
             updatedAt: new Date().toISOString(),
             ...initialProps,
             areaId: resolvedAreaId,
-            orderNum: resolvedOrderNum,
+            projectId: resolvedProjectId,
+            orderNum: resolvedStatus === 'reference' ? undefined : resolvedOrderNum,
         };
 
         const newAllTasks = [...get()._allTasks, newTask];

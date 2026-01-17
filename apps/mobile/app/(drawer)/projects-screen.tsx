@@ -151,7 +151,7 @@ export default function ProjectsScreen() {
     const map = new Map<string, Task[]>();
     tasks.forEach((task) => {
       if (task.deletedAt) return;
-      if (task.status === 'done' || task.status === 'archived') return;
+      if (task.status === 'done' || task.status === 'archived' || task.status === 'reference') return;
       if (task.projectId) return;
       const areaKey = task.areaId && areaById.has(task.areaId) ? task.areaId : 'no-area';
       if (!map.has(areaKey)) map.set(areaKey, []);
@@ -210,7 +210,7 @@ export default function ProjectsScreen() {
   }, [projects, t, sortedAreas, areaById, selectedTagFilter, ALL_TAGS, NO_TAGS, areaTasksById]);
 
   const renderProjectRow = (project: Project) => {
-    const projTasks = tasks.filter(t => t.projectId === project.id && t.status !== 'done' && !t.deletedAt);
+    const projTasks = tasks.filter(t => t.projectId === project.id && t.status !== 'done' && t.status !== 'reference' && !t.deletedAt);
     const nextAction = projTasks.find((task) => task.status === 'next');
     const showFocusedWarning = project.isFocused && !nextAction && projTasks.length > 0;
     const projectColor = project.areaId ? areaById.get(project.areaId)?.color : undefined;

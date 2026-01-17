@@ -385,6 +385,7 @@ export function TaskItemDisplay({
                                 <option value="next">{t('status.next')}</option>
                                 <option value="waiting">{t('status.waiting')}</option>
                                 <option value="someday">{t('status.someday')}</option>
+                                <option value="reference">{t('status.reference')}</option>
                                 <option value="done">{t('status.done')}</option>
                             </select>
                             <button

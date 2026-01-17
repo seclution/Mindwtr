@@ -19,6 +19,7 @@ export const STATUS_COLORS: Record<TaskStatus, { bg: string; text: string; borde
     'next': { bg: '#10B98120', text: '#10B981', border: '#10B981' },
     'waiting': { bg: '#F59E0B20', text: '#F59E0B', border: '#F59E0B' },
     'someday': { bg: '#8B5CF620', text: '#8B5CF6', border: '#8B5CF6' },
+    'reference': { bg: '#0EA5E920', text: '#0EA5E9', border: '#0EA5E9' },
     'done': { bg: '#22C55E20', text: '#22C55E', border: '#22C55E' },
     'archived': { bg: '#6B728020', text: '#6B7280', border: '#6B7280' },
 };
@@ -55,7 +56,7 @@ export function rescheduleTask(task: Task, newDueDate?: string): Task {
 
 /**
  * Sort tasks by status, due date, and creation time.
- * Order: inbox → next → waiting → someday → done → archived
+ * Order: inbox → next → waiting → someday → reference → done → archived
  * Within same status: tasks with due dates first (sorted by date), then by creation time (FIFO)
  */
 export function sortTasks(tasks: Task[]): Task[] {
@@ -194,7 +195,7 @@ export function getTaskStaleness(createdAt: string): 'fresh' | 'aging' | 'stale'
  * Returns: 'overdue' | 'urgent' (24h) | 'upcoming' (72h) | 'normal' | 'done'
  */
 export function getTaskUrgency(task: Partial<Task>): 'overdue' | 'urgent' | 'upcoming' | 'normal' | 'done' {
-    if (task.status === 'done' || task.status === 'archived') return 'done';
+    if (task.status === 'done' || task.status === 'archived' || task.status === 'reference') return 'done';
     if (!task.dueDate) return 'normal';
 
     const now = new Date();

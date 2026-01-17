@@ -16,6 +16,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
     const [showSavePrompt, setShowSavePrompt] = useState(false);
     const [savePromptDefault, setSavePromptDefault] = useState('');
     const [includeCompleted, setIncludeCompleted] = useState(false);
+    const [includeReference, setIncludeReference] = useState(false);
     const [filtersOpen, setFiltersOpen] = useState(false);
     const [selectedStatuses, setSelectedStatuses] = useState<TaskStatus[]>([]);
     const [selectedArea, setSelectedArea] = useState<string>('all');
@@ -77,6 +78,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
             setSelectedIndex(0);
             setShowSavePrompt(false);
             setIncludeCompleted(false);
+            setIncludeReference(false);
             setFiltersOpen(false);
             setSelectedStatuses([]);
             setSelectedArea('all');
@@ -145,6 +147,10 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
     const includeCompletedText = includeCompletedLabel === 'search.includeCompleted'
         ? 'Include Done and Archived tasks'
         : includeCompletedLabel;
+    const includeReferenceLabel = t('search.includeReference');
+    const includeReferenceText = includeReferenceLabel === 'search.includeReference'
+        ? 'Include Reference tasks'
+        : includeReferenceLabel;
     const hasStatusFilter = selectedStatuses.length > 0;
     const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
     const matchesArea = (areaId?: string | null) => {
@@ -198,8 +204,9 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
     const filteredTasks = taskResults.filter((task) => {
         if (hasStatusFilter) {
             if (!selectedStatuses.includes(task.status)) return false;
-        } else if (!includeCompleted && ['done', 'archived'].includes(task.status)) {
-            return false;
+        } else {
+            if (!includeCompleted && ['done', 'archived'].includes(task.status)) return false;
+            if (!includeReference && task.status === 'reference') return false;
         }
         if (scope === 'project_tasks' && !task.projectId) return false;
         if (!matchesTaskArea(task)) return false;
@@ -375,6 +382,13 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
             onRemove: () => setIncludeCompleted(false),
         });
     }
+    if (includeReference) {
+        activeChips.push({
+            key: 'includeReference',
+            label: includeReferenceText,
+            onRemove: () => setIncludeReference(false),
+        });
+    }
 
     return (
         <div
@@ -445,7 +459,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
                         <div className="space-y-2">
                             <div className="text-[11px] uppercase tracking-wide text-muted-foreground/80">State</div>
                             <div className="flex flex-wrap gap-2">
-                                {(['inbox', 'next', 'waiting', 'someday', 'done', 'archived'] as TaskStatus[]).map((status) => (
+                                {(['inbox', 'next', 'waiting', 'someday', 'reference', 'done', 'archived'] as TaskStatus[]).map((status) => (
                                     <button
                                         key={status}
                                         type="button"
@@ -555,6 +569,19 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
                             </button>
                             <button
                                 type="button"
+                                aria-pressed={includeReference}
+                                onClick={() => setIncludeReference((prev) => !prev)}
+                                className={cn(
+                                    "px-2 py-1 rounded-full border text-xs transition-colors",
+                                    includeReference
+                                        ? "bg-primary/15 text-primary border-primary/40"
+                                        : "bg-muted/40 text-muted-foreground border-border hover:bg-muted/60"
+                                )}
+                            >
+                                {includeReferenceText}
+                            </button>
+                            <button
+                                type="button"
                                 onClick={() => {
                                     setSelectedStatuses([]);
                                     setSelectedArea('all');
@@ -562,6 +589,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
                                     setDuePreset('any');
                                     setScope('all');
                                     setIncludeCompleted(false);
+                                    setIncludeReference(false);
                                 }}
                                 className="text-xs text-muted-foreground hover:text-foreground"
                             >

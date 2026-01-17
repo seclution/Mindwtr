@@ -24,6 +24,7 @@ const STATUS_BORDER: Record<TaskStatus, string> = {
     next: 'border-t-[hsl(var(--status-next))]',
     waiting: 'border-t-[hsl(var(--status-waiting))]',
     someday: 'border-t-[hsl(var(--status-someday))]',
+    reference: 'border-t-[hsl(var(--status-reference))]',
     done: 'border-t-[hsl(var(--status-done))]',
     archived: 'border-t-[hsl(var(--status-archived))]',
 };

@@ -70,10 +70,14 @@ export default function SearchScreen() {
     ? ftsResults
     : fallbackResults;
   const { tasks: taskResults, projects: projectResults } = effectiveResults;
-    const totalResults = projectResults.length + taskResults.length;
+    const includeReference = /\bstatus:reference\b/i.test(trimmedQuery);
+    const filteredTaskResults = includeReference
+        ? taskResults
+        : taskResults.filter((task) => task.status !== 'reference');
+    const totalResults = projectResults.length + filteredTaskResults.length;
     const results = trimmedQuery === '' ? [] : [
         ...projectResults.map(p => ({ type: 'project' as const, item: p })),
-        ...taskResults.map(t => ({ type: 'task' as const, item: t })),
+        ...filteredTaskResults.map(t => ({ type: 'task' as const, item: t })),
     ].slice(0, 50);
     const isTruncated = totalResults > results.length;
 
@@ -123,6 +127,7 @@ export default function SearchScreen() {
                 else if (status === 'next') router.push('/focus');
                 else if (status === 'waiting') router.push('/waiting');
                 else if (status === 'someday') router.push('/someday');
+                else if (status === 'reference') router.push('/reference');
                 else if (status === 'archived') router.push('/archived');
                 else router.push('/focus');
             }

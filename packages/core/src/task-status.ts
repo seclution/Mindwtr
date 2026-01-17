@@ -1,14 +1,15 @@
 import type { Task, TaskStatus } from './types';
 
-export const TASK_STATUS_VALUES: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'done', 'archived'];
+export const TASK_STATUS_VALUES: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'reference', 'done', 'archived'];
 export const TASK_STATUS_SET = new Set<TaskStatus>(TASK_STATUS_VALUES);
 export const TASK_STATUS_ORDER: Record<TaskStatus, number> = {
     inbox: 0,
     next: 1,
     waiting: 2,
     someday: 3,
-    done: 4,
-    archived: 5,
+    reference: 4,
+    done: 5,
+    archived: 6,
 };
 
 const LEGACY_STATUS_MAP: Record<string, TaskStatus> = {
@@ -20,13 +21,13 @@ const LEGACY_STATUS_MAP: Record<string, TaskStatus> = {
 };
 
 export function normalizeTaskStatus(value: unknown): TaskStatus {
-    if (value === 'inbox' || value === 'next' || value === 'waiting' || value === 'someday' || value === 'done' || value === 'archived') {
+    if (value === 'inbox' || value === 'next' || value === 'waiting' || value === 'someday' || value === 'reference' || value === 'done' || value === 'archived') {
         return value;
     }
 
     if (typeof value === 'string') {
         const lowered = value.toLowerCase().trim();
-        if (lowered === 'inbox' || lowered === 'next' || lowered === 'waiting' || lowered === 'someday' || lowered === 'done' || lowered === 'archived') {
+        if (lowered === 'inbox' || lowered === 'next' || lowered === 'waiting' || lowered === 'someday' || lowered === 'reference' || lowered === 'done' || lowered === 'archived') {
             return lowered as TaskStatus;
         }
         const mapped = LEGACY_STATUS_MAP[lowered];

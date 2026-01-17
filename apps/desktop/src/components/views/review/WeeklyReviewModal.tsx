@@ -398,7 +398,7 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
                         <p className="text-muted-foreground">{t('review.projectsHint')}</p>
                         <div className="space-y-4">
                             {orderedProjects.map((project) => {
-                                const projectTasks = tasks.filter((task) => task.projectId === project.id && task.status !== 'done');
+                                const projectTasks = tasks.filter((task) => task.projectId === project.id && task.status !== 'done' && task.status !== 'reference');
                                 const hasNextAction = projectTasks.some((task) => task.status === 'next');
 
                                 return (

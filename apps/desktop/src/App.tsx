@@ -231,6 +231,8 @@ function App() {
                 return <AgendaView />;
             case 'someday':
                 return <ListView title={t('list.someday')} statusFilter="someday" />;
+            case 'reference':
+                return <ListView title={t('list.reference')} statusFilter="reference" />;
             case 'waiting':
                 return <ListView title={t('list.waiting')} statusFilter="waiting" />;
             case 'done':

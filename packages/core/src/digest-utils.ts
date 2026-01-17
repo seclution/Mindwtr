@@ -30,7 +30,7 @@ export function getDailyDigestSummary(
 
     for (const task of tasks) {
         if (task.deletedAt) continue;
-        if (task.status === 'done' || task.status === 'archived') continue;
+        if (task.status === 'done' || task.status === 'archived' || task.status === 'reference') continue;
         if (!isTaskInActiveProject(task, projectMap)) continue;
 
         if (task.isFocusedToday) focusToday += 1;

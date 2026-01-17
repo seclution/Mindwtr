@@ -39,7 +39,7 @@ export function DailyReviewGuideModal({ onClose }: DailyReviewGuideModalProps) {
 
     const projectMap = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
 
-    const activeTasks = tasks.filter((task) => !task.deletedAt && isTaskInActiveProject(task, projectMap));
+    const activeTasks = tasks.filter((task) => !task.deletedAt && task.status !== 'reference' && isTaskInActiveProject(task, projectMap));
     const inboxTasks = useMemo(() => {
         const now = new Date();
         return activeTasks.filter((task) => {

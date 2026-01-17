@@ -56,6 +56,7 @@ export default function MenuScreen() {
     contexts: '#8B5CF6',
     waiting: '#F2B705',
     someday: '#6366F1',
+    reference: '#0EA5E9',
     archived: '#22C55E',
     trash: '#EF4444',
     settings: '#64748B',
@@ -72,6 +73,7 @@ export default function MenuScreen() {
         <MenuRow label={t('nav.contexts')} icon="circle" iconColor={iconColors.contexts} tc={tc} onPress={() => router.push('/contexts')} />
         <MenuRow label={t('nav.waiting')} icon="pause.circle.fill" iconColor={iconColors.waiting} tc={tc} onPress={() => router.push('/waiting')} />
         <MenuRow label={t('nav.someday')} icon="arrow.up.circle.fill" iconColor={iconColors.someday} tc={tc} onPress={() => router.push('/someday')} />
+        <MenuRow label={t('nav.reference')} icon="book.closed.fill" iconColor={iconColors.reference} tc={tc} onPress={() => router.push('/reference')} />
         <MenuRow label={t('nav.archived')} icon="checkmark.circle.fill" iconColor={iconColors.archived} tc={tc} onPress={() => router.push('/archived')} />
         <MenuRow label={t('nav.trash')} icon="trash.fill" iconColor={iconColors.trash} tc={tc} onPress={() => router.push('/trash')} />
         <MenuRow label={t('nav.settings')} icon="gearshape.fill" iconColor={iconColors.settings} tc={tc} onPress={() => router.push('/settings')} isLast />

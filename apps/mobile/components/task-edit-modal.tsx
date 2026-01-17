@@ -70,12 +70,13 @@ interface TaskEditModalProps {
     defaultTab?: 'task' | 'view';
 }
 
-const STATUS_OPTIONS: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'done'];
+const STATUS_OPTIONS: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'reference', 'done'];
 const COMPACT_STATUS_LABELS: Record<TaskStatus, string> = {
     inbox: 'Inbox',
     next: 'Next',
     waiting: 'Wait',
     someday: 'Later',
+    reference: 'Ref',
     done: 'Done',
     archived: 'Archived',
 };

@@ -174,7 +174,7 @@ export function ProjectsView() {
             return acc;
         }, {} as Record<string, Task[]>);
         tasks.forEach(task => {
-            if (task.projectId && !task.deletedAt && task.status !== 'done') {
+            if (task.projectId && !task.deletedAt && task.status !== 'done' && task.status !== 'reference') {
                 if (map[task.projectId]) {
                     map[task.projectId].push(task);
                 }
@@ -182,7 +182,7 @@ export function ProjectsView() {
         });
         const filteredAreaTasks = selectedArea === ALL_AREAS ? [] : tasks.filter((task) => {
             if (task.deletedAt) return false;
-            if (task.status === 'archived' || task.status === 'done') return false;
+            if (task.status === 'archived' || task.status === 'done' || task.status === 'reference') return false;
             if (task.projectId) return false;
             if (selectedArea === NO_AREA) {
                 return !task.areaId || !areaById.has(task.areaId);
@@ -191,7 +191,14 @@ export function ProjectsView() {
         });
         const visibleProjects = projects.filter(p => !p.deletedAt);
         const hasNoArea = visibleProjects.some((project) => !project.areaId || !areaById.has(project.areaId))
-            || tasks.some((task) => !task.projectId && (!task.areaId || !areaById.has(task.areaId)) && !task.deletedAt);
+            || tasks.some((task) => (
+                !task.projectId
+                && (!task.areaId || !areaById.has(task.areaId))
+                && !task.deletedAt
+                && task.status !== 'archived'
+                && task.status !== 'done'
+                && task.status !== 'reference'
+            ));
         return {
             tasksByProject: map,
             areaTasks: filteredAreaTasks,
@@ -296,7 +303,7 @@ export function ProjectsView() {
         }).then((result) => {
             if (cancelled) return;
             setProjectAllTasks(result);
-            setProjectTasks(result.filter((task) => task.status !== 'done'));
+            setProjectTasks(result.filter((task) => task.status !== 'done' && task.status !== 'reference'));
         }).catch(() => {
             if (cancelled) return;
             setProjectAllTasks([]);

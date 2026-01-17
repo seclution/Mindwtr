@@ -44,7 +44,7 @@ export function AgendaView() {
 
     // Filter active tasks
     const { activeTasks, allTokens } = useMemo(() => {
-        const active = tasks.filter(t => !t.deletedAt && t.status !== 'done' && isTaskInActiveProject(t, projectMap));
+        const active = tasks.filter(t => !t.deletedAt && t.status !== 'done' && t.status !== 'reference' && isTaskInActiveProject(t, projectMap));
         const taskTokens = active.flatMap(t => [...(t.contexts || []), ...(t.tags || [])]);
         return {
             activeTasks: active,
@@ -78,7 +78,7 @@ export function AgendaView() {
         const reviewDue = tasks
             .filter((task) => {
                 if (task.deletedAt) return false;
-                if (task.status === 'done' || task.status === 'archived') return false;
+                if (task.status === 'done' || task.status === 'archived' || task.status === 'reference') return false;
                 if (!isDueForReview(task.reviewAt, now)) return false;
                 if (task.projectId) {
                     const project = projectMap.get(task.projectId);

@@ -524,13 +524,14 @@ export const TaskItem = memo(function TaskItem({
                 recurrenceValue.rrule = editRecurrenceRRule;
             }
             const nextTextDirection = editTextDirection === 'auto' ? undefined : editTextDirection;
+            const nextProjectId = editStatus === 'reference' ? '' : editProjectId;
             updateTask(task.id, {
                 title: editTitle,
                 status: editStatus,
                 dueDate: editDueDate || undefined,
                 startTime: editStartTime || undefined,
-                projectId: editProjectId || undefined,
-                areaId: editProjectId ? undefined : (editAreaId || undefined),
+                projectId: nextProjectId || undefined,
+                areaId: nextProjectId ? undefined : (editAreaId || undefined),
                 contexts: editContexts.split(',').map(c => c.trim()).filter(Boolean),
                 tags: editTags.split(',').map(c => c.trim()).filter(Boolean),
                 description: editDescription || undefined,

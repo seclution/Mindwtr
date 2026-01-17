@@ -32,7 +32,7 @@ export function ContextsView() {
 
   // ...
 
-  const activeTasks = tasks.filter((t) => t.status !== 'done' && !t.deletedAt);
+  const activeTasks = tasks.filter((t) => t.status !== 'done' && t.status !== 'reference' && !t.deletedAt);
   const matchesSelected = (task: Task, context: string) => {
     const tokens = [...(task.contexts || []), ...(task.tags || [])];
     return tokens.some(token => matchesHierarchicalToken(context, token));

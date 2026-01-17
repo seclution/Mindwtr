@@ -68,6 +68,7 @@ export function ReviewView() {
             tasks.forEach((task) => {
                 nextTasksById[task.id] = task;
                 if (task.deletedAt) return;
+                if (task.status === 'reference') return;
                 if (!isTaskInActiveProject(task, nextProjectMap)) return;
                 nextActiveTasks.push(task);
                 nextStatusCounts.all += 1;
@@ -91,7 +92,7 @@ export function ReviewView() {
 
     const selectedIdsArray = useMemo(() => Array.from(multiSelectedIds), [multiSelectedIds]);
 
-    const bulkStatuses: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'done'];
+    const bulkStatuses: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'reference', 'done'];
 
     const exitSelectionMode = useCallback(() => {
         setSelectionMode(false);

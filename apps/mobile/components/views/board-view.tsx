@@ -253,7 +253,7 @@ export function BoardView() {
 
   // Filter active tasks and group by status
   const tasksByStatus = useMemo(() => {
-    const activeTasks = tasks.filter(t => !t.deletedAt);
+    const activeTasks = tasks.filter(t => !t.deletedAt && t.status !== 'reference');
     const grouped: Record<string, Task[]> = {};
     COLUMNS.forEach(col => {
       grouped[col.id] = activeTasks.filter(t => t.status === col.id);

@@ -58,7 +58,7 @@ export function CalendarView() {
 
     const isCalendarTaskVisible = (task: Task) => {
         if (task.deletedAt) return false;
-        if (task.status === 'done' || task.status === 'archived') return false;
+        if (task.status === 'done' || task.status === 'archived' || task.status === 'reference') return false;
         if (!isTaskInActiveProject(task, projectMap)) return false;
         return true;
     };

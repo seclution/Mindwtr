@@ -13,6 +13,7 @@ const STATUS_TOKENS: Record<string, TaskStatus> = {
     next: 'next',
     waiting: 'waiting',
     someday: 'someday',
+    reference: 'reference',
     done: 'done',
 };
 

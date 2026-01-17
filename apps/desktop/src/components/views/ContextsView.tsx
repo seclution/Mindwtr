@@ -28,7 +28,7 @@ export function ContextsView() {
     // Filter out deleted tasks first
     const projectMap = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
     const activeTasks = tasks.filter(t => !t.deletedAt && isTaskInActiveProject(t, projectMap));
-    const baseTasks = activeTasks.filter(t => t.status !== 'done' && t.status !== 'archived');
+    const baseTasks = activeTasks.filter(t => t.status !== 'done' && t.status !== 'archived' && t.status !== 'reference');
     const scopedTasks = statusFilter === 'all'
         ? baseTasks
         : baseTasks.filter(t => t.status === statusFilter);
