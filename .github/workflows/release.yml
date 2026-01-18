@@ -510,7 +510,7 @@ jobs:
           AppsAndFeaturesEntries:
             - ProductCode: Mindwtr
           InstallationMetadata:
-            DefaultInstallLocation: '%LOCALAPPDATA%\\Programs\\Mindwtr'
+            - DefaultInstallLocation: '%LOCALAPPDATA%\\Programs\\Mindwtr'
           Installers:
             - Architecture: x64
               InstallerUrl: ${INSTALLER_URL}
@@ -551,7 +551,7 @@ jobs:
           ManifestVersion: 1.10.0
           EOF
 
-          cat <<EOF | sed 's/^          //' > "$MANIFEST_DIR/dongdongbh.Mindwtr.version.yaml"
+          cat <<EOF | sed 's/^          //' > "$MANIFEST_DIR/dongdongbh.Mindwtr.yaml"
           # yaml-language-server: \$schema=https://aka.ms/winget-manifest.version.1.10.0.schema.json
           PackageIdentifier: dongdongbh.Mindwtr
           PackageVersion: ${VERSION}
