@@ -108,7 +108,7 @@ Mindwtr is built to be **simple by default and powerful when you need it**. We f
 ## Installation
 
 <p align="center">
-  <a href="https://github.com/microsoft/winget-pkgs/tree/master/manifests/d/dongdongbh/Mindwtr">
+  <a href="https://winstall.app/apps/dongdongbh.Mindwtr">
     <img src="https://img.shields.io/winget/v/dongdongbh.Mindwtr?label=Winget&logo=windows&logoColor=white&color=00D2FF" alt="Winget Version">
   </a>
 
