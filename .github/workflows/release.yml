@@ -510,7 +510,7 @@ jobs:
           AppsAndFeaturesEntries:
             - ProductCode: Mindwtr
           InstallationMetadata:
-            - DefaultInstallLocation: '%LOCALAPPDATA%\\Programs\\Mindwtr'
+            DefaultInstallLocation: '%LOCALAPPDATA%\\Programs\\Mindwtr'
           Installers:
             - Architecture: x64
               InstallerUrl: ${INSTALLER_URL}
