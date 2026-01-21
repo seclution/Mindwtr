@@ -119,7 +119,8 @@ Create projects for multi-step outcomes:
 1. Go to Projects view
 2. Add a new project with name and color
 3. Add tasks to the project
-4. Toggle Sequential/Parallel mode:
+4. (Optional) Create **Sections** to group tasks by phase or sub‑outcome
+5. Toggle Sequential/Parallel mode:
    - **Sequential:** Only first task shows in Focus view
    - **Parallel:** All tasks show in Focus view
 

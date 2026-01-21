@@ -305,6 +305,8 @@ Manage multi-step outcomes.
 
 - View all tasks in the project
 - Add new tasks
+- Group tasks with **Sections** inside the project
+- Tap a task to assign a **Section** in the task editor
 - Edit project settings (name, color, notes)
 - Assign **Area of Focus** (e.g., Work, Personal)
 - Add **Project tags** for filtering

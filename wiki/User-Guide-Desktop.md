@@ -57,6 +57,7 @@ Multi-step outcomes containing related tasks.
 - **Areas of Focus** — Group projects by higher-level areas (e.g., Work, Health) to keep your sidebar organized.
 - **Project tags** — Tag projects and filter by tag
 - **Support notes** — Add planning notes and reference material
+- **Sections** — Optional task groupings inside a project (phases, milestones, sub-workstreams)
 - **Review date** — Set tickler dates for project review
 - **Complete/Archive** — Mark projects as done or archive them
 
@@ -303,6 +304,7 @@ Configure notifications in Settings:
 | **Attachments**   | Files and links attached to the task                |
 | **Location**      | Physical location                                   |
 | **Project**       | Parent project assignment                           |
+| **Section**       | Optional group within a project                     |
 
 **Attachments:** The **Add link** field accepts both URLs and local file paths (e.g., `/home/user/doc.pdf`, `C:\Users\you\file.txt`, or `file://...`).
 See [[Attachments]] for sync, cleanup, and audio notes.
