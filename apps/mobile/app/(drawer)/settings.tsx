@@ -560,10 +560,29 @@ export default function SettingsPage() {
 
     const GITHUB_RELEASES_API = 'https://api.github.com/repos/dongdongbh/Mindwtr/releases/latest';
     const GITHUB_RELEASES_URL = 'https://github.com/dongdongbh/Mindwtr/releases/latest';
+    const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=tech.dongdongbh.mindwtr';
+    const PLAY_STORE_MARKET_URL = 'market://details?id=tech.dongdongbh.mindwtr';
 
     const handleCheckUpdates = async () => {
         setIsCheckingUpdate(true);
         try {
+            if (Platform.OS === 'android') {
+                const canOpenMarket = await Linking.canOpenURL(PLAY_STORE_MARKET_URL);
+                const targetUrl = canOpenMarket ? PLAY_STORE_MARKET_URL : PLAY_STORE_URL;
+                Alert.alert(
+                    localize('Check for Updates', '检查更新'),
+                    localize(
+                        'Updates on Android are managed by Google Play. Open the Play Store listing?',
+                        'Android 更新由 Google Play 管理。是否打开应用页面？'
+                    ),
+                    [
+                        { text: localize('Later', '稍后'), style: 'cancel' },
+                        { text: localize('Open', '打开'), onPress: () => Linking.openURL(targetUrl) }
+                    ]
+                );
+                return;
+            }
+
             const response = await fetch(GITHUB_RELEASES_API, {
                 headers: {
                     'Accept': 'application/vnd.github.v3+json',
