@@ -224,7 +224,7 @@ export default function SettingsPage() {
     const timeEstimatePresets: TimeEstimate[] = (settings.gtd?.timeEstimatePresets?.length
         ? settings.gtd.timeEstimatePresets
         : defaultTimeEstimatePresets) as TimeEstimate[];
-    const defaultCaptureMethod = settings.gtd?.defaultCaptureMethod ?? 'audio';
+    const defaultCaptureMethod = settings.gtd?.defaultCaptureMethod ?? 'text';
     const saveAudioAttachments = settings.gtd?.saveAudioAttachments !== false;
     const autoArchiveDays = Number.isFinite(settings.gtd?.autoArchiveDays)
         ? Math.max(0, Math.floor(settings.gtd?.autoArchiveDays as number))

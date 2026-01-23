@@ -10,7 +10,7 @@ import { useLanguage } from '../../../contexts/language-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 
 export default function InboxScreen() {
-  const { tasks } = useTaskStore();
+  const { tasks, settings } = useTaskStore();
   const { t } = useLanguage();
   const tc = useThemeColors();
   const [showProcessing, setShowProcessing] = useState(false);
@@ -25,6 +25,11 @@ export default function InboxScreen() {
       return true;
     });
   }, [tasks]);
+
+  const defaultCaptureMethod = settings.gtd?.defaultCaptureMethod ?? 'text';
+  const emptyHint = defaultCaptureMethod === 'audio'
+    ? t('inbox.emptyAddHintVoice')
+    : t('inbox.emptyAddHint');
 
   const processButton = inboxTasks.length > 0 ? (
     <TouchableOpacity
@@ -49,7 +54,7 @@ export default function InboxScreen() {
         showSort={false}
         allowAdd={false}
         showQuickAddHelp={false}
-        emptyText={t('inbox.emptyAddHint')}
+        emptyText={emptyHint}
         headerAccessory={processButton}
         defaultEditTab="task"
       />

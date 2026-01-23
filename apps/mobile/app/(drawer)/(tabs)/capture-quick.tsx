@@ -15,7 +15,7 @@ export default function CaptureQuickScreen() {
     if (openedRef.current) return;
     openedRef.current = true;
 
-    const defaultCapture = settings.gtd?.defaultCaptureMethod ?? 'audio';
+    const defaultCapture = settings.gtd?.defaultCaptureMethod ?? 'text';
     const mode = typeof params.mode === 'string' ? params.mode : undefined;
     const autoParam = typeof params.autoRecord === 'string' ? params.autoRecord : undefined;
     const autoRecord = mode

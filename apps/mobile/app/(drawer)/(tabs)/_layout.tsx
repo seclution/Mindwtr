@@ -51,7 +51,7 @@ export default function TabLayout() {
   const inactiveTint = tc.tabIconDefault;
   const activeIndicator = tc.tint;
   const captureColor = tc.tint;
-  const defaultCapture = settings.gtd?.defaultCaptureMethod ?? 'audio';
+  const defaultCapture = settings.gtd?.defaultCaptureMethod ?? 'text';
   const defaultAutoRecord = defaultCapture === 'audio';
 
   return (
