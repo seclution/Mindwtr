@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback } from 'react';
+import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity, Modal, Alert, Pressable, ScrollView, SectionList } from 'react-native';
 import DraggableFlatList, { type RenderItemParams } from 'react-native-draggable-flatlist';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -25,7 +25,7 @@ import { AttachmentProgressIndicator } from '../../components/AttachmentProgress
 type ProjectSectionItem = { type: 'project'; data: Project };
 
 export default function ProjectsScreen() {
-  const { projects, tasks, areas, addProject, updateProject, deleteProject, toggleProjectFocus, addArea, updateArea, deleteArea, reorderAreas, updateTask, deleteTask } = useTaskStore();
+  const { projects, tasks, areas, addProject, updateProject, deleteProject, toggleProjectFocus, addArea, updateArea, deleteArea, reorderAreas, updateTask, deleteTask, setHighlightTask } = useTaskStore();
   const { isDark } = useTheme();
   const { t } = useLanguage();
   const tc = useThemeColors();
@@ -49,7 +49,8 @@ export default function ProjectsScreen() {
   const [showAreaManager, setShowAreaManager] = useState(false);
   const [newAreaName, setNewAreaName] = useState('');
   const [newAreaColor, setNewAreaColor] = useState('#3b82f6');
-  const { projectId } = useLocalSearchParams<{ projectId?: string }>();
+  const { projectId, taskId } = useLocalSearchParams<{ projectId?: string; taskId?: string }>();
+  const lastOpenedTaskIdRef = useRef<string | null>(null);
   const ALL_TAGS = '__all__';
   const NO_TAGS = '__none__';
   const ALL_AREAS = '__all__';
@@ -138,6 +139,17 @@ export default function ProjectsScreen() {
       openProject(project);
     }
   }, [projectId, projects, openProject]);
+
+  useEffect(() => {
+    if (!taskId || typeof taskId !== 'string') return;
+    if (!selectedProject || selectedProject.id !== projectId) return;
+    if (lastOpenedTaskIdRef.current === taskId) return;
+    const task = tasks.find((item) => item.id === taskId && !item.deletedAt);
+    if (!task || task.projectId !== selectedProject.id) return;
+    lastOpenedTaskIdRef.current = taskId;
+    setHighlightTask(task.id);
+    setEditingTask(task);
+  }, [taskId, projectId, selectedProject, tasks, setHighlightTask]);
 
 
   const sortAreasByName = () => {

@@ -186,26 +186,26 @@ export default function SearchScreen() {
 
     const handleSelect = (result: { type: 'project' | 'task', item: Project | Task }) => {
         if (result.type === 'project') {
-            // Navigate to Projects screen - communicating selection is tricky without Global State for UI
-            // For now, just go to Projects screen
-            router.push('/projects');
-        } else {
-            const task = result.item as Task;
-            setHighlightTask(task.id);
-            if (task.projectId) {
-                router.push('/projects');
-            } else {
-                // Map status to route
-                const status = task.status;
-                if (status === 'inbox') router.push('/inbox');
-                else if (status === 'next') router.push('/focus');
-                else if (status === 'waiting') router.push('/waiting');
-                else if (status === 'someday') router.push('/someday');
-                else if (status === 'reference') router.push('/reference');
-                else if (status === 'archived') router.push('/archived');
-                else router.push('/focus');
-            }
+            router.push({ pathname: '/projects-screen', params: { projectId: result.item.id } });
+            return;
         }
+
+        const task = result.item as Task;
+        setHighlightTask(task.id);
+        if (task.projectId) {
+            router.push({ pathname: '/projects-screen', params: { projectId: task.projectId, taskId: task.id } });
+            return;
+        }
+
+        // Map status to route
+        const status = task.status;
+        if (status === 'inbox') router.push('/inbox');
+        else if (status === 'next') router.push('/focus');
+        else if (status === 'waiting') router.push('/waiting');
+        else if (status === 'someday') router.push('/someday');
+        else if (status === 'reference') router.push('/reference');
+        else if (status === 'archived') router.push('/archived');
+        else router.push('/focus');
     };
 
     const statusOptions: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'reference', 'done', 'archived'];
