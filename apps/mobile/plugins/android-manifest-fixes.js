@@ -18,6 +18,7 @@ module.exports = function withAndroidManifestFixes(config) {
       return config;
     }
 
+    let didUpdateMlkit = false;
     application.activity.forEach((activity) => {
       if (activity.$ && activity.$['android:name'] === MLKIT_ACTIVITY) {
         // Remove forced orientation for large screens.
@@ -30,8 +31,18 @@ module.exports = function withAndroidManifestFixes(config) {
         } else {
           activity.$['tools:remove'] = 'android:screenOrientation';
         }
+        didUpdateMlkit = true;
       }
     });
+
+    if (!didUpdateMlkit) {
+      application.activity.push({
+        $: {
+          'android:name': MLKIT_ACTIVITY,
+          'tools:remove': 'android:screenOrientation',
+        },
+      });
+    }
 
     return config;
   });
