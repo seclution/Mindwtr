@@ -154,22 +154,27 @@ export function InboxProcessingModal({ visible, onClose }: InboxProcessingModalP
   }, [visible, processingQueue, currentIndex]);
 
   const moveToNext = () => {
-    if (currentIndex + 1 < processingQueue.length) {
-      setCurrentIndex(currentIndex + 1);
-      setProcessingStep('refine');
-      setPendingStartDate(null);
-      setShowDelegateDatePicker(false);
-      setDelegateWho('');
-      setDelegateFollowUpDate(null);
-      const nextTask = processingQueue[currentIndex + 1];
-      setSelectedContexts(nextTask?.contexts ?? []);
-      setNewContext('');
-      setProjectSearch('');
-      setProcessingTitle(nextTask?.title ?? '');
-      setProcessingDescription(nextTask?.description ?? '');
-    } else {
+    if (processingQueue.length === 0) {
       handleClose();
+      return;
     }
+    const nextTask = processingQueue[currentIndex + 1];
+    if (!nextTask) {
+      handleClose();
+      return;
+    }
+    // Keep the same index since the current task will be removed from the queue.
+    setCurrentIndex(currentIndex);
+    setProcessingStep('refine');
+    setPendingStartDate(null);
+    setShowDelegateDatePicker(false);
+    setDelegateWho('');
+    setDelegateFollowUpDate(null);
+    setSelectedContexts(nextTask?.contexts ?? []);
+    setNewContext('');
+    setProjectSearch('');
+    setProcessingTitle(nextTask?.title ?? '');
+    setProcessingDescription(nextTask?.description ?? '');
   };
 
   const handleSkip = () => {
