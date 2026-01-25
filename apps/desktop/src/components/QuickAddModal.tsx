@@ -211,6 +211,7 @@ export function QuickAddModal() {
                     updates.projectId = match.id;
                 } else {
                     const created = await addProjectNow(trimmed, '#94a3b8');
+                    if (!created) return;
                     updates.projectId = created.id;
                 }
             }
@@ -509,6 +510,7 @@ export function QuickAddModal() {
         let projectId = baseProps.projectId;
         if (!projectId && projectTitle) {
             const created = await addProject(projectTitle, '#94a3b8');
+            if (!created) return;
             projectId = created.id;
         }
         const mergedProps: Partial<Task> = { status: 'inbox', ...baseProps, projectId };
@@ -601,7 +603,7 @@ export function QuickAddModal() {
                             contexts={PRESET_CONTEXTS}
                             onCreateProject={async (title) => {
                                 const created = await addProject(title, '#94a3b8');
-                                return created.id;
+                                return created?.id ?? null;
                             }}
                             onChange={(next) => setValue(next)}
                             onKeyDown={(e) => {

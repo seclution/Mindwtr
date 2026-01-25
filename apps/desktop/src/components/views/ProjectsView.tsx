@@ -636,6 +636,7 @@ export function ProjectsView() {
             if (!props.projectId) initialProps.projectId = selectedProject.id;
             if (!initialProps.projectId && projectTitle) {
                 const created = await addProject(projectTitle, '#94a3b8');
+                if (!created) return;
                 initialProps.projectId = created.id;
             }
             if (sectionId && initialProps.projectId === selectedProject.id) {
@@ -841,7 +842,7 @@ export function ProjectsView() {
                                         contexts={allContexts}
                                         onCreateProject={async (title) => {
                                             const created = await addProject(title, '#94a3b8');
-                                            return created.id;
+                                            return created?.id ?? null;
                                         }}
                                     />
 

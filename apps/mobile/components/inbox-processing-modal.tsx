@@ -987,6 +987,7 @@ export function InboxProcessingModal({ visible, onClose }: InboxProcessingModalP
                         return;
                       }
                       const created = await addProject(title, '#94a3b8');
+                      if (!created) return;
                       handleSetProject(created.id);
                       setProjectSearch('');
                     }}
@@ -999,6 +1000,7 @@ export function InboxProcessingModal({ visible, onClose }: InboxProcessingModalP
                         const title = projectSearch.trim();
                         if (!title) return;
                         const created = await addProject(title, '#94a3b8');
+                        if (!created) return;
                         handleSetProject(created.id);
                         setProjectSearch('');
                       }}

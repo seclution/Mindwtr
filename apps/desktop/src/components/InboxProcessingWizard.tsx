@@ -52,7 +52,7 @@ type InboxProcessingWizardProps = {
     setProjectSearch: (value: string) => void;
     projects: Project[];
     filteredProjects: Project[];
-    addProject: (title: string, color: string) => Promise<Project>;
+    addProject: (title: string, color: string) => Promise<Project | null>;
     handleSetProject: (projectId: string | null) => void;
     hasExactProjectMatch: boolean;
     areaById: Map<string, Area>;
@@ -540,6 +540,7 @@ export function InboxProcessingWizard({
                                             return;
                                         }
                                         const created = await addProject(title, '#94a3b8');
+                                        if (!created) return;
                                         handleSetProject(created.id);
                                         setProjectSearch('');
                                     }}
@@ -553,6 +554,7 @@ export function InboxProcessingWizard({
                                             const title = projectSearch.trim();
                                             if (!title) return;
                                             const created = await addProject(title, '#94a3b8');
+                                            if (!created) return;
                                             handleSetProject(created.id);
                                             setProjectSearch('');
                                         }}

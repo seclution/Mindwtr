@@ -11,7 +11,7 @@ interface TaskEditProjectPickerProps {
     t: (key: string) => string;
     onClose: () => void;
     onSelectProject: (projectId?: string) => void;
-    onCreateProject: (title: string) => Promise<Project>;
+    onCreateProject: (title: string) => Promise<Project | null>;
 }
 
 export function TaskEditProjectPicker({
@@ -53,6 +53,7 @@ export function TaskEditProjectPicker({
         if (!title || hasExactProjectMatch) return;
         try {
             const created = await onCreateProject(title);
+            if (!created) return;
             onSelectProject(created.id);
             onClose();
         } catch (error) {

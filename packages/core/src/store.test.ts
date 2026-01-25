@@ -219,6 +219,8 @@ describe('TaskStore', () => {
         it('should create, update, and delete sections with auto-ordering', async () => {
             const { addProject, addSection, updateSection, deleteSection, addTask } = useTaskStore.getState();
             const project = await addProject('Section Project', '#123456');
+            expect(project).not.toBeNull();
+            if (!project) return;
 
             const first = await addSection(project.id, 'Phase 1');
             const second = await addSection(project.id, 'Phase 2');
@@ -249,6 +251,8 @@ describe('TaskStore', () => {
             expect(invalid).toBeNull();
 
             const project = await addProject('Valid Project', '#abcdef');
+            expect(project).not.toBeNull();
+            if (!project) return;
             const blank = await addSection(project.id, '   ');
             expect(blank).toBeNull();
             expect(useTaskStore.getState().sections).toHaveLength(0);
@@ -258,6 +262,9 @@ describe('TaskStore', () => {
             const { addProject, addSection, addTask, updateTask } = useTaskStore.getState();
             const projectA = await addProject('Project A', '#111111');
             const projectB = await addProject('Project B', '#222222');
+            expect(projectA).not.toBeNull();
+            expect(projectB).not.toBeNull();
+            if (!projectA || !projectB) return;
             const sectionA = await addSection(projectA.id, 'Section A');
             if (!sectionA) return;
 
@@ -274,6 +281,8 @@ describe('TaskStore', () => {
         it('should clear sectionId when deleting a project', async () => {
             const { addProject, addSection, addTask, deleteProject } = useTaskStore.getState();
             const project = await addProject('Delete Project', '#333333');
+            expect(project).not.toBeNull();
+            if (!project) return;
             const section = await addSection(project.id, 'Cleanup');
             if (!section) return;
 

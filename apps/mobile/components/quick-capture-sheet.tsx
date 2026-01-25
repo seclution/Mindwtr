@@ -144,6 +144,7 @@ export function QuickCaptureSheet({
 
     if (!initialPropsMerged.projectId && projectTitle) {
       const created = await addProject(projectTitle, '#94a3b8');
+      if (!created) return { title: finalTitle, props: initialPropsMerged };
       initialPropsMerged.projectId = created.id;
     }
 
@@ -240,6 +241,7 @@ export function QuickCaptureSheet({
           updates.projectId = match.id;
         } else {
           const created = await addProjectNow(trimmed, '#94a3b8');
+          if (!created) return;
           updates.projectId = created.id;
         }
       }
@@ -657,6 +659,7 @@ export function QuickCaptureSheet({
                   const title = projectQuery.trim();
                   if (!title) return;
                   const created = await addProject(title, '#94a3b8');
+                  if (!created) return;
                   setProjectId(created.id);
                   setShowProjectPicker(false);
                 }}

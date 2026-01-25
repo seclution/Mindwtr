@@ -167,7 +167,7 @@ interface TaskStore {
 
     // Project Actions
     /** Add a new project */
-    addProject: (title: string, color: string, initialProps?: Partial<Project>) => Promise<Project>;
+    addProject: (title: string, color: string, initialProps?: Partial<Project>) => Promise<Project | null>;
     /** Update a project */
     updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
     /** Delete a project */
@@ -739,6 +739,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
      */
     addTask: async (title: string, initialProps?: Partial<Task>) => {
         const changeAt = Date.now();
+        const trimmedTitle = typeof title === 'string' ? title.trim() : '';
+        if (!trimmedTitle) {
+            set({ error: 'Task title is required' });
+            return;
+        }
         const resolvedStatus = (initialProps?.status ?? 'inbox') as TaskStatus;
         const hasOrderNum = Object.prototype.hasOwnProperty.call(initialProps ?? {}, 'orderNum');
         const resolvedProjectId = initialProps?.projectId;
@@ -766,7 +771,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
                 : initialProps?.orderNum;
             const newTask: Task = {
                 id: uuidv4(),
-                title,
+                title: trimmedTitle,
                 status: resolvedStatus,
                 taskMode: 'task',
                 tags: [],
@@ -1179,9 +1184,26 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
      */
     addProject: async (title: string, color: string, initialProps?: Partial<Project>) => {
         const changeAt = Date.now();
+        const trimmedTitle = typeof title === 'string' ? title.trim() : '';
+        if (!trimmedTitle) {
+            set({ error: 'Project title is required' });
+            return null;
+        }
+        const normalizedTitle = trimmedTitle.toLowerCase();
         let snapshot: AppData | null = null;
         let createdProject: Project | null = null;
+        let existingProject: Project | null = null;
         set((state) => {
+            const duplicate = state._allProjects.find(
+                (project) =>
+                    !project.deletedAt &&
+                    typeof project.title === 'string' &&
+                    project.title.trim().toLowerCase() === normalizedTitle
+            );
+            if (duplicate) {
+                existingProject = duplicate;
+                return state;
+            }
             const targetAreaId = initialProps?.areaId;
             const maxOrder = state._allProjects
                 .filter((project) => (project.areaId ?? undefined) === (targetAreaId ?? undefined))
@@ -1190,7 +1212,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
             const now = new Date().toISOString();
             const newProject: Project = {
                 id: uuidv4(),
-                title,
+                title: trimmedTitle,
                 color,
                 order: baseOrder,
                 status: 'active',
@@ -1205,10 +1227,13 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
             snapshot = buildSaveSnapshot(state, { projects: newAllProjects });
             return { projects: newVisibleProjects, _allProjects: newAllProjects, lastDataChangeAt: changeAt };
         });
+        if (existingProject) {
+            return existingProject;
+        }
         if (snapshot) {
             debouncedSave(snapshot, (msg) => set({ error: msg }));
         }
-        return createdProject as Project;
+        return createdProject;
     },
 
     /**

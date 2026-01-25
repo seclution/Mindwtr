@@ -489,6 +489,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
             const initialProps: Partial<Task> = { ...props };
             if (!initialProps.projectId && projectTitle) {
                 const created = await addProject(projectTitle, '#94a3b8');
+                if (!created) return;
                 initialProps.projectId = created.id;
             }
             // Only set status if we have an explicit filter and parser didn't set one
@@ -759,7 +760,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                     t={t}
                     onCreateProject={async (title) => {
                         const created = await addProject(title, '#94a3b8');
-                        return created.id;
+                        return created?.id ?? null;
                     }}
                     onChange={(next) => {
                         setNewTaskTitle(next);

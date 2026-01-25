@@ -11,7 +11,7 @@ type InboxProcessorProps = {
     projects: Project[];
     areas: Area[];
     settings?: AppData['settings'];
-    addProject: (title: string, color: string) => Promise<Project>;
+    addProject: (title: string, color: string) => Promise<Project | null>;
     updateTask: (id: string, updates: Partial<Task>) => Promise<void>;
     deleteTask: (id: string) => Promise<void>;
     allContexts: string[];
@@ -376,6 +376,7 @@ export function InboxProcessor({
         }
         const existing = projects.find((project) => project.title.toLowerCase() === projectTitle.toLowerCase());
         const project = existing ?? await addProject(projectTitle, '#94a3b8');
+        if (!project) return;
         applyProcessingEdits({
             title: nextAction,
             status: 'next',

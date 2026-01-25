@@ -364,7 +364,7 @@ export const TaskItem = memo(function TaskItem({
         const existing = projects.find((project) => project.title.toLowerCase() === trimmed.toLowerCase());
         if (existing) return existing.id;
         const created = await addProject(trimmed, DEFAULT_PROJECT_COLOR);
-        return created.id;
+        return created?.id ?? null;
     }, [addProject, projects]);
     const handleCreateArea = useCallback(async (name: string) => {
         const trimmed = name.trim();

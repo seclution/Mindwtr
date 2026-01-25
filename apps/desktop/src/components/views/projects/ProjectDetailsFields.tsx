@@ -20,7 +20,7 @@ type ProjectDetailsFieldsProps = {
     onSubmitProjectTask: (value: string) => Promise<void> | void;
     projects: Project[];
     contexts: string[];
-    onCreateProject: (title: string) => Promise<string>;
+    onCreateProject: (title: string) => Promise<string | null>;
 };
 
 export function ProjectDetailsFields({

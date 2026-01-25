@@ -375,6 +375,7 @@ function TaskListComponent({
     if (!props.projectId && projectId) initialProps.projectId = projectId;
     if (!initialProps.projectId && projectTitle) {
       const created = await addProject(projectTitle, '#94a3b8');
+      if (!created) return;
       initialProps.projectId = created.id;
     }
     if (copilotContext) {

@@ -9,7 +9,7 @@ type ListQuickAddProps = {
     onChange: (value: string) => void;
     onSubmit: (event: FormEvent) => void;
     onOpenAudio: () => void;
-    onCreateProject: (title: string) => Promise<string>;
+    onCreateProject: (title: string) => Promise<string | null>;
     inputRef: RefObject<HTMLInputElement | null>;
     projects: Project[];
     contexts: string[];
