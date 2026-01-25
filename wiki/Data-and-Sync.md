@@ -53,6 +53,7 @@ Sync via a shared JSON file with any folder-based sync service:
 #### Syncthing Notes (Recommended Setup)
 
 Syncthing works well with Mindwtr, but the initial setup order matters.
+Devices must be able to reach each other: best on the same subnet/LAN, or via a relay/mesh VPN (e.g., Nebula or Tailscale) if you want remote syncing.
 
 **Recommended flow:**
 1. Create a single Syncthing folder (e.g., `Mindwtr/`) and let it fully sync.
@@ -71,6 +72,17 @@ Syncthing creates duplicate folders when both devices create or modify the same 
 
 **Important:** Don’t sync `~/.local/share/mindwtr` directly. Mobile storage is sandboxed. Use the file sync folder + `data.json` instead.
 If you already synced the app data directory, switch to a dedicated sync folder and re-select it in Settings.
+
+#### Dropbox / Google Drive on Android (File Sync)
+
+Dropbox and Google Drive do **not** provide WebDAV. If you want to use them with file sync on Android, you need a bridge app that keeps a local folder in sync (so Mindwtr can read/write `data.json` directly).
+
+Examples:
+- **Dropsync** (Dropbox)
+- **Autosync** (Google Drive)
+- **FolderSync** (generic)
+
+Then point Mindwtr to the local synced folder in **Settings → Data & Sync**.
 
 #### OneDrive on Android (Recommended Setup)
 

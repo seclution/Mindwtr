@@ -221,6 +221,7 @@ iOS 构建需要 Apple Developer 账号（$99/年），目前仅提供模拟器�
 ## 文档
 
 - 📚 [Wiki](https://github.com/dongdongbh/Mindwtr/wiki) - 完整用户指南
+- 🔄 [数据与同步](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync)
 - 🚀 [快速开始](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started)
 - 💡 [GTD 最佳实践](https://github.com/dongdongbh/Mindwtr/wiki/GTD-Best-Practices)
 - 🤖 [AI 助手](https://github.com/dongdongbh/Mindwtr/wiki/AI-Assistant)

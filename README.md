@@ -224,6 +224,7 @@ Sync via File (Dropbox, etc.) or WebDAV (Nextcloud, etc.) can be configured in S
 ## Documentation
 
 - 📚 [Wiki](https://github.com/dongdongbh/Mindwtr/wiki) - Complete user guide
+- 🔄 [Data & Sync](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync)
 - 🚀 [Getting Started](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started)
 - 💡 [GTD Best Practices](https://github.com/dongdongbh/Mindwtr/wiki/GTD-Best-Practices)
 - 🤖 [AI Assistant](https://github.com/dongdongbh/Mindwtr/wiki/AI-Assistant)
