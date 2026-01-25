@@ -111,7 +111,7 @@ node apps/mcp-server/dist/index.js --db "/path/to/mindwtr.db"
 
 ## Available Tools
 
-When connected, the AI agent has access to these tools:
+When connected, the AI agent has access to these tools. By default the server is **read-only**; pass `--write` to enable any write tool.
 
 ### Read Tools
 - **`mindwtr.list_tasks`**: List tasks with filters (status, project, date range, search).
@@ -120,10 +120,139 @@ When connected, the AI agent has access to these tools:
 
 ### Write Tools (Requires `--write`)
 - **`mindwtr.add_task`**: Create a new task. Supports natural language `quickAdd` (e.g., "Buy milk @errands /due:tomorrow").
-- **`mindwtr.update_task`**: Update an existing task.
+- **`mindwtr.update_task`**: Update an existing task (supports clearing fields with `null`).
 - **`mindwtr.complete_task`**: Mark a task as done.
 - **`mindwtr.delete_task`**: Soft-delete a task.
 - **`mindwtr.restore_task`**: Restore a soft-deleted task.
+
+---
+
+## Tool Reference
+
+All tools return JSON in the `content.text` field. Parse the JSON to get the actual payload.
+
+### `mindwtr.list_tasks`
+**Input fields**
+- `status`: `inbox | next | waiting | someday | done | archived`
+- `projectId`: string
+- `includeDeleted`: boolean
+- `limit`: number
+- `offset`: number
+- `search`: string
+- `dueDateFrom`: ISO string
+- `dueDateTo`: ISO string
+- `sortBy`: `updatedAt | createdAt | dueDate | title | priority`
+- `sortOrder`: `asc | desc`
+
+**Example**
+```json
+{
+  "status": "next",
+  "limit": 20,
+  "offset": 0,
+  "sortBy": "updatedAt",
+  "sortOrder": "desc"
+}
+```
+
+**Response**
+```json
+{
+  "tasks": [
+    {
+      "id": "task-uuid",
+      "title": "Follow up with design",
+      "status": "next",
+      "updatedAt": "2026-01-25T03:45:57.246Z"
+    }
+  ]
+}
+```
+
+### `mindwtr.list_projects`
+**Input fields**
+- none
+
+**Response**
+```json
+{
+  "projects": [
+    {
+      "id": "project-uuid",
+      "title": "Mindwtr",
+      "status": "active"
+    }
+  ]
+}
+```
+
+### `mindwtr.get_task`
+**Input fields**
+- `id`: string (task UUID)
+- `includeDeleted`: boolean (optional)
+
+**Example**
+```json
+{ "id": "task-uuid" }
+```
+
+### `mindwtr.add_task` (write)
+**Input fields**
+- `title`: string (required if `quickAdd` omitted)
+- `quickAdd`: string (required if `title` omitted)
+- `status`: `inbox | next | waiting | someday | done | archived`
+- `projectId`: string
+- `dueDate`: ISO string
+- `startTime`: ISO string
+- `contexts`: string[]
+- `tags`: string[]
+- `description`: string
+- `priority`: string
+- `timeEstimate`: string (e.g. `30m`, `2h`)
+
+**Example**
+```json
+{
+  "quickAdd": "Send invoice +Acme /due:tomorrow 9am #finance"
+}
+```
+
+### `mindwtr.update_task` (write)
+**Input fields**
+- `id`: string (task UUID)
+- `title`, `status`, `projectId`, `dueDate`, `startTime`, `contexts`, `tags`, `description`, `priority`, `timeEstimate`, `reviewAt`, `isFocusedToday`
+
+**Notes**
+- Use `null` to clear fields like `projectId`, `dueDate`, `startTime`, `contexts`, and `tags`.
+
+**Example**
+```json
+{
+  "id": "task-uuid",
+  "status": "waiting",
+  "reviewAt": "2026-01-27T09:00:00.000Z"
+}
+```
+
+### `mindwtr.complete_task` (write)
+**Input fields**
+- `id`: string (task UUID)
+
+### `mindwtr.delete_task` (write)
+**Input fields**
+- `id`: string (task UUID)
+
+### `mindwtr.restore_task` (write)
+**Input fields**
+- `id`: string (task UUID)
+
+---
+
+## Output Format Notes
+
+- Tool outputs are JSON strings, not structured MCP values. Your client should parse `content[0].text`.
+- Task/project IDs are UUIDs from the local SQLite database.
+- Dates are ISO 8601 strings (UTC).
 
 ---
 
