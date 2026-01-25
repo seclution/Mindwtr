@@ -775,6 +775,7 @@ export function TaskItemFieldRenderer({
                                         checklistDirtyRef.current = false;
                                         updateTask(taskId, { checklist: newList });
                                     }}
+                                    aria-label={t('common.delete')}
                                     className="opacity-0 group-hover/item:opacity-100 text-muted-foreground hover:text-destructive p-1"
                                 >
                                     <Trash2 className="w-3 h-3" />

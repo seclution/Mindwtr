@@ -62,6 +62,7 @@ export function ListQuickAdd({
                     type="submit"
                     disabled={!value.trim()}
                     className="p-1.5 bg-primary text-primary-foreground rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors"
+                    aria-label={t('common.add')}
                 >
                     <Plus className="w-4 h-4" />
                 </button>
