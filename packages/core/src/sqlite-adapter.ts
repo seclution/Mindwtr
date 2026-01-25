@@ -34,6 +34,7 @@ const fromJson = <T>(value: unknown, fallback: T): T => {
 const toBool = (value?: boolean) => (value ? 1 : 0);
 const fromBool = (value: unknown) => Boolean(value);
 const READ_PAGE_SIZE = 1000;
+const FTS_LOCK_TTL_MS = 5 * 60 * 1000;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -114,6 +115,22 @@ export class SqliteAdapter {
             offset += READ_PAGE_SIZE;
         }
         return rows;
+    }
+
+    private async acquireFtsLock(): Promise<string | null> {
+        const owner = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const now = Date.now();
+        await this.client.run(
+            'CREATE TABLE IF NOT EXISTS fts_lock (id INTEGER PRIMARY KEY, owner TEXT, acquiredAt INTEGER)'
+        );
+        await this.client.run('DELETE FROM fts_lock WHERE acquiredAt < ?', [now - FTS_LOCK_TTL_MS]);
+        await this.client.run('INSERT OR IGNORE INTO fts_lock (id, owner, acquiredAt) VALUES (1, ?, ?)', [owner, now]);
+        const row = await this.client.get<{ owner?: string }>('SELECT owner FROM fts_lock WHERE id = 1');
+        return row?.owner === owner ? owner : null;
+    }
+
+    private async releaseFtsLock(owner: string): Promise<void> {
+        await this.client.run('DELETE FROM fts_lock WHERE id = 1 AND owner = ?', [owner]);
     }
 
     async ensureSchema() {
@@ -293,28 +310,35 @@ export class SqliteAdapter {
 
             if (!needsTaskRebuild && !needsProjectRebuild) return;
 
-            await this.client.run('BEGIN');
+            const lockOwner = await this.acquireFtsLock();
+            if (!lockOwner) return;
+
             try {
-                if (needsTaskRebuild) {
-                    // Use FTS5 delete-all command for contentless tables (content='')
-                    await this.client.run("INSERT INTO tasks_fts(tasks_fts) VALUES('delete-all')");
-                    await this.client.run(
-                        `INSERT INTO tasks_fts (id, title, description, tags, contexts)
-                         SELECT id, title, coalesce(description, ''), coalesce(tags, ''), coalesce(contexts, '') FROM tasks`
-                    );
+                await this.client.run('BEGIN');
+                try {
+                    if (needsTaskRebuild) {
+                        // Use FTS5 delete-all command for contentless tables (content='')
+                        await this.client.run("INSERT INTO tasks_fts(tasks_fts) VALUES('delete-all')");
+                        await this.client.run(
+                            `INSERT INTO tasks_fts (id, title, description, tags, contexts)
+                             SELECT id, title, coalesce(description, ''), coalesce(tags, ''), coalesce(contexts, '') FROM tasks`
+                        );
+                    }
+                    if (needsProjectRebuild) {
+                        // Use FTS5 delete-all command for contentless tables (content='')
+                        await this.client.run("INSERT INTO projects_fts(projects_fts) VALUES('delete-all')");
+                        await this.client.run(
+                            `INSERT INTO projects_fts (id, title, supportNotes, tagIds, areaTitle)
+                             SELECT id, title, coalesce(supportNotes, ''), coalesce(tagIds, ''), coalesce(areaTitle, '') FROM projects`
+                        );
+                    }
+                    await this.client.run('COMMIT');
+                } catch (error) {
+                    await this.client.run('ROLLBACK');
+                    throw error;
                 }
-                if (needsProjectRebuild) {
-                    // Use FTS5 delete-all command for contentless tables (content='')
-                    await this.client.run("INSERT INTO projects_fts(projects_fts) VALUES('delete-all')");
-                    await this.client.run(
-                        `INSERT INTO projects_fts (id, title, supportNotes, tagIds, areaTitle)
-                         SELECT id, title, coalesce(supportNotes, ''), coalesce(tagIds, ''), coalesce(areaTitle, '') FROM projects`
-                    );
-                }
-                await this.client.run('COMMIT');
-            } catch (error) {
-                await this.client.run('ROLLBACK');
-                throw error;
+            } finally {
+                await this.releaseFtsLock(lockOwner);
             }
         } catch (error) {
             console.warn('[SQLite] Failed to populate FTS index:', error);
