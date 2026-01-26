@@ -1,5 +1,6 @@
 {
   "name": "mobile",
+  "license": "AGPL-3.0-only",
   "main": "index.js",
   "version": "0.6.0",
   "scripts": {

@@ -3186,7 +3186,7 @@ export default function SettingsPage() {
                         </View>
                         <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
                             <Text style={[styles.settingLabel, { color: tc.text }]}>{localize('License', '许可证')}</Text>
-                            <Text style={[styles.settingValue, { color: tc.secondaryText }]}>MIT</Text>
+                            <Text style={[styles.settingValue, { color: tc.secondaryText }]}>AGPL-3.0</Text>
                         </View>
                         <TouchableOpacity
                             style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}

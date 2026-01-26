@@ -88,7 +88,7 @@ export function SettingsAboutPage({
             <div className="border-t border-border/50"></div>
             <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">{t.license}</span>
-                <span className="font-medium">MIT</span>
+                <span className="font-medium">AGPL-3.0</span>
             </div>
             <div className="border-t border-border/50"></div>
             <div className="flex justify-between items-center">

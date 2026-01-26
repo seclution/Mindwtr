@@ -12,7 +12,7 @@ Mindwtr is a cross-platform Getting Things Done (GTD) productivity app that help
 
 ### Is Mindwtr free?
 
-Yes! Mindwtr is open source and free to use under the MIT license.
+Yes! Mindwtr is open source and free to use under the AGPL-3.0 license.
 
 ### Is there a roadmap or upcoming features page?
 

@@ -578,7 +578,7 @@ jobs:
           Author: dongdongbh
           PackageName: Mindwtr
           PackageUrl: https://github.com/dongdongbh/Mindwtr
-          License: MIT
+          License: AGPL-3.0
           LicenseUrl: https://github.com/dongdongbh/Mindwtr/blob/HEAD/LICENSE
           ShortDescription: A complete Getting Things Done (GTD) productivity system.
           Description: A complete Getting Things Done (GTD) productivity system.
@@ -610,7 +610,7 @@ jobs:
           Author: dongdongbh
           PackageName: Mindwtr
           PackageUrl: https://github.com/dongdongbh/Mindwtr
-          License: MIT
+          License: AGPL-3.0
           LicenseUrl: https://github.com/dongdongbh/Mindwtr/blob/HEAD/LICENSE
           ShortDescription: 完整的 GTD（搞定）任务管理系统。
           Description: 完整的 GTD（搞定）任务管理系统。

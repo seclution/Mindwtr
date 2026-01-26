@@ -188,4 +188,4 @@ All notable changes to Mindwtr will be documented in this file.
 
 ## License
 
-MIT © [dongdongbh](https://dongdongbh.tech)
+AGPL-3.0 © [dongdongbh](https://dongdongbh.tech)

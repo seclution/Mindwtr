@@ -9,7 +9,7 @@
 *Mind Like Water*
 
 [![GitHub](https://img.shields.io/badge/GitHub-Mindwtr-blue?logo=github)](https://github.com/dongdongbh/Mindwtr)
-[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/dongdongbh/Mindwtr/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/License-AGPL%20v3-blue)](https://github.com/dongdongbh/Mindwtr/blob/main/LICENSE)
 
 </div>
 
