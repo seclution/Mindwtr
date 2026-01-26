@@ -232,7 +232,6 @@ export function ListView({ title, statusFilter }: ListViewProps) {
         return perf.measure('filteredTasks', () => {
             const now = new Date();
             const allowDeferredProjectTasks = statusFilter === 'done' || statusFilter === 'archived';
-            const hideProjectTasksInDeferredList = statusFilter === 'someday' || statusFilter === 'waiting';
             const filtered = baseTasks.filter(t => {
                 // Always filter out soft-deleted tasks
                 if (t.deletedAt) return false;
@@ -240,7 +239,6 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                 if (statusFilter !== 'all' && t.status !== statusFilter) return false;
                 // Respect statusFilter (handled above).
                 if (!allowDeferredProjectTasks && !isTaskInActiveProject(t, projectMap)) return false;
-                if (hideProjectTasksInDeferredList && t.projectId && projectMap.get(t.projectId)) return false;
 
                 if (statusFilter === 'inbox') {
                     const start = safeParseDate(t.startTime);
