@@ -658,7 +658,7 @@ export default function SettingsPage() {
                 const entryMap = new Map(entries);
                 const storedAvailable = entryMap.get(UPDATE_BADGE_AVAILABLE_KEY) === 'true';
                 const storedLatest = entryMap.get(UPDATE_BADGE_LATEST_KEY) ?? '';
-                const isValid = storedAvailable && storedLatest && compareVersions(storedLatest, currentVersion) > 0;
+                const isValid = storedAvailable && Boolean(storedLatest) && compareVersions(storedLatest, currentVersion) > 0;
                 setHasUpdateBadge(isValid);
                 if (storedAvailable && !isValid) {
                     AsyncStorage.setItem(UPDATE_BADGE_AVAILABLE_KEY, 'false').catch(logSettingsWarn);
@@ -980,7 +980,7 @@ export default function SettingsPage() {
                 {showIndicator && (
                     <View
                         accessibilityLabel={localize('Update available', '有可用更新')}
-                        accessibilityRole="status"
+                        accessibilityRole="text"
                         style={styles.updateDot}
                     />
                 )}
