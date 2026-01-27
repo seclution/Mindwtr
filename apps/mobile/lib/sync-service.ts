@@ -112,25 +112,58 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
           fileSyncPath = `${trimmed}/${SYNC_FILE_NAME}`;
         }
       }
+      if (backend === 'webdav') {
+        const url = await AsyncStorage.getItem(WEBDAV_URL_KEY);
+        if (!url) throw new Error('WebDAV URL not configured');
+        syncUrl = normalizeWebdavUrl(url);
+        const username = (await AsyncStorage.getItem(WEBDAV_USERNAME_KEY)) || '';
+        const password = (await AsyncStorage.getItem(WEBDAV_PASSWORD_KEY)) || '';
+        webdavConfig = { url: syncUrl, username, password };
+      }
+      if (backend === 'cloud') {
+        const url = await AsyncStorage.getItem(CLOUD_URL_KEY);
+        if (!url) throw new Error('Self-hosted URL not configured');
+        syncUrl = normalizeCloudUrl(url);
+        const token = (await AsyncStorage.getItem(CLOUD_TOKEN_KEY)) || '';
+        cloudConfig = { url: syncUrl, token };
+      }
+
+      // Pre-sync local attachments so cloudKeys exist before writing remote data.
+      step = 'attachments_prepare';
+      try {
+        const localData = await mobileStorage.getData();
+        let preMutated = false;
+        if (backend === 'webdav' && webdavConfig?.url) {
+          const baseSyncUrl = getBaseSyncUrl(webdavConfig.url);
+          preMutated = await syncWebdavAttachments(localData, webdavConfig, baseSyncUrl);
+        } else if (backend === 'cloud' && cloudConfig?.url) {
+          const baseSyncUrl = getCloudBaseUrl(cloudConfig.url);
+          preMutated = await syncCloudAttachments(localData, cloudConfig, baseSyncUrl);
+        } else if (backend === 'file' && fileSyncPath) {
+          preMutated = await syncFileAttachments(localData, fileSyncPath);
+        }
+        if (preMutated) {
+          await mobileStorage.saveData(localData);
+          wroteLocal = true;
+        }
+      } catch (error) {
+        logSyncWarning('Attachment pre-sync warning', error);
+      }
       const syncResult = await performSyncCycle({
         readLocal: async () => await mobileStorage.getData(),
         readRemote: async () => {
-          if (backend === 'webdav') {
-            const url = await AsyncStorage.getItem(WEBDAV_URL_KEY);
-            if (!url) throw new Error('WebDAV URL not configured');
-            syncUrl = normalizeWebdavUrl(url);
-            const username = (await AsyncStorage.getItem(WEBDAV_USERNAME_KEY)) || '';
-            const password = (await AsyncStorage.getItem(WEBDAV_PASSWORD_KEY)) || '';
-            webdavConfig = { url: syncUrl, username, password };
-            return await webdavGetJson<AppData>(syncUrl, { username, password, timeoutMs: DEFAULT_SYNC_TIMEOUT_MS });
+          if (backend === 'webdav' && webdavConfig?.url) {
+            return await webdavGetJson<AppData>(webdavConfig.url, {
+              username: webdavConfig.username,
+              password: webdavConfig.password,
+              timeoutMs: DEFAULT_SYNC_TIMEOUT_MS,
+            });
           }
-          if (backend === 'cloud') {
-            const url = await AsyncStorage.getItem(CLOUD_URL_KEY);
-            if (!url) throw new Error('Self-hosted URL not configured');
-            syncUrl = normalizeCloudUrl(url);
-            const token = (await AsyncStorage.getItem(CLOUD_TOKEN_KEY)) || '';
-            cloudConfig = { url: syncUrl, token };
-            return await cloudGetJson<AppData>(syncUrl, { token, timeoutMs: DEFAULT_SYNC_TIMEOUT_MS });
+          if (backend === 'cloud' && cloudConfig?.url) {
+            return await cloudGetJson<AppData>(cloudConfig.url, {
+              token: cloudConfig.token,
+              timeoutMs: DEFAULT_SYNC_TIMEOUT_MS,
+            });
           }
           if (!fileSyncPath) {
             throw new Error('No sync folder configured');

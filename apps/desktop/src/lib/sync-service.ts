@@ -1221,6 +1221,33 @@ export class SyncService {
             if (backend === 'off') {
                 return { success: true };
             }
+            const webdavConfig = backend === 'webdav' ? await SyncService.getWebDavConfig() : null;
+            const cloudConfig = backend === 'cloud' ? await SyncService.getCloudConfig() : null;
+            const syncPath = backend === 'file' ? await SyncService.getSyncPath() : '';
+            const fileBaseDir = backend === 'file' ? getFileSyncDir(syncPath) : '';
+
+            // Pre-sync local attachments so cloudKeys exist before writing remote data.
+            if (isTauriRuntime() && (backend === 'webdav' || backend === 'file' || backend === 'cloud')) {
+                step = 'attachments_prepare';
+                try {
+                    const localData = await tauriInvoke<AppData>('get_data');
+                    let preMutated = false;
+                    if (backend === 'webdav' && webdavConfig?.url) {
+                        const baseUrl = getBaseSyncUrl(webdavConfig.url);
+                        preMutated = await syncAttachments(localData, webdavConfig, baseUrl);
+                    } else if (backend === 'file' && fileBaseDir) {
+                        preMutated = await syncFileAttachments(localData, fileBaseDir);
+                    } else if (backend === 'cloud' && cloudConfig?.url) {
+                        const baseUrl = getCloudBaseUrl(cloudConfig.url);
+                        preMutated = await syncCloudAttachments(localData, cloudConfig, baseUrl);
+                    }
+                    if (preMutated) {
+                        await tauriInvoke('save_data', { data: localData });
+                    }
+                } catch (error) {
+                    logSyncWarning('Attachment pre-sync warning', error);
+                }
+            }
             const syncResult = await performSyncCycle({
                 readLocal: async () => (
                     isTauriRuntime()
@@ -1230,31 +1257,32 @@ export class SyncService {
                 readRemote: async () => {
                     if (backend === 'webdav') {
                         if (isTauriRuntime()) {
-                            const { url } = await SyncService.getWebDavConfig();
-                            if (!url) {
+                            if (!webdavConfig?.url) {
                                 throw new Error('WebDAV URL not configured');
                             }
-                            syncUrl = url;
+                            syncUrl = webdavConfig.url;
                             return await tauriInvoke<AppData>('webdav_get_json');
                         }
-                        const { url, username, password } = await SyncService.getWebDavConfig();
-                        if (!url) {
+                        if (!webdavConfig?.url) {
                             throw new Error('WebDAV URL not configured');
                         }
-                        const normalizedUrl = normalizeWebdavUrl(url);
+                        const normalizedUrl = normalizeWebdavUrl(webdavConfig.url);
                         syncUrl = normalizedUrl;
                         const fetcher = await getTauriFetch();
-                        return await webdavGetJson<AppData>(normalizedUrl, { username, password: password || '', fetcher });
+                        return await webdavGetJson<AppData>(normalizedUrl, {
+                            username: webdavConfig.username,
+                            password: webdavConfig.password || '',
+                            fetcher,
+                        });
                     }
                     if (backend === 'cloud') {
-                        const { url, token } = await SyncService.getCloudConfig();
-                        if (!url) {
+                        if (!cloudConfig?.url) {
                             throw new Error('Self-hosted URL not configured');
                         }
-                        const normalizedUrl = normalizeCloudUrl(url);
+                        const normalizedUrl = normalizeCloudUrl(cloudConfig.url);
                         syncUrl = normalizedUrl;
                         const fetcher = await getTauriFetch();
-                        return await cloudGetJson<AppData>(normalizedUrl, { token, fetcher });
+                        return await cloudGetJson<AppData>(normalizedUrl, { token: cloudConfig.token, fetcher });
                     }
                     if (!isTauriRuntime()) {
                         throw new Error('File sync is not available in the web app.');
@@ -1332,16 +1360,14 @@ export class SyncService {
                             }
                         }
                     } else if (backend === 'file') {
-                        const syncPath = await SyncService.getSyncPath();
-                        const baseDir = getFileSyncDir(syncPath);
-                        if (baseDir) {
-                            const mutated = await syncFileAttachments(mergedData, baseDir);
+                        if (fileBaseDir) {
+                            const mutated = await syncFileAttachments(mergedData, fileBaseDir);
                             if (mutated) {
                                 await tauriInvoke('save_data', { data: mergedData });
                             }
                         }
                     } else if (backend === 'cloud') {
-                        const config = await SyncService.getCloudConfig();
+                        const config = cloudConfig ?? await SyncService.getCloudConfig();
                         const baseUrl = config.url ? getCloudBaseUrl(config.url) : '';
                         if (baseUrl) {
                             const mutated = await syncCloudAttachments(mergedData, config, baseUrl);
