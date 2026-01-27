@@ -55,7 +55,11 @@ function App() {
     const hideToTray = useCallback(async () => {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         const window = getCurrentWindow();
-        await window.setSkipTaskbar(true);
+        try {
+            await window.setSkipTaskbar(true);
+        } catch (error) {
+            void logError(error, { scope: 'window', step: 'setSkipTaskbar' });
+        }
         await window.hide();
     }, []);
 
