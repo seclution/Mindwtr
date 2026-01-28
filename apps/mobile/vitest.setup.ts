@@ -46,6 +46,16 @@ vi.mock('expo-file-system', () => ({
 vi.mock('expo-file-system/legacy', () => ({
   documentDirectory: 'document',
   cacheDirectory: 'cache',
+  StorageAccessFramework: {
+    readDirectoryAsync: vi.fn().mockResolvedValue([]),
+    makeDirectoryAsync: vi.fn().mockResolvedValue('content://attachments'),
+    createFileAsync: vi.fn().mockResolvedValue('content://attachments/file'),
+    readAsStringAsync: vi.fn().mockResolvedValue(''),
+    writeAsStringAsync: vi.fn().mockResolvedValue(undefined),
+  },
+  EncodingType: {
+    Base64: 'base64',
+  },
   getInfoAsync: vi.fn().mockResolvedValue({ exists: false }),
   makeDirectoryAsync: vi.fn().mockResolvedValue(undefined),
   readAsStringAsync: vi.fn().mockResolvedValue(''),

@@ -1,18 +1,18 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
+
+vi.mock('../lib/app-log', () => ({
+    logWarn: vi.fn(),
+}));
+
+import { logWarn } from '../lib/app-log';
 import * as shim from './url-polyfill';
 
 describe('URL Polyfill Shim', () => {
-    // Save original console.warn
-    const originalWarn = console.warn;
-    let warnMock: ReturnType<typeof vi.fn>;
-
     beforeEach(() => {
-        warnMock = vi.fn();
-        console.warn = warnMock as any;
+        vi.clearAllMocks();
     });
 
     afterEach(() => {
-        console.warn = originalWarn;
     });
 
     test('exports URL and URLSearchParams', () => {
@@ -50,8 +50,9 @@ describe('URL Polyfill Shim', () => {
         const result = globalThis.URL.createObjectURL({} as any);
         expect(result).toBe('');
 
-        expect(warnMock).toHaveBeenCalledWith(
-            expect.stringContaining('not supported')
+        expect(logWarn).toHaveBeenCalledWith(
+            expect.stringContaining('not supported'),
+            expect.any(Object)
         );
 
         // Cleanup
