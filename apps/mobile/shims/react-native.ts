@@ -41,3 +41,7 @@ export const Animated = {
 };
 
 export const Platform = { OS: 'web', select: (options: any) => options?.web ?? options?.default };
+
+export const TurboModuleRegistry = {
+  get: () => null,
+};
