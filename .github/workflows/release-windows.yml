@@ -140,6 +140,17 @@ jobs:
           }
           & $makeappx pack /d msix-staging /p $msixPath /o
 
+      - name: Setup Microsoft Store CLI
+        uses: microsoft/setup-msstore-cli@v1
+
+      - name: Publish to Microsoft Store
+        run: |
+          msstore publish mindwtr_${{ steps.version.outputs.version }}_x64.msix \
+            --tenant-id ${{ secrets.MS_TENANT_ID }} \
+            --seller-id ${{ secrets.MS_SELLER_ID }} \
+            --client-id ${{ secrets.MS_CLIENT_ID }} \
+            --client-secret ${{ secrets.MS_CLIENT_SECRET }}
+
       - name: Collect Windows artifacts
         shell: pwsh
         run: |
