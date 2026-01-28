@@ -401,6 +401,48 @@ const fileExists = async (uri: string): Promise<boolean> => {
   }
 };
 
+export const persistAttachmentLocally = async (attachment: Attachment): Promise<Attachment> => {
+  if (attachment.kind !== 'file') return attachment;
+  const uri = attachment.uri || '';
+  if (!uri || /^https?:\/\//i.test(uri)) return attachment;
+
+  const attachmentsDir = await getAttachmentsDir();
+  if (!attachmentsDir) return attachment;
+
+  if (uri.startsWith(attachmentsDir)) return attachment;
+
+  const ext = extractExtension(attachment.title) || extractExtension(uri);
+  const filename = `${attachment.id}${ext}`;
+  const targetUri = `${attachmentsDir}${filename}`;
+  try {
+    const alreadyExists = await fileExists(targetUri);
+    if (!alreadyExists) {
+      if (uri.startsWith('content://')) {
+        const bytes = await readFileAsBytes(uri);
+        await writeBytesSafely(targetUri, bytes);
+      } else {
+        await copyFileSafely(uri, targetUri);
+      }
+    }
+    let size = attachment.size;
+    if (!Number.isFinite(size ?? NaN)) {
+      const info = await FileSystem.getInfoAsync(targetUri);
+      if (info.exists && typeof info.size === 'number') {
+        size = info.size;
+      }
+    }
+    return {
+      ...attachment,
+      uri: targetUri,
+      size,
+      localStatus: 'available',
+    };
+  } catch (error) {
+    logAttachmentWarn('Failed to cache attachment locally', error);
+    return attachment;
+  }
+};
+
 export const syncWebdavAttachments = async (
   appData: AppData,
   webDavConfig: WebDavConfig,

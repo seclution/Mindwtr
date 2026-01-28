@@ -38,7 +38,7 @@ import { useLanguage } from '../contexts/language-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { MarkdownText } from './markdown-text';
 import { buildAIConfig, loadAIKey } from '../lib/ai-config';
-import { ensureAttachmentAvailable } from '../lib/attachment-sync';
+import { ensureAttachmentAvailable, persistAttachmentLocally } from '../lib/attachment-sync';
 import { logError, logWarn } from '../lib/app-log';
 import { AIResponseModal, type AIResponseAction } from './ai-response-modal';
 import { styles } from './task-edit/task-edit-modal.styles';
@@ -627,7 +627,8 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
             updatedAt: now,
             localStatus: 'available',
         };
-        setEditedTask((prev) => ({ ...prev, attachments: [...(prev.attachments || []), attachment] }));
+        const cached = await persistAttachmentLocally(attachment);
+        setEditedTask((prev) => ({ ...prev, attachments: [...(prev.attachments || []), cached] }));
     };
 
     const addImageAttachment = async () => {
@@ -683,7 +684,8 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
             updatedAt: now,
             localStatus: 'available',
         };
-        setEditedTask((prev) => ({ ...prev, attachments: [...(prev.attachments || []), attachment] }));
+        const cached = await persistAttachmentLocally(attachment);
+        setEditedTask((prev) => ({ ...prev, attachments: [...(prev.attachments || []), cached] }));
     };
 
     const confirmAddLink = () => {
