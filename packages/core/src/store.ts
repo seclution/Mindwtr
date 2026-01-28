@@ -22,16 +22,6 @@ const ensureDeviceId = (settings: AppData['settings']): { settings: AppData['set
     return { settings: { ...settings, deviceId }, deviceId, updated: true };
 };
 
-const nextRevisionForItem = (currentRev: number | undefined, settings: AppData['settings']) => {
-    const { settings: nextSettings, deviceId, updated } = ensureDeviceId(settings);
-    return {
-        rev: normalizeRevision(currentRev) + 1,
-        revBy: deviceId,
-        settings: nextSettings,
-        settingsUpdated: updated,
-    };
-};
-
 export function applyTaskUpdates(oldTask: Task, updates: Partial<Task>, now: string): { updatedTask: Task; nextRecurringTask: Task | null } {
     let normalizedUpdates = updates;
     if (Object.prototype.hasOwnProperty.call(updates, 'textDirection') && updates.textDirection === undefined) {
