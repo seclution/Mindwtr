@@ -93,12 +93,17 @@ jobs:
         shell: pwsh
         run: |
           $msixPath = "mindwtr.msix"
-          $makeappx = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits" -Recurse -Filter "makeappx.exe" |
-            Where-Object { $_.FullName -like "*\\x64\\*" } |
+          $kitsRoot = "C:\Program Files (x86)\Windows Kits"
+          Write-Host "Searching for x64 makeappx.exe in $kitsRoot..."
+          $makeappx = Get-ChildItem -Path $kitsRoot -Recurse -Filter "makeappx.exe" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\\\x64\\\\" } |
+            Sort-Object FullName -Descending |
             Select-Object -First 1 -ExpandProperty FullName
 
           if (-not $makeappx) {
-            throw "makeappx.exe not found for x64"
+            Write-Error "Could not find x64 makeappx.exe. Listing all candidates:"
+            Get-ChildItem -Path $kitsRoot -Recurse -Filter "makeappx.exe" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+            exit 1
           }
 
           Write-Host "Using MakeAppx at: $makeappx"
