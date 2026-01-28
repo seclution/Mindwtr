@@ -3,9 +3,6 @@ name: Release Android
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
 
 permissions:
   contents: write
