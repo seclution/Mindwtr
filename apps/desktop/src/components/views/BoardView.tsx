@@ -1,12 +1,23 @@
 import React from 'react';
-import { DndContext, DragOverlay, useDraggable, useDroppable, DragEndEvent, DragStartEvent, closestCorners } from '@dnd-kit/core';
+import {
+    DndContext,
+    DragOverlay,
+    useDraggable,
+    useDroppable,
+    DragEndEvent,
+    DragStartEvent,
+    closestCorners,
+    PointerSensor,
+    useSensor,
+    useSensors,
+} from '@dnd-kit/core';
 import { TaskItem } from '../TaskItem';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { shallow, useTaskStore, sortTasksBy, safeParseDate } from '@mindwtr/core';
 import type { Task, TaskStatus } from '@mindwtr/core';
 import type { TaskSortBy } from '@mindwtr/core';
 import { useLanguage } from '../../contexts/language-context';
-import { Filter } from 'lucide-react';
+import { Filter, GripVertical } from 'lucide-react';
 import { useUiStore } from '../../store/ui-store';
 import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
 import { checkBudget } from '../../config/performanceBudgets';
@@ -94,19 +105,30 @@ function DraggableTask({ task }: { task: Task }) {
     if (isDragging) {
         return (
             <div ref={setNodeRef} style={style} className="opacity-50">
-                        <TaskItem
-                            task={task}
-                            readOnly={task.status === 'done'}
-                            showStatusSelect={false}
-                            showProjectBadgeInActions={false}
-                            enableDoubleClickEdit
-                        />
-                    </div>
-                );
-            }
+                <TaskItem
+                    task={task}
+                    readOnly={task.status === 'done'}
+                    showStatusSelect={false}
+                    showProjectBadgeInActions={false}
+                    enableDoubleClickEdit
+                />
+            </div>
+        );
+    }
 
     return (
-        <div ref={setNodeRef} style={style} {...listeners} {...attributes} className="touch-none">
+        <div ref={setNodeRef} style={style} className="touch-none relative">
+            <button
+                type="button"
+                {...listeners}
+                {...attributes}
+                onClick={(event) => event.stopPropagation()}
+                className="absolute -left-2 top-3 z-10 text-muted-foreground/70 hover:text-foreground cursor-grab active:cursor-grabbing"
+                aria-label="Drag task"
+                title="Drag task"
+            >
+                <GripVertical className="w-4 h-4" />
+            </button>
             <TaskItem
                 task={task}
                 readOnly={task.status === 'done'}
@@ -161,6 +183,13 @@ export function BoardView() {
         sorted.forEach((project, index) => map.set(project.id, index));
         return map;
     }, [projects]);
+    const sensors = useSensors(
+        useSensor(PointerSensor, {
+            activationConstraint: {
+                distance: 6,
+            },
+        })
+    );
 
     React.useEffect(() => {
         if (!perf.enabled) return;
@@ -419,6 +448,7 @@ export function BoardView() {
                     onDragStart={handleDragStart}
                     onDragEnd={handleDragEnd}
                     collisionDetection={closestCorners}
+                    sensors={sensors}
                 >
                     {COLUMNS.map((col) => (
                         <DroppableColumn
