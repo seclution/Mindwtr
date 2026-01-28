@@ -151,10 +151,13 @@ paru -S mindwtr-bin
 📦 [AUR Package](https://aur.archlinux.org/packages/mindwtr-bin)
 
 **Debian/Ubuntu:**
-Download the `.deb` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) and install:
 ```bash
-sudo dpkg -i mindwtr_*.deb
+curl -fsSL https://dongdongbh.github.io/Mindwtr/mindwtr.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/mindwtr-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/mindwtr-archive-keyring.gpg] https://dongdongbh.github.io/Mindwtr/deb ./" | sudo tee /etc/apt/sources.list.d/mindwtr.list
+sudo apt update
+sudo apt install mindwtr
 ```
+Manual install: download the `.deb` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) and run `sudo dpkg -i mindwtr_*.deb`.
 
 **AppImage (Universal):**
 Download the `.AppImage` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases):
@@ -164,10 +167,18 @@ chmod +x mindwtr_*.AppImage
 ```
 
 **Fedora/RHEL/openSUSE:**
-Download the `.rpm` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) and install:
 ```bash
-sudo rpm -i mindwtr-*.rpm
+cat <<'EOF' | sudo tee /etc/yum.repos.d/mindwtr.repo
+[mindwtr]
+name=Mindwtr Repository
+baseurl=https://dongdongbh.github.io/Mindwtr/rpm
+enabled=1
+gpgcheck=0
+EOF
+
+sudo dnf install mindwtr
 ```
+Manual install: download the `.rpm` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) and run `sudo rpm -i mindwtr-*.rpm`.
 
 ### Desktop (Windows)
 **Winget (recommended):**

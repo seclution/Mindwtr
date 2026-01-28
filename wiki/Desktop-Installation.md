@@ -25,30 +25,34 @@ pamac install mindwtr-bin
 
 ### Debian / Ubuntu
 
-Download the `.deb` package from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases):
+Add the APT repo (recommended):
 
 ```bash
-# Download (replace version as needed)
-wget https://github.com/dongdongbh/Mindwtr/releases/latest/download/mindwtr_amd64.deb
-
-# Install
-sudo dpkg -i mindwtr_*.deb
-
-# Fix dependencies if needed
-sudo apt-get install -f
+curl -fsSL https://dongdongbh.github.io/Mindwtr/mindwtr.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/mindwtr-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/mindwtr-archive-keyring.gpg] https://dongdongbh.github.io/Mindwtr/deb ./" | sudo tee /etc/apt/sources.list.d/mindwtr.list
+sudo apt update
+sudo apt install mindwtr
 ```
+
+Manual install: download the `.deb` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) and run `sudo dpkg -i mindwtr_*.deb`.
 
 ### Fedora / RHEL / openSUSE
 
-Download the `.rpm` package from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases):
+Add the DNF/YUM repo (recommended):
 
 ```bash
-# Install with rpm
-sudo rpm -i mindwtr-*.rpm
+cat <<'EOF' | sudo tee /etc/yum.repos.d/mindwtr.repo
+[mindwtr]
+name=Mindwtr Repository
+baseurl=https://dongdongbh.github.io/Mindwtr/rpm
+enabled=1
+gpgcheck=0
+EOF
 
-# Or with dnf (Fedora)
-sudo dnf install mindwtr-*.rpm
+sudo dnf install mindwtr
 ```
+
+Manual install: download the `.rpm` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) and run `sudo rpm -i mindwtr-*.rpm`.
 
 ### AppImage (Universal)
 

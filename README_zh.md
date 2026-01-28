@@ -150,10 +150,13 @@ paru -S mindwtr-bin
 📦 [AUR 包](https://aur.archlinux.org/packages/mindwtr-bin)
 
 **Debian/Ubuntu：**
-从 [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) 下载 `.deb` 并安装：
 ```bash
-sudo dpkg -i mindwtr_*.deb
+curl -fsSL https://dongdongbh.github.io/Mindwtr/mindwtr.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/mindwtr-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/mindwtr-archive-keyring.gpg] https://dongdongbh.github.io/Mindwtr/deb ./" | sudo tee /etc/apt/sources.list.d/mindwtr.list
+sudo apt update
+sudo apt install mindwtr
 ```
+手动安装：从 [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) 下载 `.deb` 并运行 `sudo dpkg -i mindwtr_*.deb`。
 
 **AppImage（通用）：**
 从 [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) 下载 `.AppImage`：
@@ -163,10 +166,18 @@ chmod +x mindwtr_*.AppImage
 ```
 
 **Fedora/RHEL/openSUSE：**
-从 [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) 下载 `.rpm` 并安装：
 ```bash
-sudo rpm -i mindwtr-*.rpm
+cat <<'EOF' | sudo tee /etc/yum.repos.d/mindwtr.repo
+[mindwtr]
+name=Mindwtr Repository
+baseurl=https://dongdongbh.github.io/Mindwtr/rpm
+enabled=1
+gpgcheck=0
+EOF
+
+sudo dnf install mindwtr
 ```
+手动安装：从 [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) 下载 `.rpm` 并运行 `sudo rpm -i mindwtr-*.rpm`。
 
 ### 桌面端（Windows）
 **Winget（推荐）：**
