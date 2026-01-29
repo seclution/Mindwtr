@@ -258,7 +258,7 @@ export function ProjectsView() {
     const sortAreasByColor = () => reorderAreas(sortAreasByColorIds(sortedAreas));
 
     // Group tasks by project to avoid O(N*M) filtering
-    const { tasksByProject, areaTasks } = useMemo(() => {
+    const { tasksByProject } = useMemo(() => {
         const map = projects.reduce((acc, project) => {
             acc[project.id] = [];
             return acc;
@@ -270,20 +270,10 @@ export function ProjectsView() {
                 }
             }
         });
-        const filteredAreaTasks = selectedArea === ALL_AREAS ? [] : tasks.filter((task) => {
-            if (task.deletedAt) return false;
-            if (task.status === 'archived' || task.status === 'done' || task.status === 'reference') return false;
-            if (task.projectId) return false;
-            if (selectedArea === NO_AREA) {
-                return !task.areaId || !areaById.has(task.areaId);
-            }
-            return task.areaId === selectedArea;
-        });
         return {
             tasksByProject: map,
-            areaTasks: filteredAreaTasks,
         };
-    }, [projects, tasks, selectedArea, areaById, sortedAreas, ALL_AREAS, NO_AREA]);
+    }, [projects, tasks]);
 
     const tagOptions = useMemo(() => {
         const visibleProjects = projects.filter(p => !p.deletedAt);
@@ -458,8 +448,7 @@ export function ProjectsView() {
 
     useEffect(() => {
         if (!highlightTaskId) return;
-        const exists = orderedProjectTaskList.some((task) => task.id === highlightTaskId)
-            || areaTasks.some((task) => task.id === highlightTaskId);
+        const exists = orderedProjectTaskList.some((task) => task.id === highlightTaskId);
         if (!exists) return;
         const el = document.querySelector(`[data-task-id="${highlightTaskId}"]`) as HTMLElement | null;
         if (el) {
@@ -467,7 +456,7 @@ export function ProjectsView() {
         }
         const timer = window.setTimeout(() => setHighlightTask(null), 4000);
         return () => window.clearTimeout(timer);
-    }, [highlightTaskId, orderedProjectTaskList, areaTasks, setHighlightTask]);
+    }, [highlightTaskId, orderedProjectTaskList, setHighlightTask]);
 
     const { taskIdsByContainer, taskIdToContainer } = useMemo(() => {
         const idsByContainer = new Map<string, string[]>();
@@ -1020,35 +1009,6 @@ export function ProjectsView() {
                                 </div>
                                 </div>
                             </>
-                        ) : selectedArea !== ALL_AREAS ? (
-                            <div className="flex-1 flex flex-col h-full overflow-hidden">
-                                <div className="flex items-center justify-between border-b border-border pb-3">
-                                    <div className="flex items-center gap-2">
-                                        <Folder className="w-5 h-5 text-muted-foreground" />
-                                        <div className="text-lg font-semibold">
-                                            {selectedArea === NO_AREA
-                                                ? t('projects.noArea')
-                                                : (areaById.get(selectedArea)?.name || t('projects.noArea'))}
-                                        </div>
-                                    </div>
-                                    <div className="text-xs text-muted-foreground">
-                                        {areaTasks.length} {t('common.tasks')}
-                                    </div>
-                                </div>
-                                <div className="flex-1 overflow-y-auto pr-2 pt-4">
-                                    {areaTasks.length > 0 ? (
-                                        <div className="space-y-2">
-                                            {areaTasks.map((task) => (
-                                                <TaskItem key={task.id} task={task} />
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <div className="text-center text-muted-foreground py-12">
-                                            {t('projects.noActiveTasks')}
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
                         ) : (
                             <div className="flex-1 flex items-center justify-center text-muted-foreground">
                                 <div className="text-center">
