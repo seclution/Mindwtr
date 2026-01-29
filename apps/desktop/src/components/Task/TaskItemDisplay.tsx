@@ -217,7 +217,7 @@ export function TaskItemDisplay({
                     >
                         <div
                             className={cn(
-                                "font-medium truncate group-hover/content:text-primary transition-colors",
+                                "font-medium truncate text-foreground group-hover/content:text-primary transition-colors",
                                 dense ? "text-sm" : "text-base",
                                 task.status === 'done' && "line-through text-muted-foreground"
                             )}
