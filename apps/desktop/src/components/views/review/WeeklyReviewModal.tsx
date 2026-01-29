@@ -100,6 +100,17 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
     const currentStepIndex = steps.findIndex((step) => step.id === currentStep);
     const progress = (currentStepIndex / (steps.length - 1)) * 100;
 
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                onClose();
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [onClose]);
+
     const nextStep = () => {
         if (currentStepIndex < steps.length - 1) {
             setCurrentStep(steps[currentStepIndex + 1].id);
@@ -495,16 +506,10 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
     return (
         <div
             className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-            role="button"
-            tabIndex={0}
-            aria-label={t('common.close')}
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('review.title')}
             onClick={onClose}
-            onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    onClose();
-                }
-            }}
         >
             <div
                 className="bg-card border border-border rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-[85vh] flex flex-col"
