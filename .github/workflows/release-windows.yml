@@ -195,7 +195,7 @@ jobs:
             --clientId $clientId `
             --clientSecret $clientSecret
 
-          & msstore publish $msix -v --appId $env:MS_STORE_APP_ID
+          & msstore publish $msix --appId $env:MS_STORE_APP_ID
 
       - name: Collect Windows artifacts
         shell: pwsh
