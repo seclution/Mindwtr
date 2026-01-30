@@ -4,6 +4,7 @@ import { axe } from 'vitest-axe';
 import { TaskItem } from '../components/TaskItem';
 import { Task } from '@mindwtr/core';
 import { LanguageProvider } from '../contexts/language-context';
+import { useUiStore } from '../store/ui-store';
 
 const mockTask: Task = {
     id: '1',
@@ -17,6 +18,7 @@ const mockTask: Task = {
 
 describe('Accessibility', () => {
     it('TaskItem should have no violations', async () => {
+        useUiStore.setState({ editingTaskId: null });
         const { container } = render(
             <LanguageProvider>
                 <TaskItem task={mockTask} />
