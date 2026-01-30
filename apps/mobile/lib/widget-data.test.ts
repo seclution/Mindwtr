@@ -7,8 +7,6 @@ const baseData: AppData = {
     projects: [],
     areas: [],
     sections: [],
-    contexts: [],
-    tags: [],
     settings: {},
 };
 
@@ -20,12 +18,13 @@ describe('widget-data', () => {
     });
 
     it('builds payload with focused tasks first', () => {
+        const now = new Date().toISOString();
         const data: AppData = {
             ...baseData,
             tasks: [
-                { id: '1', title: 'Focused', status: 'next', isFocusedToday: true },
-                { id: '2', title: 'Next', status: 'next', isFocusedToday: false },
-                { id: '3', title: 'Inbox', status: 'inbox', isFocusedToday: false },
+                { id: '1', title: 'Focused', status: 'next', isFocusedToday: true, tags: [], contexts: [], createdAt: now, updatedAt: now },
+                { id: '2', title: 'Next', status: 'next', isFocusedToday: false, tags: [], contexts: [], createdAt: now, updatedAt: now },
+                { id: '3', title: 'Inbox', status: 'inbox', isFocusedToday: false, tags: [], contexts: [], createdAt: now, updatedAt: now },
             ],
         };
         const payload = buildWidgetPayload(data, 'en');

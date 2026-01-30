@@ -1,4 +1,4 @@
-export const SQLITE_SCHEMA = `
+export const SQLITE_BASE_SCHEMA = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
@@ -32,11 +32,6 @@ CREATE TABLE IF NOT EXISTS tasks (
   deletedAt TEXT,
   purgedAt TEXT
 );
-
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(projectId);
-CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updatedAt);
-CREATE INDEX IF NOT EXISTS idx_tasks_deleted_at ON tasks(deletedAt);
 
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
@@ -90,6 +85,21 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 INSERT OR IGNORE INTO schema_migrations (version) VALUES (1);
 
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_projectId ON tasks(projectId);
+CREATE INDEX IF NOT EXISTS idx_tasks_deletedAt ON tasks(deletedAt);
+CREATE INDEX IF NOT EXISTS idx_tasks_dueDate ON tasks(dueDate);
+CREATE INDEX IF NOT EXISTS idx_tasks_startTime ON tasks(startTime);
+CREATE INDEX IF NOT EXISTS idx_tasks_reviewAt ON tasks(reviewAt);
+CREATE INDEX IF NOT EXISTS idx_tasks_createdAt ON tasks(createdAt);
+CREATE INDEX IF NOT EXISTS idx_tasks_updatedAt ON tasks(updatedAt);
+CREATE INDEX IF NOT EXISTS idx_tasks_status_deletedAt ON tasks(status, deletedAt);
+CREATE INDEX IF NOT EXISTS idx_tasks_project_status_deletedAt ON tasks(projectId, status, deletedAt);
+CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
+CREATE INDEX IF NOT EXISTS idx_projects_areaId ON projects(areaId);
+`;
+
+export const SQLITE_FTS_SCHEMA = `
 CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
   id UNINDEXED,
   title,
@@ -141,17 +151,6 @@ CREATE TRIGGER IF NOT EXISTS projects_au AFTER UPDATE ON projects BEGIN
   INSERT INTO projects_fts (id, title, supportNotes, tagIds, areaTitle)
   VALUES (new.id, new.title, coalesce(new.supportNotes, ''), coalesce(new.tagIds, ''), coalesce(new.areaTitle, ''));
 END;
-
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-CREATE INDEX IF NOT EXISTS idx_tasks_projectId ON tasks(projectId);
-CREATE INDEX IF NOT EXISTS idx_tasks_deletedAt ON tasks(deletedAt);
-CREATE INDEX IF NOT EXISTS idx_tasks_dueDate ON tasks(dueDate);
-CREATE INDEX IF NOT EXISTS idx_tasks_startTime ON tasks(startTime);
-CREATE INDEX IF NOT EXISTS idx_tasks_reviewAt ON tasks(reviewAt);
-CREATE INDEX IF NOT EXISTS idx_tasks_createdAt ON tasks(createdAt);
-CREATE INDEX IF NOT EXISTS idx_tasks_updatedAt ON tasks(updatedAt);
-CREATE INDEX IF NOT EXISTS idx_tasks_status_deletedAt ON tasks(status, deletedAt);
-CREATE INDEX IF NOT EXISTS idx_tasks_project_status_deletedAt ON tasks(projectId, status, deletedAt);
-CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
-CREATE INDEX IF NOT EXISTS idx_projects_areaId ON projects(areaId);
 `;
+
+export const SQLITE_SCHEMA = `${SQLITE_BASE_SCHEMA}\n${SQLITE_FTS_SCHEMA}`;

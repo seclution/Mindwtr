@@ -1,6 +1,6 @@
 import type { AppData, Area, Attachment, Project, Task, Section } from './types';
 import type { TaskQueryOptions, SearchResults } from './storage';
-import { SQLITE_SCHEMA } from './sqlite-schema';
+import { SQLITE_BASE_SCHEMA, SQLITE_FTS_SCHEMA } from './sqlite-schema';
 import { normalizeTaskStatus } from './task-status';
 import { logWarn } from './logger';
 
@@ -141,16 +141,23 @@ export class SqliteAdapter {
 
     async ensureSchema() {
         if (this.client.exec) {
-            await this.client.exec(SQLITE_SCHEMA);
+            await this.client.exec(SQLITE_BASE_SCHEMA);
         } else {
-            await this.client.run(SQLITE_SCHEMA);
+            await this.client.run(SQLITE_BASE_SCHEMA);
         }
         await this.ensureTaskPurgedAtColumn();
         await this.ensureTaskOrderColumn();
         await this.ensureTaskTextDirectionColumn();
         await this.ensureTaskAreaColumn();
         await this.ensureTaskSectionColumn();
+        await this.ensureTaskFtsColumns();
         await this.ensureProjectOrderColumn();
+        await this.ensureProjectFtsColumns();
+        if (this.client.exec) {
+            await this.client.exec(SQLITE_FTS_SCHEMA);
+        } else {
+            await this.client.run(SQLITE_FTS_SCHEMA);
+        }
         // FTS operations are optional - don't block startup if they fail
         try {
             await this.ensureFtsTriggers();
@@ -269,6 +276,34 @@ export class SqliteAdapter {
         await this.client.run(
             'CREATE INDEX IF NOT EXISTS idx_projects_area_order ON projects(areaId, orderNum)'
         );
+    }
+
+    private async ensureTaskFtsColumns() {
+        const columns = await this.client.all<{ name?: string }>('PRAGMA table_info(tasks)');
+        const names = new Set(columns.map((col) => col.name));
+        if (!names.has('description')) {
+            await this.client.run('ALTER TABLE tasks ADD COLUMN description TEXT');
+        }
+        if (!names.has('tags')) {
+            await this.client.run('ALTER TABLE tasks ADD COLUMN tags TEXT');
+        }
+        if (!names.has('contexts')) {
+            await this.client.run('ALTER TABLE tasks ADD COLUMN contexts TEXT');
+        }
+    }
+
+    private async ensureProjectFtsColumns() {
+        const columns = await this.client.all<{ name?: string }>('PRAGMA table_info(projects)');
+        const names = new Set(columns.map((col) => col.name));
+        if (!names.has('supportNotes')) {
+            await this.client.run('ALTER TABLE projects ADD COLUMN supportNotes TEXT');
+        }
+        if (!names.has('tagIds')) {
+            await this.client.run('ALTER TABLE projects ADD COLUMN tagIds TEXT');
+        }
+        if (!names.has('areaTitle')) {
+            await this.client.run('ALTER TABLE projects ADD COLUMN areaTitle TEXT');
+        }
     }
 
     private async ensureFtsPopulated(forceRebuild = false) {

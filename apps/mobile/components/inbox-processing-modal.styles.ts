@@ -60,6 +60,17 @@ export const styles = StyleSheet.create({
     gap: 12,
     padding: 24,
   },
+  fullScreenContainer: {
+    flex: 1,
+  },
+  processingHeader: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   loadingText: {
     fontSize: 14,
   },
