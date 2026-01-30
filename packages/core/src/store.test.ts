@@ -97,6 +97,20 @@ describe('TaskStore', () => {
         expect(tasks).toHaveLength(0);
     });
 
+    it('supports a basic task lifecycle', async () => {
+        const { addTask, updateTask, moveTask } = useTaskStore.getState();
+        addTask('Lifecycle Task');
+        const taskId = useTaskStore.getState().tasks[0].id;
+
+        updateTask(taskId, { title: 'Lifecycle Task Updated', status: 'next' });
+        await moveTask(taskId, 'done');
+        await moveTask(taskId, 'archived');
+
+        const archived = useTaskStore.getState()._allTasks.find((task) => task.id === taskId);
+        expect(archived?.status).toBe('archived');
+        expect(archived?.title).toBe('Lifecycle Task Updated');
+    });
+
     it('should coalesce saves and allow immediate flush', async () => {
         const { addTask } = useTaskStore.getState();
 

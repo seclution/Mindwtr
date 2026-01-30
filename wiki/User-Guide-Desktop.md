@@ -8,6 +8,13 @@ The desktop app features a sidebar navigation with all GTD views and a main cont
 
 ---
 
+## Interaction Patterns
+
+- **Single click** toggles task details.
+- **Double click** opens full edit mode.
+- **Right click** opens context menus (projects, tasks).
+- **Keyboard first**: global shortcuts and Vim/Emacs modes are optimized for desktop workflows.
+
 ## Focus Mode
 
 Use Focus Mode to hide the sidebar and keep the list centered (800px max width).

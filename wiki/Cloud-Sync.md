@@ -1,6 +1,6 @@
 # Cloud Sync (Self-Hosted)
 
-> **Note:** This page describes a **small sync server** only. It is **not** the Mindwtr app UI. Running this server (even in Docker) does not give you a hosted web app — it only provides a sync endpoint that desktop/mobile clients can point to.
+> **Note:** This page describes a **small sync server** only. It is **not** the Mindwtr app UI. Running this server (even in Docker) does not give you a hosted web app — it only provides a sync endpoint that desktop/mobile clients can point to. It uses file-based storage and is intended for single-machine, self-hosted use.
 
 Mindwtr includes a minimal self-hosted Cloud Sync backend under `apps/cloud`. It stores one JSON file per token and is designed to be deployed behind your own HTTPS reverse proxy.
 

@@ -20,10 +20,26 @@ export function ConfirmModal({
     onCancel,
 }: ConfirmModalProps) {
     const confirmRef = useRef<HTMLButtonElement>(null);
+    const modalRef = useRef<HTMLDivElement>(null);
+    const lastActiveElement = useRef<HTMLElement | null>(null);
+
+    const getFocusable = () => {
+        const root = modalRef.current;
+        if (!root) return [];
+        return Array.from(
+            root.querySelectorAll<HTMLElement>(
+                'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+            ),
+        ).filter((el) => !el.hasAttribute('disabled') && !el.getAttribute('aria-hidden'));
+    };
 
     useEffect(() => {
         if (isOpen) {
+            lastActiveElement.current = document.activeElement as HTMLElement | null;
             setTimeout(() => confirmRef.current?.focus(), 50);
+        } else if (lastActiveElement.current) {
+            lastActiveElement.current.focus();
+            lastActiveElement.current = null;
         }
     }, [isOpen]);
 
@@ -37,12 +53,35 @@ export function ConfirmModal({
             onClick={onCancel}
         >
             <div
+                ref={modalRef}
                 className="w-full max-w-md bg-popover text-popover-foreground rounded-xl border shadow-2xl overflow-hidden flex flex-col"
                 onClick={(e) => e.stopPropagation()}
                 onKeyDown={(e) => {
                     if (e.key === 'Escape') {
                         e.preventDefault();
                         onCancel();
+                        return;
+                    }
+                    if (e.key === 'Tab') {
+                        const focusable = getFocusable();
+                        if (focusable.length === 0) return;
+                        const first = focusable[0];
+                        const last = focusable[focusable.length - 1];
+                        const active = document.activeElement as HTMLElement | null;
+
+                        if (!active || !focusable.includes(active)) {
+                            e.preventDefault();
+                            first.focus();
+                            return;
+                        }
+
+                        if (e.shiftKey && active === first) {
+                            e.preventDefault();
+                            last.focus();
+                        } else if (!e.shiftKey && active === last) {
+                            e.preventDefault();
+                            first.focus();
+                        }
                     }
                 }}
             >

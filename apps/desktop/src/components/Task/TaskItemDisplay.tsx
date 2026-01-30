@@ -6,13 +6,7 @@ import { MetadataBadge } from '../ui/MetadataBadge';
 import { AttachmentProgressIndicator } from '../AttachmentProgressIndicator';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 
-interface TaskItemDisplayProps {
-    task: Task;
-    project?: Project;
-    area?: Area;
-    projectColor?: string;
-    selectionMode: boolean;
-    isViewOpen: boolean;
+interface TaskItemDisplayActions {
     onToggleSelect?: () => void;
     onToggleView: () => void;
     onEdit: () => void;
@@ -21,6 +15,24 @@ interface TaskItemDisplayProps {
     onStatusChange: (status: TaskStatus) => void;
     onOpenProject?: (projectId: string) => void;
     openAttachment: (attachment: Attachment) => void;
+    onToggleChecklistItem?: (index: number) => void;
+    focusToggle?: {
+        isFocused: boolean;
+        canToggle: boolean;
+        onToggle: () => void;
+        title: string;
+        ariaLabel: string;
+    };
+}
+
+interface TaskItemDisplayProps {
+    task: Task;
+    project?: Project;
+    area?: Area;
+    projectColor?: string;
+    selectionMode: boolean;
+    isViewOpen: boolean;
+    actions: TaskItemDisplayActions;
     visibleAttachments: Attachment[];
     recurrenceRule: RecurrenceRule | '';
     recurrenceStrategy: RecurrenceStrategy;
@@ -30,14 +42,6 @@ interface TaskItemDisplayProps {
     showQuickDone: boolean;
     showStatusSelect?: boolean;
     showProjectBadgeInActions?: boolean;
-    onToggleChecklistItem?: (index: number) => void;
-    focusToggle?: {
-        isFocused: boolean;
-        canToggle: boolean;
-        onToggle: () => void;
-        title: string;
-        ariaLabel: string;
-    };
     readOnly: boolean;
     compactMetaEnabled?: boolean;
     dense?: boolean;
@@ -71,13 +75,7 @@ export function TaskItemDisplay({
     projectColor,
     selectionMode,
     isViewOpen,
-    onToggleSelect,
-    onToggleView,
-    onEdit,
-    onDelete,
-    onDuplicate,
-    onStatusChange,
-    openAttachment,
+    actions,
     visibleAttachments,
     recurrenceRule,
     recurrenceStrategy,
@@ -87,16 +85,25 @@ export function TaskItemDisplay({
     showQuickDone,
     showStatusSelect = true,
     showProjectBadgeInActions = true,
-    onToggleChecklistItem,
-    focusToggle,
     readOnly,
     compactMetaEnabled = true,
     dense = false,
     actionsOverlay = false,
     dragHandle,
     t,
-    onOpenProject,
 }: TaskItemDisplayProps) {
+    const {
+        onToggleSelect,
+        onToggleView,
+        onEdit,
+        onDelete,
+        onDuplicate,
+        onStatusChange,
+        onOpenProject,
+        openAttachment,
+        onToggleChecklistItem,
+        focusToggle,
+    } = actions;
     const checklistProgress = getChecklistProgress(task);
     const ageLabel = getTaskAgeLabel(task.createdAt);
     const showCompactMeta = compactMetaEnabled

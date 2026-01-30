@@ -8,6 +8,12 @@ The mobile app uses tab navigation for main views and a drawer for additional vi
 
 ---
 
+## Interaction Patterns
+
+- **Tap** to open and edit tasks.
+- **Swipe** for quick actions (see Swipe Actions section below).
+- **Share sheet** adds items directly to your Inbox.
+
 ## Navigation
 
 ### Bottom Tabs

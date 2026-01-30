@@ -129,4 +129,33 @@ describeBun('SqliteAdapter', () => {
         expect(area.name).toBe('Work');
         expect(area.order).toBe(0);
     });
+
+    it('adds missing task columns on older schemas', async () => {
+        db.exec(`
+            CREATE TABLE tasks (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL
+            );
+        `);
+        db.exec(`
+            CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                color TEXT NOT NULL
+            );
+        `);
+        db.exec(`CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL);`);
+        db.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);`);
+
+        await adapter.ensureSchema();
+
+        const columns = db.query('PRAGMA table_info(tasks)').all() as { name: string }[];
+        const names = columns.map((col) => col.name);
+        expect(names).toContain('orderNum');
+        expect(names).toContain('areaId');
+        expect(names).toContain('sectionId');
+        expect(names).toContain('purgedAt');
+    });
 });

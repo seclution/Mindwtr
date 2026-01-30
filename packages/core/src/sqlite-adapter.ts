@@ -40,6 +40,7 @@ const toBool = (value?: boolean) => (value ? 1 : 0);
 const fromBool = (value: unknown) => Boolean(value);
 const READ_PAGE_SIZE = 1000;
 const FTS_LOCK_TTL_MS = 5 * 60 * 1000;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -323,11 +324,24 @@ export class SqliteAdapter {
 
             if (!needsTaskRebuild && !needsProjectRebuild) return;
 
-            const lockOwner = await this.acquireFtsLock();
-            if (!lockOwner) {
-                logWarn('FTS rebuild skipped: lock unavailable', {
+            const maxAttempts = 3;
+            let lockOwner = await this.acquireFtsLock();
+            for (let attempt = 1; !lockOwner && attempt < maxAttempts; attempt += 1) {
+                const delayMs = Math.min(2000, 200 * Math.pow(2, attempt - 1));
+                logWarn('FTS rebuild lock unavailable, retrying', {
                     scope: 'sqlite',
                     category: 'fts',
+                    attempt: attempt + 1,
+                    delayMs,
+                });
+                await sleep(delayMs);
+                lockOwner = await this.acquireFtsLock();
+            }
+            if (!lockOwner) {
+                logWarn('FTS rebuild skipped: lock unavailable after retries', {
+                    scope: 'sqlite',
+                    category: 'fts',
+                    attempts: maxAttempts,
                 });
                 return;
             }

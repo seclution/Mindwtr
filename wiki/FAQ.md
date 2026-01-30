@@ -225,6 +225,14 @@ This clears the quarantine flag. The app is not notarized with Apple.
 - **Android:** Full support via APK download
 - **iOS:** iOS builds require an Apple Developer account ($99/year). Currently available as simulator builds only. If you want iOS builds, please consider [sponsoring the developer](https://github.com/sponsors/dongdongbh) so we can fund the Apple Developer account.
 
+### Why does editing feel different on desktop and mobile?
+
+Mindwtr follows platform conventions:
+- **Desktop:** single click toggles details, double click opens edit mode, and right click opens context menus.
+- **Mobile:** single tap opens edit mode and swipe actions handle quick changes.
+
+These patterns keep the app fast and familiar on each platform.
+
 ### How do I install on Android?
 
 Download the APK from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) and open it. Enable "Install from unknown sources" if prompted. See [[Mobile Installation]].

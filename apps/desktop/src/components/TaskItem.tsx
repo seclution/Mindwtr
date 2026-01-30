@@ -22,9 +22,7 @@ import { TaskItemEditor } from './Task/TaskItemEditor';
 import { TaskItemDisplay } from './Task/TaskItemDisplay';
 import { TaskItemFieldRenderer } from './Task/TaskItemFieldRenderer';
 import { TaskItemRecurrenceModal } from './Task/TaskItemRecurrenceModal';
-import { AudioAttachmentModal } from './Task/AudioAttachmentModal';
-import { ImageAttachmentModal } from './Task/ImageAttachmentModal';
-import { TextAttachmentModal } from './Task/TextAttachmentModal';
+import { AttachmentModals } from './Task/AttachmentModals';
 import { WEEKDAY_FULL_LABELS, WEEKDAY_ORDER } from './Task/recurrence-constants';
 import {
     DEFAULT_TASK_EDITOR_HIDDEN,
@@ -936,14 +934,18 @@ export const TaskItem = memo(function TaskItem({
                             projectColor={projectColor}
                             selectionMode={selectionMode}
                             isViewOpen={isViewOpen}
-                            onToggleSelect={onToggleSelect}
-                            onToggleView={() => setIsViewOpen((prev) => !prev)}
-                            onEdit={startEditing}
-                            onDelete={() => deleteTask(task.id)}
-                            onDuplicate={() => duplicateTask(task.id, false)}
-                            onStatusChange={(status) => moveTask(task.id, status)}
-                            onOpenProject={project ? handleOpenProject : undefined}
-                            openAttachment={openAttachment}
+                            actions={{
+                                onToggleSelect,
+                                onToggleView: () => setIsViewOpen((prev) => !prev),
+                                onEdit: startEditing,
+                                onDelete: () => deleteTask(task.id),
+                                onDuplicate: () => duplicateTask(task.id, false),
+                                onStatusChange: (status) => moveTask(task.id, status),
+                                onOpenProject: project ? handleOpenProject : undefined,
+                                openAttachment,
+                                onToggleChecklistItem: handleToggleChecklistItem,
+                                focusToggle,
+                            }}
                             visibleAttachments={visibleAttachments}
                             recurrenceRule={recurrenceRule}
                             recurrenceStrategy={recurrenceStrategy}
@@ -953,8 +955,6 @@ export const TaskItem = memo(function TaskItem({
                             showQuickDone={showQuickDone}
                             showStatusSelect={showStatusSelect}
                             showProjectBadgeInActions={showProjectBadgeInActions}
-                            onToggleChecklistItem={handleToggleChecklistItem}
-                            focusToggle={focusToggle}
                             readOnly={effectiveReadOnly}
                             compactMetaEnabled={compactMetaEnabled}
                             dense={isCompact}
@@ -987,61 +987,59 @@ export const TaskItem = memo(function TaskItem({
                     onApply={applyCustomRecurrence}
                 />
             )}
-            <PromptModal
-                isOpen={showLinkPrompt}
-                title={t('attachments.addLink')}
-                description={t('attachments.linkPlaceholder')}
-                placeholder={t('attachments.linkPlaceholder')}
-                defaultValue=""
-                confirmLabel={t('common.save')}
-                cancelLabel={t('common.cancel')}
-                onCancel={() => setShowLinkPrompt(false)}
-                onConfirm={(value) => {
-                    const added = handleAddLinkAttachment(value);
-                    if (!added) return;
-                    setShowLinkPrompt(false);
-                }}
-            />
-            <ConfirmModal
-                isOpen={showDiscardConfirm}
-                title={t('taskEdit.discardChanges') === 'taskEdit.discardChanges'
-                    ? 'Discard unsaved changes?'
-                    : t('taskEdit.discardChanges')}
-                description={t('taskEdit.discardChangesDesc') === 'taskEdit.discardChangesDesc'
-                    ? 'Your changes will be lost if you leave now.'
-                    : t('taskEdit.discardChangesDesc')}
-                confirmLabel={t('common.discard') === 'common.discard' ? 'Discard' : t('common.discard')}
-                cancelLabel={t('common.cancel')}
-                onCancel={() => setShowDiscardConfirm(false)}
-                onConfirm={() => {
-                    setShowDiscardConfirm(false);
-                    handleDiscardChanges();
-                }}
-            />
-            <AudioAttachmentModal
-                attachment={audioAttachment}
+            {showLinkPrompt && (
+                <PromptModal
+                    isOpen={showLinkPrompt}
+                    title={t('attachments.addLink')}
+                    description={t('attachments.linkPlaceholder')}
+                    placeholder={t('attachments.linkPlaceholder')}
+                    defaultValue=""
+                    confirmLabel={t('common.save')}
+                    cancelLabel={t('common.cancel')}
+                    onCancel={() => setShowLinkPrompt(false)}
+                    onConfirm={(value) => {
+                        const added = handleAddLinkAttachment(value);
+                        if (!added) return;
+                        setShowLinkPrompt(false);
+                    }}
+                />
+            )}
+            {showDiscardConfirm && (
+                <ConfirmModal
+                    isOpen={showDiscardConfirm}
+                    title={t('taskEdit.discardChanges') === 'taskEdit.discardChanges'
+                        ? 'Discard unsaved changes?'
+                        : t('taskEdit.discardChanges')}
+                    description={t('taskEdit.discardChangesDesc') === 'taskEdit.discardChangesDesc'
+                        ? 'Your changes will be lost if you leave now.'
+                        : t('taskEdit.discardChangesDesc')}
+                    confirmLabel={t('common.discard') === 'common.discard' ? 'Discard' : t('common.discard')}
+                    cancelLabel={t('common.cancel')}
+                    onCancel={() => setShowDiscardConfirm(false)}
+                    onConfirm={() => {
+                        setShowDiscardConfirm(false);
+                        handleDiscardChanges();
+                    }}
+                />
+            )}
+            <AttachmentModals
+                audioAttachment={audioAttachment}
                 audioSource={audioSource}
                 audioRef={audioRef}
                 audioError={audioError}
-                onClose={closeAudio}
+                onCloseAudio={closeAudio}
                 onAudioError={handleAudioError}
-                onOpenExternally={openAudioExternally}
-                t={t}
-            />
-            <ImageAttachmentModal
-                attachment={imageAttachment}
+                onOpenAudioExternally={openAudioExternally}
+                imageAttachment={imageAttachment}
                 imageSource={imageSource}
-                onClose={closeImage}
-                onOpenExternally={openImageExternally}
-                t={t}
-            />
-            <TextAttachmentModal
-                attachment={textAttachment}
+                onCloseImage={closeImage}
+                onOpenImageExternally={openImageExternally}
+                textAttachment={textAttachment}
                 textContent={textContent}
                 textLoading={textLoading}
                 textError={textError}
-                onClose={closeText}
-                onOpenExternally={openTextExternally}
+                onCloseText={closeText}
+                onOpenTextExternally={openTextExternally}
                 t={t}
             />
         </>

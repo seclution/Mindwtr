@@ -33,6 +33,11 @@ Mindwtr is a cross-platform GTD application with:
 └─────────────────────────────┘
 ```
 
+## Design Trade-offs
+
+- **Cloud sync is file-based** and optimized for single-machine self-hosting.
+- **SQLite foreign keys are not enforced** so soft-delete + sync merges can be handled explicitly in the app layer.
+
 ### System Diagram (Mermaid)
 
 ```mermaid
@@ -99,6 +104,12 @@ The core package contains all shared business logic:
 2. **Storage adapter pattern** — Inject storage at runtime
 3. **Pure functions** — Utilities are stateless
 4. **Type safety** — Full TypeScript coverage
+
+### State Layering
+
+- **Core store** keeps canonical data (`all tasks/projects`).
+- **UI stores** hold view-specific filters and UI state.
+- **Visible lists** are derived from core data + UI filters to avoid mixing persistence concerns with presentation.
 
 ---
 
