@@ -149,7 +149,7 @@ jobs:
         run: |
           $required = @('MS_TENANT_ID','MS_SELLER_ID','MS_CLIENT_ID','MS_CLIENT_SECRET')
           foreach ($name in $required) {
-            if (-not $env:$name) {
+            if (-not (Get-Item -Path "env:$name" -ErrorAction SilentlyContinue)) {
               Write-Error "$name is missing. Please set it in repository secrets."
             }
           }
