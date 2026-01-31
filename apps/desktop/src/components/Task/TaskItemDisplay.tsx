@@ -279,7 +279,7 @@ export function TaskItemDisplay({
                         {task.description && (
                             <p
                                 className={cn(
-                                    "text-muted-foreground mt-1 w-full",
+                                    "text-muted-foreground mt-1 w-full break-words",
                                     dense ? "text-xs" : "text-sm",
                                     isRtl && "text-right"
                                 )}

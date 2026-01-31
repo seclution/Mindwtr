@@ -60,11 +60,12 @@ function DroppableColumn({
     const columnPadding = compact ? 'p-2' : 'p-3';
     const headerMargin = compact ? 'mb-3' : 'mb-4';
     const listSpacing = compact ? 'space-y-2' : 'space-y-3';
+    const columnMinWidth = compact ? 'min-w-[36ch]' : 'min-w-[40ch]';
 
     return (
         <div
             ref={setNodeRef}
-            className={`flex flex-col h-full min-w-[280px] flex-1 bg-muted/30 rounded-lg border border-border/50 border-t-4 ${columnPadding} ${STATUS_BORDER[id]}`}
+            className={`flex flex-col h-full ${columnMinWidth} flex-1 bg-muted/30 rounded-lg border border-border/50 border-t-4 ${columnPadding} ${STATUS_BORDER[id]}`}
         >
             <h3 className={`font-semibold ${headerMargin} flex items-center justify-between`}>
                 {label}
