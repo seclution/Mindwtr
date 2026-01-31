@@ -386,7 +386,12 @@ export function createNextRecurringTask(
     const byDay = getRecurrenceByDay(task.recurrence);
     const byMonthDay = getRecurrenceByMonthDay(task.recurrence);
     const interval = getRecurrenceInterval(task.recurrence);
-    const completedAtDate = safeParseDate(completedAtIso) || new Date(completedAtIso);
+    const parsedCompletedAt = safeParseDate(completedAtIso);
+    const fallbackCompletedAt = (() => {
+        const candidate = new Date(completedAtIso);
+        return Number.isNaN(candidate.getTime()) ? new Date() : candidate;
+    })();
+    const completedAtDate = parsedCompletedAt ?? fallbackCompletedAt;
     const baseIso = strategy === 'fluid' ? completedAtIso : task.dueDate;
 
     const nextDueDate = nextIsoFrom(baseIso, rule, completedAtDate, byDay, interval, byMonthDay);
