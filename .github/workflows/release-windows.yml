@@ -195,7 +195,14 @@ jobs:
             --clientId $clientId `
             --clientSecret $clientSecret
 
-          & msstore publish $msix --appId $env:MS_STORE_APP_ID
+          $publishOutput = & msstore publish $msix --appId $env:MS_STORE_APP_ID 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            if ($publishOutput -match 'InvalidState' -or $publishOutput -match 'certification' -or $publishOutput -match 'Pending Submission') {
+              Write-Warning "Store submission is already in certification. Skipping package publish."
+              exit 0
+            }
+            throw "Store publish failed: $publishOutput"
+          }
 
       - name: Update Microsoft Store metadata
         if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch'
@@ -207,8 +214,22 @@ jobs:
             Write-Error "metadata/metadata.json not found. Commit the metadata file before releasing."
           }
           $metadata = Get-Content -Raw "metadata/metadata.json"
-          & msstore submission updateMetadata $env:MS_STORE_APP_ID $metadata
-          & msstore submission publish $env:MS_STORE_APP_ID
+          $updateOutput = & msstore submission updateMetadata $env:MS_STORE_APP_ID $metadata 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            if ($updateOutput -match 'InvalidState' -or $updateOutput -match 'certification' -or $updateOutput -match 'Pending Submission') {
+              Write-Warning "Store submission is in certification. Skipping metadata update."
+              exit 0
+            }
+            throw "Metadata update failed: $updateOutput"
+          }
+          $publishOutput = & msstore submission publish $env:MS_STORE_APP_ID 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            if ($publishOutput -match 'InvalidState' -or $publishOutput -match 'certification' -or $publishOutput -match 'Pending Submission') {
+              Write-Warning "Store submission is in certification. Skipping metadata publish."
+              exit 0
+            }
+            throw "Metadata publish failed: $publishOutput"
+          }
 
       - name: Collect Windows artifacts
         shell: pwsh
