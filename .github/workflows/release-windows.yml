@@ -173,6 +173,21 @@ jobs:
             }
           }
 
+      - name: Reconfigure store credentials
+        if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch'
+        shell: pwsh
+        env:
+          MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
+          MS_SELLER_ID: ${{ secrets.MS_SELLER_ID }}
+          MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+          MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
+        run: |
+          msstore reconfigure `
+            --tenantId $env:MS_TENANT_ID `
+            --sellerId $env:MS_SELLER_ID `
+            --clientId $env:MS_CLIENT_ID `
+            --clientSecret $env:MS_CLIENT_SECRET
+
       - name: Check Microsoft Store submission status
         id: msstore_status
         if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch'
