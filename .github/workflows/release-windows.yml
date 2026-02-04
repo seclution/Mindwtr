@@ -279,6 +279,9 @@ jobs:
             }
           }
           $metadataJson = $metadata | ConvertTo-Json -Depth 100 -Compress
+          Write-Host "Metadata JSON preview (first 1500 chars):"
+          Write-Host $metadataJson.Substring(0, [Math]::Min(1500, $metadataJson.Length))
+          Write-Host "Metadata JSON size: $($metadataJson.Length) chars"
           $psi = [System.Diagnostics.ProcessStartInfo]::new()
           $psi.FileName = 'msstore'
           $psi.ArgumentList.Add('submission')
@@ -288,6 +291,7 @@ jobs:
           $psi.RedirectStandardOutput = $true
           $psi.RedirectStandardError = $true
           $psi.UseShellExecute = $false
+          $psi.ArgumentList.Add('--verbose')
           $process = [System.Diagnostics.Process]::Start($psi)
           $stdout = $process.StandardOutput.ReadToEnd()
           $stderr = $process.StandardError.ReadToEnd()
