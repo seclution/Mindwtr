@@ -251,11 +251,11 @@ jobs:
               $metadata.PSObject.Properties.Remove($prop)
             }
           }
+          $packagesJson = $null
           $currentPackages = $null
           $submissionGetOutput = & msstore submission get $env:MS_STORE_APP_ID 2>&1
           if ($LASTEXITCODE -eq 0) {
             $submissionText = ($submissionGetOutput | Out-String)
-            $packagesJson = $null
             $keyIndex = $submissionText.IndexOf('"ApplicationPackages"')
             if ($keyIndex -ge 0) {
               $arrayStart = $submissionText.IndexOf('[', $keyIndex)
@@ -292,10 +292,10 @@ jobs:
               }
             }
             if ($packagesJson) {
+              $packagesJson = ($packagesJson -replace "`r?`n", "").Trim()
               try {
                 $currentPackages = $packagesJson | ConvertFrom-Json
                 if ($currentPackages) {
-                  $metadata.ApplicationPackages = $currentPackages
                   Write-Host "Using ApplicationPackages from current submission: $($currentPackages.Count)"
                   $packageIds = $currentPackages | ForEach-Object { $_.Id } | Where-Object { $_ }
                   if ($packageIds) {
@@ -311,8 +311,13 @@ jobs:
           } else {
             Write-Warning "Failed to fetch current submission packages: $submissionGetOutput"
           }
-          if (-not $metadata.ApplicationPackages) {
+          if ($packagesJson) {
+            $metadata.ApplicationPackages = "__PACKAGES__"
+          } else {
             Write-Warning "ApplicationPackages missing; metadata update may fail."
+            if ($metadata.PSObject.Properties.Name -contains 'ApplicationPackages') {
+              $metadata.PSObject.Properties.Remove('ApplicationPackages')
+            }
           }
           $ensureArray = {
             param($value)
@@ -343,6 +348,9 @@ jobs:
             }
           }
           $metadataJson = $metadata | ConvertTo-Json -Depth 100 -Compress
+          if ($packagesJson) {
+            $metadataJson = $metadataJson.Replace('"ApplicationPackages":"__PACKAGES__"', '"ApplicationPackages":' + $packagesJson)
+          }
           Write-Host "Metadata keys: $($metadata.PSObject.Properties.Name -join ', ')"
           if ($metadata.Listings) {
             Write-Host "Listings locales: $($metadata.Listings.PSObject.Properties.Name -join ', ')"
