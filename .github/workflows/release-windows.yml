@@ -251,6 +251,35 @@ jobs:
               $metadata.PSObject.Properties.Remove($prop)
             }
           }
+          $currentPackages = $null
+          $submissionGetOutput = & msstore submission get $env:MS_STORE_APP_ID 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            $submissionText = ($submissionGetOutput | Out-String).Trim()
+            $startIndex = $submissionText.IndexOf('{')
+            $endIndex = $submissionText.LastIndexOf('}')
+            if ($startIndex -ge 0 -and $endIndex -gt $startIndex) {
+              $submissionText = $submissionText.Substring($startIndex, $endIndex - $startIndex + 1)
+            }
+            try {
+              $currentSubmission = $submissionText | ConvertFrom-Json
+              if ($currentSubmission -and $currentSubmission.ApplicationPackages) {
+                $currentPackages = $currentSubmission.ApplicationPackages
+                $metadata.ApplicationPackages = $currentPackages
+                Write-Host "Using ApplicationPackages from current submission: $($currentPackages.Count)"
+                $packageIds = $currentPackages | ForEach-Object { $_.Id } | Where-Object { $_ }
+                if ($packageIds) {
+                  Write-Host "Package IDs: $($packageIds -join ', ')"
+                }
+              }
+            } catch {
+              Write-Warning "Failed to parse submission JSON for packages: $_"
+            }
+          } else {
+            Write-Warning "Failed to fetch current submission packages: $submissionGetOutput"
+          }
+          if (-not $metadata.ApplicationPackages) {
+            Write-Warning "ApplicationPackages missing; metadata update may fail."
+          }
           $ensureArray = {
             param($value)
             if ($null -eq $value) { return $value }
