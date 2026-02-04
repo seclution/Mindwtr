@@ -8,7 +8,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Linking from 'expo-linking';
 import * as Sharing from 'expo-sharing';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { SwipeableTaskItem } from '@/components/swipeable-task-item';
 import { TaskEditModal } from '@/components/task-edit-modal';
@@ -29,6 +29,7 @@ export default function ProjectsScreen() {
   const { isDark } = useTheme();
   const { t } = useLanguage();
   const tc = useThemeColors();
+  const router = useRouter();
   const statusPalette: Record<Project['status'], { text: string; bg: string; border: string }> = {
     active: { text: tc.tint, bg: `${tc.tint}22`, border: tc.tint },
     waiting: { text: '#F59E0B', bg: '#F59E0B22', border: '#F59E0B' },
@@ -368,6 +369,23 @@ export default function ProjectsScreen() {
 
     if (Object.keys(updates).length > 0) {
       updateProject(project.id, updates);
+    }
+  };
+
+  const closeProjectDetail = () => {
+    persistSelectedProjectEdits(selectedProject);
+    setSelectedProject(null);
+    setNotesExpanded(false);
+    setShowNotesPreview(false);
+    setShowProjectMeta(false);
+    setShowReviewPicker(false);
+    setShowStatusMenu(false);
+    setLinkModalVisible(false);
+    setLinkInput('');
+    setShowAreaPicker(false);
+    setShowTagPicker(false);
+    if (projectId && router.canGoBack()) {
+      router.back();
     }
   };
 
@@ -768,26 +786,17 @@ export default function ProjectsScreen() {
       <Modal
         visible={!!selectedProject}
         animationType="slide"
-        onRequestClose={() => {
-          persistSelectedProjectEdits(selectedProject);
-          setSelectedProject(null);
-          setNotesExpanded(false);
-          setShowNotesPreview(false);
-          setShowProjectMeta(false);
-          setShowReviewPicker(false);
-          setShowStatusMenu(false);
-          setLinkModalVisible(false);
-          setLinkInput('');
-          setShowAreaPicker(false);
-          setShowTagPicker(false);
-        }}
+        onRequestClose={closeProjectDetail}
       >
                 <SafeAreaView style={{ flex: 1, backgroundColor: tc.bg }}>
                   {selectedProject ? (
                     <>
                 <View style={[styles.modalHeader, { borderBottomColor: tc.border, backgroundColor: tc.cardBg }]}>
+                  <TouchableOpacity onPress={closeProjectDetail} style={styles.backButton} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <Text style={[styles.backButtonText, { color: tc.tint }]}>{t('common.back') || 'Back'}</Text>
+                  </TouchableOpacity>
                   <TextInput
-                    style={[styles.modalTitle, { color: tc.text, marginLeft: 16, flex: 1 }]}
+                    style={[styles.modalTitle, { color: tc.text, marginLeft: 8, flex: 1 }]}
                     value={selectedProject.title}
                     onChangeText={(text) => setSelectedProject({ ...selectedProject, title: text })}
                     onSubmitEditing={() => {
