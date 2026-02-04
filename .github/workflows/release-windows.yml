@@ -258,7 +258,7 @@ jobs:
             --clientId $clientId `
             --clientSecret $clientSecret
 
-          $publishOutput = & msstore publish $msix --appId $env:MS_STORE_APP_ID 2>&1
+          $publishOutput = & msstore publish $msix -id $env:MS_STORE_APP_ID 2>&1
           if ($LASTEXITCODE -ne 0) {
             if ($publishOutput -match 'InvalidState' -or $publishOutput -match 'certification' -or $publishOutput -match 'Pending Submission') {
               Write-Warning "Store submission is already in certification. Skipping package publish."
