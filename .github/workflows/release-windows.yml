@@ -214,39 +214,70 @@ jobs:
           }
           "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Publish to Microsoft Store
+      - name: Update Microsoft Store metadata
+        if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch' && steps.msstore_status.outputs.skip != 'true'
+        shell: pwsh
+        env:
+          MS_STORE_APP_ID: ${{ secrets.MS_STORE_APP_ID || '9N0V5B0B6FRX' }}
+        run: |
+          if (-not (Test-Path "metadata/metadata.json")) {
+            Write-Warning "metadata/metadata.json not found. Skipping store metadata update."
+            exit 0
+          }
+          $metadata = Get-Content -Raw "metadata/metadata.json"
+          $updateOutput = & msstore submission updateMetadata $env:MS_STORE_APP_ID $metadata 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            if ($updateOutput -match 'InvalidState' -or $updateOutput -match 'certification' -or $updateOutput -match 'Pending Submission') {
+              Write-Warning "Store submission is in certification. Skipping metadata update."
+              exit 0
+            }
+            throw "Metadata update failed: $updateOutput"
+          }
+
+      - name: Upload package to Microsoft Store
+        if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch' && steps.msstore_status.outputs.skip != 'true'
+        shell: pwsh
+        env:
+          MS_STORE_APP_ID: ${{ secrets.MS_STORE_APP_ID || '9N0V5B0B6FRX' }}
+        run: |
+          $msix = (Resolve-Path "mindwtr_${{ steps.version.outputs.version }}_x64.msix").Path
+          $updateOutput = & msstore submission update $env:MS_STORE_APP_ID $msix 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            if ($updateOutput -match 'InvalidState' -or $updateOutput -match 'certification' -or $updateOutput -match 'Pending Submission') {
+              Write-Warning "Store submission is in certification. Skipping package upload."
+              exit 0
+            }
+            throw "Package upload failed: $updateOutput"
+          }
+
+      - name: Publish Microsoft Store submission
         id: msstore_publish
         if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch' && steps.msstore_status.outputs.skip != 'true'
         shell: pwsh
         env:
-          MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
-          MS_SELLER_ID: ${{ secrets.MS_SELLER_ID }}
-          MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
-          MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
           MS_STORE_APP_ID: ${{ secrets.MS_STORE_APP_ID || '9N0V5B0B6FRX' }}
         run: |
           "published=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          $msix = (Resolve-Path "mindwtr_${{ steps.version.outputs.version }}_x64.msix").Path
-          $tenantId = $env:MS_TENANT_ID.Trim()
-          $sellerId = $env:MS_SELLER_ID.Trim()
-          $clientId = $env:MS_CLIENT_ID.Trim()
-          $clientSecret = $env:MS_CLIENT_SECRET.Trim()
-
-          & msstore reconfigure `
-            --tenantId $tenantId `
-            --sellerId $sellerId `
-            --clientId $clientId `
-            --clientSecret $clientSecret
-
-          $publishOutput = & msstore publish $msix --appId $env:MS_STORE_APP_ID 2>&1
+          $publishOutput = & msstore submission publish $env:MS_STORE_APP_ID 2>&1
           if ($LASTEXITCODE -ne 0) {
             if ($publishOutput -match 'InvalidState' -or $publishOutput -match 'certification' -or $publishOutput -match 'Pending Submission') {
-              Write-Warning "Store submission is already in certification. Skipping package publish."
+              Write-Warning "Store submission is already in certification. Skipping publish."
               exit 0
             }
             throw "Store publish failed: $publishOutput"
           }
           "published=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Poll Microsoft Store submission
+        if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch' && steps.msstore_publish.outputs.published == 'true'
+        shell: pwsh
+        env:
+          MS_STORE_APP_ID: ${{ secrets.MS_STORE_APP_ID || '9N0V5B0B6FRX' }}
+        run: |
+          $pollOutput = & msstore submission poll $env:MS_STORE_APP_ID 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Store submission poll failed: $pollOutput"
+          }
 
       - name: Collect Windows artifacts
         shell: pwsh
