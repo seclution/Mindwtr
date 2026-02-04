@@ -132,9 +132,40 @@ jobs:
           $success = $false
           for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
             Write-Host "Updating metadata (attempt $attempt of $maxRetries)..."
-            $updateOutput = msstore submission updateMetadata $env:MS_STORE_APP_ID $metadataJson --verbose 2>&1
-            if ($updateOutput) { Write-Host $updateOutput }
-            if ($LASTEXITCODE -eq 0) {
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = 'msstore'
+            $psi.ArgumentList.Add('submission')
+            $psi.ArgumentList.Add('updateMetadata')
+            $psi.ArgumentList.Add($env:MS_STORE_APP_ID)
+            $psi.ArgumentList.Add($metadataJson)
+            $psi.ArgumentList.Add('--verbose')
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.UseShellExecute = $false
+            $process = [System.Diagnostics.Process]::Start($psi)
+            $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+            $stderrTask = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(600000)) {
+              $process.Kill()
+              $updateOutput = "Metadata update timed out after 10 minutes"
+              $exitCode = 124
+            } else {
+              $stdout = $stdoutTask.GetAwaiter().GetResult()
+              $stderr = $stderrTask.GetAwaiter().GetResult()
+              $updateOutput = ($stdout + $stderr).Trim()
+              $exitCode = $process.ExitCode
+            }
+            if ($updateOutput) {
+              $logPath = Join-Path $env:RUNNER_TEMP "msstore-update-metadata-$attempt.log"
+              [System.IO.File]::WriteAllText($logPath, $updateOutput)
+              Write-Host "msstore log saved to $logPath"
+              if ($updateOutput.Length -gt 4000) {
+                Write-Host $updateOutput.Substring($updateOutput.Length - 4000)
+              } else {
+                Write-Host $updateOutput
+              }
+            }
+            if ($exitCode -eq 0) {
               $success = $true
               break
             }
