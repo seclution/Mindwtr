@@ -50,12 +50,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             Write-Warning "Failed to check submission status. Continuing: $statusOutput"
             "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "create=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             exit 0
           }
           if ($statusOutput -match 'Could not find a Pending Submission') {
             "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "create=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             exit 0
           }
 
@@ -74,20 +72,9 @@ jobs:
           if ($blocked) {
             Write-Warning "Store submission in progress. Skipping metadata update. Status: $statusOutput"
             "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "create=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             exit 0
           }
           "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "create=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-      - name: Create Microsoft Store submission
-        shell: pwsh
-        if: steps.msstore_status.outputs.skip != 'true' && steps.msstore_status.outputs.create == 'true'
-        run: |
-          $createOutput = msstore submission create $env:MS_STORE_APP_ID 2>&1
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to create submission: $createOutput"
-          }
 
       - name: Update store metadata
         shell: pwsh
