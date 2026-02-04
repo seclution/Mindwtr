@@ -287,42 +287,22 @@ jobs:
           Write-Host $metadataJson.Substring(0, [Math]::Min(1500, $metadataJson.Length))
           Write-Host "Metadata JSON size: $($metadataJson.Length) chars"
           Write-Host "Updating metadata..."
-          $psi = [System.Diagnostics.ProcessStartInfo]::new()
-          $psi.FileName = 'msstore'
-          $psi.ArgumentList.Add('submission')
-          $psi.ArgumentList.Add('updateMetadata')
-          $psi.ArgumentList.Add($env:MS_STORE_APP_ID)
-          $psi.ArgumentList.Add($metadataJson)
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError = $true
-          $psi.UseShellExecute = $false
-          $psi.ArgumentList.Add('--verbose')
-          $process = [System.Diagnostics.Process]::new()
-          $process.StartInfo = $psi
-          $stdoutBuilder = [System.Text.StringBuilder]::new()
-          $stderrBuilder = [System.Text.StringBuilder]::new()
-          $process.add_OutputDataReceived({
-            param($sender, $args)
-            if ($args.Data) { $stdoutBuilder.AppendLine($args.Data) | Out-Null }
-          })
-          $process.add_ErrorDataReceived({
-            param($sender, $args)
-            if ($args.Data) { $stderrBuilder.AppendLine($args.Data) | Out-Null }
-          })
-          $process.Start() | Out-Null
-          $process.BeginOutputReadLine()
-          $process.BeginErrorReadLine()
-          if (-not $process.WaitForExit(300000)) {
-            $process.Kill()
-            throw "Metadata update timed out after 5 minutes"
-          }
-          $process.WaitForExit()
-          $stdout = $stdoutBuilder.ToString()
-          $stderr = $stderrBuilder.ToString()
+          $tempDir = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { (Get-Location).Path }
+          $stdoutFile = Join-Path $tempDir "msstore-metadata-stdout.txt"
+          $stderrFile = Join-Path $tempDir "msstore-metadata-stderr.txt"
+          $proc = Start-Process -FilePath "msstore" `
+            -ArgumentList @("submission", "updateMetadata", $env:MS_STORE_APP_ID, $metadataJson, "--verbose") `
+            -RedirectStandardOutput $stdoutFile `
+            -RedirectStandardError $stderrFile `
+            -NoNewWindow `
+            -PassThru `
+            -Wait
+          $stdout = if (Test-Path $stdoutFile) { Get-Content -Raw $stdoutFile -ErrorAction SilentlyContinue } else { "" }
+          $stderr = if (Test-Path $stderrFile) { Get-Content -Raw $stderrFile -ErrorAction SilentlyContinue } else { "" }
           if ($stdout) { Write-Host $stdout }
           if ($stderr) { Write-Host "STDERR: $stderr" }
           $updateOutput = ($stdout + $stderr).Trim()
-          if ($process.ExitCode -ne 0) {
+          if ($proc.ExitCode -ne 0) {
             if ($updateOutput -match 'InvalidState' -or $updateOutput -match 'certification' -or $updateOutput -match 'Pending Submission') {
               Write-Warning "Store submission is in certification. Skipping metadata update."
               exit 0
