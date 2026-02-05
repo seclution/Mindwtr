@@ -27,6 +27,8 @@ import {
     normalizeWebdavUrl,
     normalizeCloudUrl,
     sanitizeAppDataForRemote,
+    injectExternalCalendars as injectExternalCalendarsForSync,
+    persistExternalCalendars as persistExternalCalendarsForSync,
     withRetry,
     CLOCK_SKEW_THRESHOLD_MS,
     appendSyncHistory,
@@ -146,35 +148,18 @@ const isWebdavRateLimitedError = (error: unknown): boolean => {
     );
 };
 
-const injectExternalCalendars = async (data: AppData): Promise<AppData> => {
-    if (data.settings.syncPreferences?.externalCalendars !== true) return data;
-    try {
-        const stored = await ExternalCalendarService.getCalendars();
-        if (!stored.length) return data;
-        if (data.settings.externalCalendars && data.settings.externalCalendars.length > 0) {
-            return data;
-        }
-        return {
-            ...data,
-            settings: {
-                ...data.settings,
-                externalCalendars: stored,
-            },
-        };
-    } catch (error) {
-        logSyncWarning('Failed to load external calendars for sync', error);
-        return data;
-    }
+const externalCalendarProvider = {
+    load: () => ExternalCalendarService.getCalendars(),
+    save: (calendars: AppData['settings']['externalCalendars'] | undefined) =>
+        ExternalCalendarService.setCalendars(calendars ?? []),
+    onWarn: (message: string, error?: unknown) => logSyncWarning(message, error),
 };
 
-const persistExternalCalendars = async (data: AppData): Promise<void> => {
-    if (data.settings.syncPreferences?.externalCalendars !== true) return;
-    try {
-        await ExternalCalendarService.setCalendars(data.settings.externalCalendars ?? []);
-    } catch (error) {
-        logSyncWarning('Failed to save external calendars from sync', error);
-    }
-};
+const injectExternalCalendars = async (data: AppData): Promise<AppData> =>
+    injectExternalCalendarsForSync(data, externalCalendarProvider);
+
+const persistExternalCalendars = async (data: AppData): Promise<void> =>
+    persistExternalCalendarsForSync(data, externalCalendarProvider);
 
 class LocalSyncAbort extends Error {
     constructor() {

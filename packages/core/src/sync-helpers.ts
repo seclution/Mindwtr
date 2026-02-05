@@ -78,3 +78,45 @@ export const sanitizeAppDataForRemote = (data: AppData): AppData => {
         settings: sanitizeSettingsForRemote(data.settings),
     };
 };
+
+type ExternalCalendarProvider = {
+    load: () => Promise<AppData['settings']['externalCalendars'] | undefined>;
+    save: (calendars: AppData['settings']['externalCalendars'] | undefined) => Promise<void>;
+    onWarn?: (message: string, error?: unknown) => void;
+};
+
+export const injectExternalCalendars = async (
+    data: AppData,
+    provider: ExternalCalendarProvider
+): Promise<AppData> => {
+    if (data.settings.syncPreferences?.externalCalendars !== true) return data;
+    try {
+        const stored = await provider.load();
+        if (!stored || stored.length === 0) return data;
+        if (data.settings.externalCalendars && data.settings.externalCalendars.length > 0) {
+            return data;
+        }
+        return {
+            ...data,
+            settings: {
+                ...data.settings,
+                externalCalendars: stored,
+            },
+        };
+    } catch (error) {
+        provider.onWarn?.('Failed to load external calendars for sync', error);
+        return data;
+    }
+};
+
+export const persistExternalCalendars = async (
+    data: AppData,
+    provider: ExternalCalendarProvider
+): Promise<void> => {
+    if (data.settings.syncPreferences?.externalCalendars !== true) return;
+    try {
+        await provider.save(data.settings.externalCalendars ?? []);
+    } catch (error) {
+        provider.onWarn?.('Failed to save external calendars from sync', error);
+    }
+};

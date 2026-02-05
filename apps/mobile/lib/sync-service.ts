@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AppData, MergeStats, useTaskStore, webdavGetJson, webdavPutJson, cloudGetJson, cloudPutJson, flushPendingSave, performSyncCycle, findOrphanedAttachments, removeOrphanedAttachmentsFromData, webdavDeleteFile, cloudDeleteFile, CLOCK_SKEW_THRESHOLD_MS, appendSyncHistory, withRetry, normalizeWebdavUrl, normalizeCloudUrl, sanitizeAppDataForRemote } from '@mindwtr/core';
+import { AppData, MergeStats, useTaskStore, webdavGetJson, webdavPutJson, cloudGetJson, cloudPutJson, flushPendingSave, performSyncCycle, findOrphanedAttachments, removeOrphanedAttachmentsFromData, webdavDeleteFile, cloudDeleteFile, CLOCK_SKEW_THRESHOLD_MS, appendSyncHistory, withRetry, normalizeWebdavUrl, normalizeCloudUrl, sanitizeAppDataForRemote, injectExternalCalendars as injectExternalCalendarsForSync, persistExternalCalendars as persistExternalCalendarsForSync } from '@mindwtr/core';
 import { mobileStorage } from './storage-adapter';
 import { logInfo, logSyncError, logWarn, sanitizeLogMessage } from './app-log';
 import { readSyncFile, writeSyncFile } from './storage-file';
@@ -31,35 +31,18 @@ const logSyncInfo = (message: string, extra?: Record<string, string>) => {
   void logInfo(message, { scope: 'sync', extra });
 };
 
-const injectExternalCalendars = async (data: AppData): Promise<AppData> => {
-  if (data.settings.syncPreferences?.externalCalendars !== true) return data;
-  try {
-    const stored = await getExternalCalendars();
-    if (!stored.length) return data;
-    if (data.settings.externalCalendars && data.settings.externalCalendars.length > 0) {
-      return data;
-    }
-    return {
-      ...data,
-      settings: {
-        ...data.settings,
-        externalCalendars: stored,
-      },
-    };
-  } catch (error) {
-    logSyncWarning('Failed to load external calendars for sync', error);
-    return data;
-  }
+const externalCalendarProvider = {
+  load: () => getExternalCalendars(),
+  save: (calendars: AppData['settings']['externalCalendars'] | undefined) =>
+    saveExternalCalendars(calendars ?? []),
+  onWarn: (message: string, error?: unknown) => logSyncWarning(message, error),
 };
 
-const persistExternalCalendars = async (data: AppData): Promise<void> => {
-  if (data.settings.syncPreferences?.externalCalendars !== true) return;
-  try {
-    await saveExternalCalendars(data.settings.externalCalendars ?? []);
-  } catch (error) {
-    logSyncWarning('Failed to save external calendars from sync', error);
-  }
-};
+const injectExternalCalendars = async (data: AppData): Promise<AppData> =>
+  injectExternalCalendarsForSync(data, externalCalendarProvider);
+
+const persistExternalCalendars = async (data: AppData): Promise<void> =>
+  persistExternalCalendarsForSync(data, externalCalendarProvider);
 
 const shouldRunAttachmentCleanup = (lastCleanupAt?: string): boolean => {
   if (!lastCleanupAt) return true;
