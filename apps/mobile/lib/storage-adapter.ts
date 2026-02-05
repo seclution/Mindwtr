@@ -12,7 +12,7 @@ const LEGACY_DATA_KEYS = ['focus-gtd-data', 'gtd-todo-data', 'gtd-data'];
 let saveQueue: Promise<void> = Promise.resolve();
 
 const enqueueSave = async (work: () => Promise<void>): Promise<void> => {
-    const next = saveQueue.catch(() => undefined).then(work);
+    const next = saveQueue.then(work, () => work());
     saveQueue = next.catch(() => undefined);
     return next;
 };
