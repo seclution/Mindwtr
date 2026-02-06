@@ -7,7 +7,7 @@ const isFossBuild = process.env.FOSS_BUILD === '1' || process.env.FOSS_BUILD ===
 export default ({ config }: ConfigContext): ExpoConfig => {
   const base = config as ExpoConfig;
   const plugins: PluginEntry[] = Array.isArray(base.plugins) ? [...base.plugins] : [];
-  const fossPluginBlocklist = new Set(['expo-notifications', './plugins/android-manifest-fixes']);
+  const fossPluginBlocklist = new Set(['expo-notifications']);
   const filteredPlugins = isFossBuild
     ? plugins.filter((plugin) => {
         if (typeof plugin === 'string') {

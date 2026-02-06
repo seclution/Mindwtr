@@ -1,6 +1,8 @@
 const { withAndroidManifest } = require('@expo/config-plugins');
 
 const MLKIT_ACTIVITY = 'com.google.mlkit.vision.codescanner.internal.GmsBarcodeScanningDelegateActivity';
+const GMS_MODULE_DEPENDENCIES_SERVICE = 'com.google.android.gms.metadata.ModuleDependencies';
+const isFossBuild = process.env.FOSS_BUILD === '1' || process.env.FOSS_BUILD === 'true';
 
 module.exports = function withAndroidManifestFixes(config) {
   return withAndroidManifest(config, (config) => {
@@ -14,8 +16,12 @@ module.exports = function withAndroidManifestFixes(config) {
     }
 
     const application = manifest.manifest.application?.[0];
-    if (!application?.activity) {
+    if (!application) {
       return config;
+    }
+
+    if (!Array.isArray(application.activity)) {
+      application.activity = [];
     }
 
     let didUpdateMlkit = false;
@@ -35,13 +41,36 @@ module.exports = function withAndroidManifestFixes(config) {
       }
     });
 
-    if (!didUpdateMlkit) {
+    if (!didUpdateMlkit && application.activity.length > 0) {
       application.activity.push({
         $: {
           'android:name': MLKIT_ACTIVITY,
           'tools:remove': 'android:screenOrientation',
         },
       });
+    }
+
+    if (isFossBuild) {
+      if (!Array.isArray(application.service)) {
+        application.service = [];
+      }
+
+      let didMarkForRemoval = false;
+      application.service.forEach((service) => {
+        if (service?.$?.['android:name'] === GMS_MODULE_DEPENDENCIES_SERVICE) {
+          service.$['tools:node'] = 'remove';
+          didMarkForRemoval = true;
+        }
+      });
+
+      if (!didMarkForRemoval) {
+        application.service.push({
+          $: {
+            'android:name': GMS_MODULE_DEPENDENCIES_SERVICE,
+            'tools:node': 'remove',
+          },
+        });
+      }
     }
 
     return config;
