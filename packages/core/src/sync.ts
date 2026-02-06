@@ -85,6 +85,61 @@ export const normalizeAppData = (data: AppData): AppData => ({
     settings: data.settings ?? {},
 });
 
+const isNonEmptyString = (value: unknown): value is string =>
+    typeof value === 'string' && value.trim().length > 0;
+
+const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const validateEntityShape = (
+    items: unknown[],
+    label: 'tasks' | 'projects' | 'sections',
+    errors: string[]
+) => {
+    for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        if (!isObjectRecord(item)) {
+            errors.push(`${label}[${index}] must be an object`);
+            continue;
+        }
+        if (!isNonEmptyString(item.id)) {
+            errors.push(`${label}[${index}].id must be a non-empty string`);
+        }
+        if (!isNonEmptyString(item.updatedAt)) {
+            errors.push(`${label}[${index}].updatedAt must be a non-empty string`);
+        }
+    }
+};
+
+const validateMergedSyncData = (data: AppData): string[] => {
+    const errors: string[] = [];
+    if (!Array.isArray(data.tasks)) errors.push('tasks must be an array');
+    if (!Array.isArray(data.projects)) errors.push('projects must be an array');
+    if (!Array.isArray(data.sections)) errors.push('sections must be an array');
+    if (!Array.isArray(data.areas)) errors.push('areas must be an array');
+    if (!isObjectRecord(data.settings)) errors.push('settings must be an object');
+
+    if (Array.isArray(data.tasks)) validateEntityShape(data.tasks as unknown[], 'tasks', errors);
+    if (Array.isArray(data.projects)) validateEntityShape(data.projects as unknown[], 'projects', errors);
+    if (Array.isArray(data.sections)) validateEntityShape(data.sections as unknown[], 'sections', errors);
+    if (Array.isArray(data.areas)) {
+        for (let index = 0; index < data.areas.length; index += 1) {
+            const area = data.areas[index] as unknown;
+            if (!isObjectRecord(area)) {
+                errors.push(`areas[${index}] must be an object`);
+                continue;
+            }
+            if (!isNonEmptyString(area.id)) {
+                errors.push(`areas[${index}].id must be a non-empty string`);
+            }
+            if (!isNonEmptyString(area.name)) {
+                errors.push(`areas[${index}].name must be a non-empty string`);
+            }
+        }
+    }
+    return errors;
+};
+
 const parseSyncTimestamp = (value?: string): number => {
     if (!value) return NaN;
     const parsed = Date.parse(value);
@@ -570,6 +625,18 @@ export async function performSyncCycle(io: SyncCycleIO): Promise<SyncCycleResult
             lastSyncHistory: nextHistory,
         },
     };
+    const validationErrors = validateMergedSyncData(finalData);
+    if (validationErrors.length > 0) {
+        const sample = validationErrors.slice(0, 3).join('; ');
+        logWarn('Sync merge validation failed', {
+            scope: 'sync',
+            context: {
+                issues: validationErrors.length,
+                sample,
+            },
+        });
+        throw new Error(`Sync validation failed: ${sample}`);
+    }
 
     io.onStep?.('write-local');
     await io.writeLocal(finalData);

@@ -377,6 +377,42 @@ describe('Sync Logic', () => {
             expect(result.status).toBe('conflict');
             expect(result.stats.tasks.conflicts).toBe(1);
         });
+
+        it('fails before writes when merged data is invalid', async () => {
+            let wroteLocal = false;
+            let wroteRemote = false;
+            const invalidIncoming: AppData = {
+                tasks: [],
+                projects: [
+                    {
+                        // Missing id on purpose to simulate corrupted remote payload.
+                        title: 'Broken',
+                        status: 'active',
+                        color: '#000000',
+                        order: 0,
+                        tagIds: [],
+                        createdAt: '2024-01-01T00:00:00.000Z',
+                        updatedAt: '2024-01-01T00:00:00.000Z',
+                    } as unknown as Project,
+                ],
+                sections: [],
+                areas: [],
+                settings: {},
+            };
+
+            await expect(performSyncCycle({
+                readLocal: async () => mockAppData(),
+                readRemote: async () => invalidIncoming,
+                writeLocal: async () => {
+                    wroteLocal = true;
+                },
+                writeRemote: async () => {
+                    wroteRemote = true;
+                },
+            })).rejects.toThrow('Sync validation failed');
+            expect(wroteLocal).toBe(false);
+            expect(wroteRemote).toBe(false);
+        });
     });
 
     describe('appendSyncHistory', () => {
