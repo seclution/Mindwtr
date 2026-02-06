@@ -1,6 +1,6 @@
 # Mobile Installation
 
-Detailed installation instructions for Android and iOS (simulator builds).
+Detailed installation instructions for Android and iOS.
 
 ---
 
@@ -40,13 +40,16 @@ After installation:
 
 ### Current Status
 
-iOS builds currently require an Apple Developer account ($99/year). Pre-built releases are not available on the App Store.
+iOS is currently available via TestFlight:
+https://testflight.apple.com/join/7SMJCTSR
+
+There is no public App Store release at this time.
 
 ### Options
 
-1. **Simulator builds** — Available in the source code for development
-2. **Self-build** — Build and sign the app yourself with Xcode
-3. **TestFlight** — May be available in the future
+1. **TestFlight (Recommended)** — Install the latest iOS beta build
+2. **Simulator builds** — Available in the source code for development
+3. **Self-build** — Build and sign the app yourself with Xcode (Apple Developer account required for device signing)
 
 ### Building for iOS (Developers)
 
