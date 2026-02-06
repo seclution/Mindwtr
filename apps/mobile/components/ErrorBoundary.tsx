@@ -2,6 +2,7 @@ import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { logError } from '@/lib/app-log';
+import { useLanguage } from '@/contexts/language-context';
 
 interface Props {
     children: ReactNode;
@@ -14,12 +15,13 @@ interface State {
 
 function ErrorFallback({ error, onRetry }: { error: Error | null; onRetry: () => void }) {
     const tc = useThemeColors();
+    const { t } = useLanguage();
     return (
         <View style={[styles.container, { backgroundColor: tc.bg }]}>
             <Text style={styles.emoji}>💥</Text>
-            <Text style={[styles.title, { color: tc.text }]}>Something went wrong</Text>
+            <Text style={[styles.title, { color: tc.text }]}>{t('errorBoundary.title')}</Text>
             <Text style={[styles.message, { color: tc.secondaryText }]}>
-                The app encountered an unexpected error.
+                {t('errorBoundary.message')}
             </Text>
             <View style={[styles.errorBox, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
                 <Text style={[styles.errorText, { color: tc.danger }]}>
@@ -27,7 +29,7 @@ function ErrorFallback({ error, onRetry }: { error: Error | null; onRetry: () =>
                 </Text>
             </View>
             <TouchableOpacity style={[styles.button, { backgroundColor: tc.tint }]} onPress={onRetry}>
-                <Text style={[styles.buttonText, { color: tc.onTint }]}>Try Again</Text>
+                <Text style={[styles.buttonText, { color: tc.onTint }]}>{t('errorBoundary.retry')}</Text>
             </TouchableOpacity>
         </View>
     );

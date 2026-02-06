@@ -85,7 +85,7 @@ export function TaskEditSectionPicker({
                     <TextInput
                         value={sectionQuery}
                         onChangeText={setSectionQuery}
-                        placeholder="Search sections"
+                        placeholder={t('common.search')}
                         placeholderTextColor={tc.secondaryText}
                         style={[styles.modalInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
                         autoCapitalize="none"

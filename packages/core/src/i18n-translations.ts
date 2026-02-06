@@ -813,6 +813,9 @@ const en: Record<string, string> = {
         'common.less': 'Less',
         'common.loading': 'Loading...',
         'common.offline': 'Offline',
+        'errorBoundary.title': 'Something went wrong',
+        'errorBoundary.message': 'The app encountered an unexpected error.',
+        'errorBoundary.retry': 'Try again',
         'audio.loading': 'Loading audio...',
 
         // Bulk Actions
