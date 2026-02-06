@@ -39,43 +39,41 @@ interface DraggableTaskProps {
 }
 
 function DraggableTask({ task, isDark, currentColumnIndex, onDrop, onTap, onDelete, onDuplicate, deleteLabel, duplicateLabel, projectTitle, projectColor, timeEstimatesEnabled }: DraggableTaskProps) {
-  const translateY = useSharedValue(0);
+  const translateX = useSharedValue(0);
   const scale = useSharedValue(1);
   const zIndex = useSharedValue(1);
   const isDragging = useSharedValue(false);
 
-  const COLUMN_HEIGHT_ESTIMATE = 150;
+  const STATUS_DRAG_STEP_PX = 96;
 
   // Tap gesture for editing
   const tapGesture = Gesture.Tap()
     .onEnd(() => {
-      if (task.status === 'done') return;
       runOnJS(onTap)(task);
     });
 
-  // Pan gesture for dragging - requires long press to distinguish from scroll/swipe
+  // Horizontal status drag avoids conflicts with vertical board scrolling.
   const panGesture = Gesture.Pan()
     .activateAfterLongPress(250)
     .onStart(() => {
       isDragging.value = true;
       scale.value = withSpring(1.05);
       zIndex.value = 1000;
-      // Provide Haptic feedback here if possible, but runOnJS needed
     })
     .onUpdate((event) => {
-      translateY.value = event.translationY;
+      translateX.value = event.translationX;
     })
     .onEnd((event) => {
       isDragging.value = false;
 
-      const columnsMoved = Math.round(event.translationY / COLUMN_HEIGHT_ESTIMATE);
+      const columnsMoved = Math.round(event.translationX / STATUS_DRAG_STEP_PX);
       const newColumnIndex = Math.max(0, Math.min(COLUMNS.length - 1, currentColumnIndex + columnsMoved));
 
       if (newColumnIndex !== currentColumnIndex) {
         runOnJS(onDrop)(task.id, newColumnIndex);
       }
 
-      translateY.value = withSpring(0);
+      translateX.value = withSpring(0);
       scale.value = withSpring(1);
       zIndex.value = 1;
     });
@@ -88,7 +86,7 @@ function DraggableTask({ task, isDark, currentColumnIndex, onDrop, onTap, onDele
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateY: translateY.value },
+      { translateX: translateX.value },
       { scale: scale.value },
     ],
     zIndex: zIndex.value,
