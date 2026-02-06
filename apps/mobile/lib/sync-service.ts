@@ -139,6 +139,7 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
       let webdavConfig: { url: string; username: string; password: string } | null = null;
       let cloudConfig: { url: string; token: string } | null = null;
       let fileSyncPath: string | null = null;
+      let preSyncedLocalData: AppData | null = null;
       step = 'flush';
       await flushPendingSave();
       if (backend === 'file') {
@@ -184,16 +185,18 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
           preMutated = await syncFileAttachments(localData, fileSyncPath);
         }
         if (preMutated) {
-          await mobileStorage.saveData(localData);
-          wroteLocal = true;
+          // Keep pre-sync attachment mutations in memory until the main merge/write succeeds.
+          preSyncedLocalData = localData;
         }
       } catch (error) {
         logSyncWarning('Attachment pre-sync warning', error);
       }
       const syncResult = await performSyncCycle({
         readLocal: async () => {
-          const persistedData = await mobileStorage.getData();
-          const baseData = mergeAppData(persistedData, getInMemoryAppDataSnapshot());
+          const inMemorySnapshot = getInMemoryAppDataSnapshot();
+          const baseData = preSyncedLocalData
+            ? mergeAppData(preSyncedLocalData, inMemorySnapshot)
+            : mergeAppData(await mobileStorage.getData(), inMemorySnapshot);
           return await injectExternalCalendars(baseData);
         },
         readRemote: async () => {
