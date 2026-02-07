@@ -109,7 +109,14 @@ function RootLayoutContent() {
   }, []);
 
   useEffect(() => {
-    setNotificationOpenHandler(() => {
+    setNotificationOpenHandler((payload) => {
+      const taskId = typeof payload?.taskId === 'string' ? payload.taskId : undefined;
+      if (taskId) {
+        useTaskStore.getState().setHighlightTask(taskId);
+        const openToken = typeof payload?.notificationId === 'string' ? payload.notificationId : String(Date.now());
+        router.push({ pathname: '/focus', params: { taskId, openToken } });
+        return;
+      }
       router.push('/review');
     });
     return () => {

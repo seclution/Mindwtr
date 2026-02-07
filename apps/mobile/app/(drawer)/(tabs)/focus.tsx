@@ -1,6 +1,7 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { View, Text, SectionList, StyleSheet } from 'react-native';
 import { format } from 'date-fns';
+import { useLocalSearchParams } from 'expo-router';
 
 import { useTaskStore, safeParseDate, safeParseDueDate, type Task, type TaskStatus } from '@mindwtr/core';
 import { SwipeableTaskItem } from '@/components/swipeable-task-item';
@@ -10,12 +11,42 @@ import { useLanguage } from '../../../contexts/language-context';
 import { TaskEditModal } from '@/components/task-edit-modal';
 
 export default function FocusScreen() {
-  const { tasks, projects, updateTask, deleteTask } = useTaskStore();
+  const { taskId, openToken } = useLocalSearchParams<{ taskId?: string; openToken?: string }>();
+  const { tasks, projects, updateTask, deleteTask, highlightTaskId, setHighlightTask } = useTaskStore();
   const { isDark } = useTheme();
   const { t } = useLanguage();
   const tc = useThemeColors();
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const lastOpenedFromNotificationRef = useRef<string | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!taskId || typeof taskId !== 'string') return;
+    const openKey = `${taskId}:${typeof openToken === 'string' ? openToken : ''}`;
+    if (lastOpenedFromNotificationRef.current === openKey) return;
+    const task = tasks.find((item) => item.id === taskId && !item.deletedAt);
+    if (!task) return;
+    lastOpenedFromNotificationRef.current = openKey;
+    setHighlightTask(task.id);
+    setEditingTask(task);
+    setIsModalVisible(true);
+  }, [openToken, setHighlightTask, taskId, tasks]);
+
+  useEffect(() => {
+    if (!highlightTaskId) return;
+    if (highlightTimerRef.current) {
+      clearTimeout(highlightTimerRef.current);
+    }
+    highlightTimerRef.current = setTimeout(() => {
+      setHighlightTask(null);
+    }, 3500);
+    return () => {
+      if (highlightTimerRef.current) {
+        clearTimeout(highlightTimerRef.current);
+      }
+    };
+  }, [highlightTaskId, setHighlightTask]);
 
   const sequentialProjectIds = useMemo(() => {
     return new Set(projects.filter((project) => project.isSequential && !project.deletedAt).map((project) => project.id));
@@ -116,6 +147,7 @@ export default function FocusScreen() {
         onPress={() => onEdit(item)}
         onStatusChange={(status) => updateTask(item.id, { status: status as TaskStatus })}
         onDelete={() => deleteTask(item.id)}
+        isHighlighted={item.id === highlightTaskId}
         showFocusToggle
         hideStatusBadge
       />

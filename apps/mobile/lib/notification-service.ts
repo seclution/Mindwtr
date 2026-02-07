@@ -298,7 +298,7 @@ async function scheduleForTask(api: NotificationsApi, task: Task, when: Date) {
   const content: NotificationContentInput = {
     title: task.title,
     body: task.description || '',
-    data: { taskId: task.id },
+    data: { kind: 'task-reminder', taskId: task.id },
     categoryIdentifier: 'task-reminder',
   };
 
@@ -322,7 +322,7 @@ async function scheduleForProject(api: NotificationsApi, project: Project, when:
   const content: NotificationContentInput = {
     title: project.title,
     body: label,
-    data: { projectId: project.id },
+    data: { kind: 'project-review', projectId: project.id },
     categoryIdentifier: 'project-review',
   };
 
