@@ -17,7 +17,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -118,12 +118,14 @@ jobs:
       - name: Build signed macOS app bundle (App Store)
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.MAS_SIGNING_IDENTITY }}
+          CMAKE_C_FLAGS: -march=armv8.2-a+dotprod
+          CMAKE_CXX_FLAGS: -march=armv8.2-a+dotprod
           TAURI_LOG_LEVEL: debug
         run: |
           set -euo pipefail
           cd apps/desktop
           cargo tauri build \
-            --target x86_64-apple-darwin \
+            --target aarch64-apple-darwin \
             --bundles app \
             --config src-tauri/tauri.appstore.conf.json
 
@@ -133,7 +135,7 @@ jobs:
           MAS_INSTALLER_SIGNING_IDENTITY: ${{ secrets.MAS_INSTALLER_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
-          APP_PATH="$(find apps/desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -n 1)"
+          APP_PATH="$(find apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -n 1)"
           if [ -z "${APP_PATH:-}" ]; then
             echo "::error::Built .app bundle not found"
             exit 1
