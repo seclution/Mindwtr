@@ -1,0 +1,298 @@
+name: Release iOS App Store
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: Upload to App Store Connect
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  ios-appstore:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      EXPECTED_TEAM_ID: 5X9JC5PL7T
+      EXPECTED_BUNDLE_ID: tech.dongdongbh.mindwtr
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          if [ -d "/Applications/Xcode_16.4.app" ]; then
+            sudo xcode-select -s "/Applications/Xcode_16.4.app"
+          fi
+          xcodebuild -version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Validate required secrets
+        env:
+          IOS_DISTRIBUTION_CERT: ${{ secrets.IOS_DISTRIBUTION_CERT }}
+          IOS_DISTRIBUTION_CERT_PWD: ${{ secrets.IOS_DISTRIBUTION_CERT_PWD }}
+          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          UPLOAD_TO_APP_STORE: ${{ github.event.inputs.upload == 'true' }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for key in IOS_DISTRIBUTION_CERT IOS_DISTRIBUTION_CERT_PWD IOS_PROVISIONING_PROFILE; do
+            if [ -z "${!key:-}" ]; then
+              echo "::error::Missing required secret: $key"
+              missing=1
+            fi
+          done
+          if [ "${UPLOAD_TO_APP_STORE}" = "true" ]; then
+            for key in APPLE_ID APPLE_PASSWORD; do
+              if [ -z "${!key:-}" ]; then
+                echo "::error::Missing required secret for upload: $key"
+                missing=1
+              fi
+            done
+          fi
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Resolve iOS version metadata
+        run: |
+          set -euo pipefail
+          APP_VERSION="$(jq -r '.expo.version // empty' apps/mobile/app.json)"
+          APP_BUILD_NUMBER="$(jq -r '.expo.ios.buildNumber // empty' apps/mobile/app.json)"
+          if [ -z "${APP_VERSION}" ] || [ -z "${APP_BUILD_NUMBER}" ]; then
+            echo "::error::Missing expo.version or expo.ios.buildNumber in apps/mobile/app.json"
+            exit 1
+          fi
+          echo "APP_VERSION=${APP_VERSION}" >> "$GITHUB_ENV"
+          echo "APP_BUILD_NUMBER=${APP_BUILD_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: Import iOS distribution certificate
+        env:
+          IOS_DISTRIBUTION_CERT: ${{ secrets.IOS_DISTRIBUTION_CERT }}
+          IOS_DISTRIBUTION_CERT_PWD: ${{ secrets.IOS_DISTRIBUTION_CERT_PWD }}
+          IOS_SIGNING_IDENTITY: ${{ secrets.IOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+
+          decode_base64() {
+            local input="$1"
+            local output="$2"
+            if ! printf '%s' "$input" | tr -d '\r' | base64 --decode > "$output" 2>/dev/null; then
+              printf '%s' "$input" | tr -d '\r' | base64 -D > "$output"
+            fi
+          }
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/mindwtr-ios.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          CERT_PATH="$RUNNER_TEMP/ios-distribution.p12"
+
+          decode_base64 "$IOS_DISTRIBUTION_CERT" "$CERT_PATH"
+          if ! openssl pkcs12 -in "$CERT_PATH" -passin "pass:${IOS_DISTRIBUTION_CERT_PWD}" -nokeys -clcerts >/dev/null 2>&1; then
+            echo "::error::Unable to open IOS_DISTRIBUTION_CERT with IOS_DISTRIBUTION_CERT_PWD."
+            exit 1
+          fi
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+          if [ -f "$LOGIN_KEYCHAIN" ]; then
+            security list-keychains -d user -s "$KEYCHAIN_PATH" "$LOGIN_KEYCHAIN" "/Library/Keychains/System.keychain"
+          else
+            security list-keychains -d user -s "$KEYCHAIN_PATH" "/Library/Keychains/System.keychain"
+          fi
+          security default-keychain -s "$KEYCHAIN_PATH"
+
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_CERT_PWD" -A -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/xcodebuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign:,xcodebuild:,security: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          RESOLVED_IDENTITY="${IOS_SIGNING_IDENTITY:-}"
+          if [ -z "${RESOLVED_IDENTITY}" ]; then
+            RESOLVED_IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Apple Distribution:.*\)".*/\1/p' | head -n 1)"
+          fi
+          if [ -z "${RESOLVED_IDENTITY}" ]; then
+            echo "::error::Could not resolve Apple Distribution identity from imported certificate."
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true
+            exit 1
+          fi
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+          echo "IOS_SIGNING_IDENTITY=$RESOLVED_IDENTITY" >> "$GITHUB_ENV"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true
+
+      - name: Install and validate provisioning profile
+        env:
+          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+        run: |
+          set -euo pipefail
+
+          decode_base64() {
+            local input="$1"
+            local output="$2"
+            if ! printf '%s' "$input" | tr -d '\r' | base64 --decode > "$output" 2>/dev/null; then
+              printf '%s' "$input" | tr -d '\r' | base64 -D > "$output"
+            fi
+          }
+
+          PROFILE_PATH="$RUNNER_TEMP/mindwtr-ios.mobileprovision"
+          PROFILE_PLIST="$RUNNER_TEMP/mindwtr-ios-profile.plist"
+          decode_base64 "$IOS_PROVISIONING_PROFILE" "$PROFILE_PATH"
+          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+
+          PROFILE_UUID="$(/usr/libexec/PlistBuddy -c 'Print UUID' "$PROFILE_PLIST")"
+          PROFILE_NAME="$(/usr/libexec/PlistBuddy -c 'Print Name' "$PROFILE_PLIST")"
+          PROFILE_TEAM_ID="$(/usr/libexec/PlistBuddy -c 'Print TeamIdentifier:0' "$PROFILE_PLIST")"
+          PROFILE_APP_ID="$(/usr/libexec/PlistBuddy -c 'Print Entitlements:application-identifier' "$PROFILE_PLIST")"
+
+          if [ "$PROFILE_TEAM_ID" != "$EXPECTED_TEAM_ID" ]; then
+            echo "::error::Profile TeamIdentifier ($PROFILE_TEAM_ID) does not match expected team ($EXPECTED_TEAM_ID)."
+            exit 1
+          fi
+
+          EXPECTED_APP_ID="${EXPECTED_TEAM_ID}.${EXPECTED_BUNDLE_ID}"
+          WILDCARD_APP_ID="${EXPECTED_TEAM_ID}.*"
+          if [ "$PROFILE_APP_ID" != "$EXPECTED_APP_ID" ] && [ "$PROFILE_APP_ID" != "$WILDCARD_APP_ID" ]; then
+            echo "::error::Profile application-identifier ($PROFILE_APP_ID) does not match expected ($EXPECTED_APP_ID)."
+            exit 1
+          fi
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "PROFILE_TEAM_ID=$PROFILE_TEAM_ID" >> "$GITHUB_ENV"
+
+      - name: Install CocoaPods dependencies
+        run: |
+          set -euo pipefail
+          cd apps/mobile/ios
+          pod install
+
+      - name: Prepare ExportOptions.plist
+        env:
+          IOS_EXPORT_OPTIONS: ${{ secrets.IOS_EXPORT_OPTIONS }}
+        run: |
+          set -euo pipefail
+
+          decode_base64() {
+            local input="$1"
+            local output="$2"
+            if ! printf '%s' "$input" | tr -d '\r' | base64 --decode > "$output" 2>/dev/null; then
+              printf '%s' "$input" | tr -d '\r' | base64 -D > "$output"
+            fi
+          }
+
+          EXPORT_OPTIONS_PATH="$RUNNER_TEMP/ExportOptions.plist"
+          if [ -n "${IOS_EXPORT_OPTIONS:-}" ]; then
+            decode_base64 "$IOS_EXPORT_OPTIONS" "$EXPORT_OPTIONS_PATH"
+          else
+            cat > "$EXPORT_OPTIONS_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>app-store</string>
+    <key>destination</key>
+    <string>export</string>
+    <key>signingStyle</key>
+    <string>manual</string>
+    <key>teamID</key>
+    <string>${PROFILE_TEAM_ID}</string>
+    <key>provisioningProfiles</key>
+    <dict>
+        <key>${EXPECTED_BUNDLE_ID}</key>
+        <string>${PROFILE_NAME}</string>
+    </dict>
+    <key>stripSwiftSymbols</key>
+    <true/>
+    <key>uploadSymbols</key>
+    <true/>
+</dict>
+</plist>
+EOF
+          fi
+          echo "EXPORT_OPTIONS_PATH=$EXPORT_OPTIONS_PATH" >> "$GITHUB_ENV"
+
+      - name: Archive iOS app
+        run: |
+          set -euo pipefail
+          ARCHIVE_PATH="$RUNNER_TEMP/Mindwtr.xcarchive"
+          xcodebuild \
+            -workspace "apps/mobile/ios/Mindwtr.xcworkspace" \
+            -scheme "Mindwtr" \
+            -configuration "Release" \
+            -sdk "iphoneos" \
+            -destination "generic/platform=iOS" \
+            -archivePath "$ARCHIVE_PATH" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$PROFILE_TEAM_ID" \
+            PRODUCT_BUNDLE_IDENTIFIER="$EXPECTED_BUNDLE_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            CODE_SIGN_IDENTITY="$IOS_SIGNING_IDENTITY" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
+            MARKETING_VERSION="$APP_VERSION" \
+            CURRENT_PROJECT_VERSION="$APP_BUILD_NUMBER" \
+            clean archive
+          echo "ARCHIVE_PATH=$ARCHIVE_PATH" >> "$GITHUB_ENV"
+
+      - name: Export IPA
+        run: |
+          set -euo pipefail
+          EXPORT_PATH="$RUNNER_TEMP/ios-export"
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_PATH" \
+            -exportOptionsPlist "$EXPORT_OPTIONS_PATH"
+          IPA_PATH="$(find "$EXPORT_PATH" -maxdepth 1 -name '*.ipa' | head -n 1)"
+          if [ -z "${IPA_PATH:-}" ]; then
+            echo "::error::IPA was not generated."
+            exit 1
+          fi
+          echo "IPA_PATH=$IPA_PATH" >> "$GITHUB_ENV"
+          ls -la "$EXPORT_PATH"
+
+      - name: Upload IPA to App Store Connect
+        if: ${{ github.event.inputs.upload == 'true' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          xcrun altool --upload-app --type ios --file "$IPA_PATH" --username "$APPLE_ID" --password "$APPLE_PASSWORD"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mindwtr-ios-appstore-ipa
+          path: ${{ env.IPA_PATH }}
+          if-no-files-found: error
+
+      - name: Cleanup signing files
+        if: always()
+        run: |
+          if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "${KEYCHAIN_PATH}" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+
