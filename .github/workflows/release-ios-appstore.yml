@@ -182,9 +182,21 @@ jobs:
           echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
           echo "PROFILE_TEAM_ID=$PROFILE_TEAM_ID" >> "$GITHUB_ENV"
 
+      - name: Generate iOS native project if missing
+        run: |
+          set -euo pipefail
+          if [ ! -d apps/mobile/ios ]; then
+            cd apps/mobile
+            npx expo prebuild --platform ios --non-interactive --no-install
+          fi
+
       - name: Install CocoaPods dependencies
         run: |
           set -euo pipefail
+          if [ ! -d apps/mobile/ios ]; then
+            echo "::error::apps/mobile/ios still missing after prebuild."
+            exit 1
+          fi
           cd apps/mobile/ios
           pod install
 
