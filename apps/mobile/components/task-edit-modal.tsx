@@ -864,6 +864,12 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
             if (audioStatus.playing) {
                 await Promise.resolve(audioPlayer.pause());
             } else {
+                const duration = Number.isFinite(audioStatus.duration) ? audioStatus.duration : 0;
+                const currentTime = Number.isFinite(audioStatus.currentTime) ? audioStatus.currentTime : 0;
+                const isAtEnd = duration > 0 && currentTime >= Math.max(0, duration - 0.1);
+                if (audioStatus.didJustFinish || isAtEnd) {
+                    await Promise.resolve(audioPlayer.seekTo(0));
+                }
                 await Promise.resolve(audioPlayer.play());
             }
         } catch (error) {
