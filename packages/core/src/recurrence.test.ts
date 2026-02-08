@@ -47,6 +47,40 @@ describe('recurrence', () => {
         expect(next?.dueDate).toBe('2025-01-06T14:00:00.000Z');
     });
 
+    it('respects daily interval for strict recurrence', () => {
+        const task: Task = {
+            id: 't2b',
+            title: 'Water plants',
+            status: 'done',
+            tags: [],
+            contexts: [],
+            dueDate: '2025-01-01T09:00:00.000Z',
+            recurrence: { rule: 'daily', strategy: 'strict', rrule: 'FREQ=DAILY;INTERVAL=3' },
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+        };
+
+        const next = createNextRecurringTask(task, '2025-01-05T14:00:00.000Z', 'done');
+        expect(next?.dueDate).toBe('2025-01-04T09:00:00.000Z');
+    });
+
+    it('respects daily interval for fluid recurrence', () => {
+        const task: Task = {
+            id: 't2c',
+            title: 'Stretching',
+            status: 'done',
+            tags: [],
+            contexts: [],
+            dueDate: '2025-01-01T09:00:00.000Z',
+            recurrence: { rule: 'daily', strategy: 'fluid', rrule: 'FREQ=DAILY;INTERVAL=3' },
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+        };
+
+        const next = createNextRecurringTask(task, '2025-01-05T14:00:00.000Z', 'done');
+        expect(next?.dueDate).toBe('2025-01-08T14:00:00.000Z');
+    });
+
     it('falls back to weekly interval when BYDAY is empty', () => {
         const task: Task = {
             id: 't4',
