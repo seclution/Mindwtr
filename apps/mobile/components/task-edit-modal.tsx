@@ -1220,6 +1220,11 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
     const recurrenceRuleValue = getRecurrenceRuleValue(editedTask.recurrence);
     const recurrenceStrategyValue = getRecurrenceStrategyValue(editedTask.recurrence);
     const recurrenceRRuleValue = getRecurrenceRRuleValue(editedTask.recurrence);
+    const dailyInterval = useMemo(() => {
+        if (recurrenceRuleValue !== 'daily') return 1;
+        const parsed = parseRRuleString(recurrenceRRuleValue);
+        return parsed.interval && parsed.interval > 0 ? parsed.interval : 1;
+    }, [recurrenceRuleValue, recurrenceRRuleValue]);
     const monthlyAnchorDate = useMemo(() => {
         return safeParseDate(editedTask.dueDate ?? task?.dueDate) ?? new Date();
     }, [editedTask.dueDate, task?.dueDate]);
@@ -1820,6 +1825,19 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                         if (opt.value !== 'weekly') {
                                             setCustomWeekdays([]);
                                         }
+                                        if (opt.value === 'daily') {
+                                            const parsed = parseRRuleString(recurrenceRRuleValue);
+                                            const interval = parsed.rule === 'daily' && parsed.interval && parsed.interval > 0 ? parsed.interval : 1;
+                                            setEditedTask(prev => ({
+                                                ...prev,
+                                                recurrence: {
+                                                    rule: 'daily',
+                                                    strategy: recurrenceStrategyValue,
+                                                    rrule: buildRRuleString('daily', undefined, interval),
+                                                },
+                                            }));
+                                            return;
+                                        }
                                         if (opt.value === 'monthly') {
                                             setEditedTask(prev => ({
                                                 ...prev,
@@ -1879,6 +1897,29 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                         </TouchableOpacity>
                                     );
                                 })}
+                            </View>
+                        )}
+                        {recurrenceRuleValue === 'daily' && (
+                            <View style={[styles.customRow, { marginTop: 8, borderColor: tc.border }]}>
+                                <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.repeatEvery')}</Text>
+                                <TextInput
+                                    value={String(dailyInterval)}
+                                    onChangeText={(value) => {
+                                        const parsed = Number.parseInt(value, 10);
+                                        const interval = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 365) : 1;
+                                        setEditedTask(prev => ({
+                                            ...prev,
+                                            recurrence: {
+                                                rule: 'daily',
+                                                strategy: recurrenceStrategyValue,
+                                                rrule: buildRRuleString('daily', undefined, interval),
+                                            },
+                                        }));
+                                    }}
+                                    keyboardType="number-pad"
+                                    style={[styles.customInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
+                                />
+                                <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.dayUnit')}</Text>
                             </View>
                         )}
                         {recurrenceRuleValue === 'monthly' && (

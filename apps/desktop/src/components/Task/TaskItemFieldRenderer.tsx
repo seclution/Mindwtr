@@ -488,6 +488,12 @@ export function TaskItemFieldRenderer({
                             onChange={(e) => {
                                 const value = e.target.value as RecurrenceRule | '';
                                 setEditRecurrence(value);
+                                if (value === 'daily') {
+                                    const parsed = parseRRuleString(editRecurrenceRRule);
+                                    if (!editRecurrenceRRule || parsed.rule !== 'daily') {
+                                        setEditRecurrenceRRule(buildRRuleString('daily'));
+                                    }
+                                }
                                 if (value === 'weekly') {
                                     const parsed = parseRRuleString(editRecurrenceRRule);
                                     if (!editRecurrenceRRule || parsed.rule !== 'weekly') {
@@ -512,6 +518,26 @@ export function TaskItemFieldRenderer({
                         <option value="monthly">{t('recurrence.monthly')}</option>
                         <option value="yearly">{t('recurrence.yearly')}</option>
                     </select>
+                        {editRecurrence === 'daily' && (
+                            <div className="flex items-center gap-2 pt-1">
+                                <span className="text-[10px] text-muted-foreground">{t('recurrence.repeatEvery')}</span>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={365}
+                                    value={Math.max(parseRRuleString(editRecurrenceRRule).interval ?? 1, 1)}
+                                    onChange={(event) => {
+                                        const intervalValue = Number(event.target.valueAsNumber);
+                                        const safeInterval = Number.isFinite(intervalValue) && intervalValue > 0
+                                            ? Math.min(Math.round(intervalValue), 365)
+                                            : 1;
+                                        setEditRecurrenceRRule(buildRRuleString('daily', undefined, safeInterval));
+                                    }}
+                                    className="w-20 text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
+                                />
+                                <span className="text-[10px] text-muted-foreground">{t('recurrence.dayUnit')}</span>
+                            </div>
+                        )}
                         {editRecurrence && (
                             <label className="flex items-center gap-2 pt-1 text-[10px] text-muted-foreground">
                                 <input
