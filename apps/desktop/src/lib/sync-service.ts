@@ -43,19 +43,20 @@ import {
     buildCloudKey,
     cloneAppData,
     extractExtension,
+    getFileSyncDir,
     getErrorStatus,
     hashString,
     isSyncFilePath,
     isTempAttachmentFile,
     isWebdavRateLimitedError,
+    normalizeSyncBackend,
     sleep,
     stripFileScheme,
     toStableJson,
     writeAttachmentFileSafely,
     writeFileSafelyAbsolute,
 } from './sync-service-utils';
-
-type SyncBackend = 'off' | 'file' | 'webdav' | 'cloud';
+import type { SyncBackend } from './sync-service-utils';
 
 const SYNC_BACKEND_KEY = 'mindwtr-sync-backend';
 const WEBDAV_URL_KEY = 'mindwtr-webdav-url';
@@ -255,7 +256,7 @@ const cleanupOrphanedAttachments = async (appData: AppData, backend: SyncBackend
         cloudConfig = await SyncService.getCloudConfig();
     } else if (backend === 'file') {
         const syncPath = await SyncService.getSyncPath();
-        const baseDir = getFileSyncDir(syncPath);
+        const baseDir = getFileSyncDir(syncPath, SYNC_FILE_NAME, LEGACY_SYNC_FILE_NAME);
         fileBaseDir = baseDir || null;
     }
 
@@ -323,16 +324,6 @@ const getCloudBaseUrl = (fullUrl: string): string => {
     return trimmed;
 };
 
-const getFileSyncDir = (syncPath: string): string => {
-    if (!syncPath) return '';
-    const trimmed = syncPath.replace(/[\\/]+$/, '');
-    if (isSyncFilePath(trimmed, SYNC_FILE_NAME, LEGACY_SYNC_FILE_NAME)) {
-        const lastSlash = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
-        return lastSlash > -1 ? trimmed.slice(0, lastSlash) : '';
-    }
-    return trimmed;
-};
-
 async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
     const mod = await import('@tauri-apps/api/core');
     return mod.invoke<T>(command as any, args as any);
@@ -340,11 +331,6 @@ async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): 
 
 type WebDavConfig = { url: string; username: string; password?: string; hasPassword?: boolean };
 type CloudConfig = { url: string; token: string };
-
-function normalizeSyncBackend(raw: string | null): SyncBackend {
-    if (raw === 'off' || raw === 'file' || raw === 'webdav' || raw === 'cloud') return raw;
-    return 'off';
-}
 
 async function getTauriFetch(): Promise<typeof fetch | undefined> {
     if (!isTauriRuntime()) return undefined;
@@ -1373,7 +1359,7 @@ export class SyncService {
             const webdavConfig = backend === 'webdav' ? await SyncService.getWebDavConfig() : null;
             const cloudConfig = backend === 'cloud' ? await SyncService.getCloudConfig() : null;
             const syncPath = backend === 'file' ? await SyncService.getSyncPath() : '';
-            const fileBaseDir = backend === 'file' ? getFileSyncDir(syncPath) : '';
+            const fileBaseDir = backend === 'file' ? getFileSyncDir(syncPath, SYNC_FILE_NAME, LEGACY_SYNC_FILE_NAME) : '';
             const ensureLocalSnapshotFresh = () => {
                 if (useTaskStore.getState().lastDataChangeAt > localSnapshotChangeAt) {
                     SyncService.syncQueued = true;

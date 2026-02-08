@@ -6,6 +6,7 @@ import { readSyncFile, writeSyncFile } from './storage-file';
 import { getBaseSyncUrl, getCloudBaseUrl, syncCloudAttachments, syncFileAttachments, syncWebdavAttachments, cleanupAttachmentTempFiles } from './attachment-sync';
 import { getExternalCalendars, saveExternalCalendars } from './external-calendar';
 import * as FileSystem from 'expo-file-system/legacy';
+import { formatSyncErrorMessage, getFileSyncBaseDir, isSyncFilePath, resolveBackend, type SyncBackend } from './sync-service-utils';
 import {
   SYNC_PATH_KEY,
   SYNC_BACKEND_KEY,
@@ -29,23 +30,6 @@ const logSyncWarning = (message: string, error?: unknown) => {
 
 const logSyncInfo = (message: string, extra?: Record<string, string>) => {
   void logInfo(message, { scope: 'sync', extra });
-};
-
-const formatSyncErrorMessage = (error: unknown, backend: SyncBackend): string => {
-  const raw = sanitizeLogMessage(String(error));
-  if (backend !== 'webdav') return raw;
-
-  const status = typeof error === 'object' && error !== null && 'status' in error
-    ? Number((error as { status?: unknown }).status)
-    : undefined;
-  const unauthorized = status === 401 || /\(401\)/.test(raw) || /\b401\b/.test(raw);
-  if (unauthorized) {
-    return 'WebDAV unauthorized (401). Check folder URL, username, and app password.';
-  }
-  if (raw.includes('WebDAV URL not configured')) {
-    return 'WebDAV folder URL is not configured. Save WebDAV settings first.';
-  }
-  return raw;
 };
 
 const externalCalendarProvider = {
@@ -88,31 +72,6 @@ const deleteAttachmentFile = async (uri?: string): Promise<void> => {
     await FileSystem.deleteAsync(uri, { idempotent: true });
   } catch (error) {
     logSyncWarning('Failed to delete attachment file', error);
-  }
-};
-
-const isSyncFilePath = (path: string) =>
-  path.endsWith(`/${SYNC_FILE_NAME}`) || path.endsWith(`/${LEGACY_SYNC_FILE_NAME}`);
-
-const getFileSyncBaseDir = (syncPath: string) => {
-  const trimmed = syncPath.replace(/\/+$/, '');
-  if (isSyncFilePath(trimmed)) {
-    return trimmed.replace(/\/[^/]+$/, '');
-  }
-  return trimmed;
-};
-
-type SyncBackend = 'file' | 'webdav' | 'cloud' | 'off';
-
-const resolveBackend = (value: string | null): SyncBackend => {
-  switch (value) {
-    case 'webdav':
-    case 'cloud':
-    case 'off':
-    case 'file':
-      return value;
-    default:
-      return 'file';
   }
 };
 

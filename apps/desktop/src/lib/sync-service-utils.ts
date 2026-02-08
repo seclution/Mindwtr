@@ -68,6 +68,27 @@ export const isSyncFilePath = (path: string, syncFileName: string, legacySyncFil
     return normalized.endsWith(`/${syncFileName}`) || normalized.endsWith(`/${legacySyncFileName}`);
 };
 
+export type SyncBackend = 'off' | 'file' | 'webdav' | 'cloud';
+
+export const normalizeSyncBackend = (raw: string | null): SyncBackend => {
+    if (raw === 'off' || raw === 'file' || raw === 'webdav' || raw === 'cloud') return raw;
+    return 'off';
+};
+
+export const getFileSyncDir = (
+    syncPath: string,
+    syncFileName: string,
+    legacySyncFileName: string
+): string => {
+    if (!syncPath) return '';
+    const trimmed = syncPath.replace(/[\\/]+$/, '');
+    if (isSyncFilePath(trimmed, syncFileName, legacySyncFileName)) {
+        const lastSlash = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+        return lastSlash > -1 ? trimmed.slice(0, lastSlash) : '';
+    }
+    return trimmed;
+};
+
 export const cloneAppData = (data: AppData): AppData => JSON.parse(JSON.stringify(data)) as AppData;
 
 export const stripFileScheme = (uri: string): string => {
