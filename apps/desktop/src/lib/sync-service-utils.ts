@@ -30,7 +30,16 @@ export const hashString = async (value: string): Promise<string> => {
             .join('');
     }
 
-    // Fallback for runtimes without Web Crypto.
+    if (typeof process !== 'undefined' && process?.versions?.node) {
+        try {
+            const crypto = await import('node:crypto');
+            return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
+        } catch {
+            // Fall through to legacy fallback if node:crypto is unavailable.
+        }
+    }
+
+    // Legacy fallback for runtimes without Web Crypto or node:crypto.
     let hash = 0;
     for (let i = 0; i < value.length; i += 1) {
         hash = Math.imul(31, hash) + value.charCodeAt(i);
