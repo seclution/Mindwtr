@@ -201,18 +201,14 @@ jobs:
             LOCAL_MIN_BUILD="$((APP_BUILD_NUMBER_BASE + 1))"
           fi
           REMOTE_MIN_BUILD="$((REMOTE_MAX_BUILD + 1))"
-          RUN_BUILD_NUMBER="$(( GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT ))"
-          FINAL_BUILD_NUMBER="${RUN_BUILD_NUMBER}"
-          if [ "${LOCAL_MIN_BUILD}" -gt "${FINAL_BUILD_NUMBER}" ]; then
-            FINAL_BUILD_NUMBER="${LOCAL_MIN_BUILD}"
-          fi
+          FINAL_BUILD_NUMBER="${LOCAL_MIN_BUILD}"
           if [ "${REMOTE_MIN_BUILD}" -gt "${FINAL_BUILD_NUMBER}" ]; then
             FINAL_BUILD_NUMBER="${REMOTE_MIN_BUILD}"
           fi
 
           echo "APP_VERSION=${APP_VERSION}" >> "$GITHUB_ENV"
           echo "APP_BUILD_NUMBER=${FINAL_BUILD_NUMBER}" >> "$GITHUB_ENV"
-          echo "Resolved iOS build number: ${FINAL_BUILD_NUMBER} (remote max: ${REMOTE_MAX_BUILD}, remote lookup: ${REMOTE_LOOKUP_STATUS}, local base: ${APP_BUILD_NUMBER_BASE}, run-based: ${RUN_BUILD_NUMBER})"
+          echo "Resolved iOS build number: ${FINAL_BUILD_NUMBER} (remote max: ${REMOTE_MAX_BUILD}, remote lookup: ${REMOTE_LOOKUP_STATUS}, local base: ${APP_BUILD_NUMBER_BASE})"
 
       - name: Import iOS distribution certificate
         env:
