@@ -961,7 +961,7 @@ export function ProjectsView() {
                                         onAreaChange={(value) => {
                                             updateProject(selectedProject.id, { areaId: value === NO_AREA ? undefined : value });
                                         }}
-                                        isSequential={selectedProject.isSequential}
+                                        isSequential={selectedProject.isSequential === true}
                                         onToggleSequential={() => updateProject(selectedProject.id, { isSequential: !selectedProject.isSequential })}
                                         status={selectedProject.status}
                                         onChangeStatus={(status) => updateProject(selectedProject.id, { status })}
