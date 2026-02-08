@@ -52,7 +52,15 @@ const logError = (message: string, error?: unknown) => {
     writeLog({ ts: new Date().toISOString(), level: 'error', scope: 'cloud', message, context: Object.keys(context).length ? context : undefined });
 };
 
-const corsOrigin = process.env.MINDWTR_CLOUD_CORS_ORIGIN || '*';
+const configuredCorsOrigin = (process.env.MINDWTR_CLOUD_CORS_ORIGIN || '').trim();
+if (configuredCorsOrigin === '*') {
+    throw new Error('MINDWTR_CLOUD_CORS_ORIGIN cannot be "*" in production. Set an explicit origin.');
+}
+const corsOrigin = configuredCorsOrigin || 'http://localhost:5173';
+const maxTaskTitleLengthValue = Number(process.env.MINDWTR_CLOUD_MAX_TASK_TITLE_LENGTH || 500);
+const MAX_TASK_TITLE_LENGTH = Number.isFinite(maxTaskTitleLengthValue) && maxTaskTitleLengthValue > 0
+    ? Math.floor(maxTaskTitleLengthValue)
+    : 500;
 const shutdown = (signal: string) => {
     logInfo(`received ${signal}, shutting down`);
     process.exit(0);
@@ -149,7 +157,7 @@ function loadAppData(filePath: string): AppData {
 
 function asStatus(value: unknown): TaskStatus | null {
     if (typeof value !== 'string') return null;
-    const allowed: TaskStatus[] = ['inbox', 'todo', 'next', 'in-progress', 'waiting', 'someday', 'done', 'archived'];
+    const allowed: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'reference', 'done', 'archived'];
     return allowed.includes(value as TaskStatus) ? (value as TaskStatus) : null;
 }
 
@@ -303,7 +311,11 @@ async function main() {
                     const query = url.searchParams.get('query') || '';
                     const includeAll = url.searchParams.get('all') === '1';
                     const includeDeleted = url.searchParams.get('deleted') === '1';
-                    const status = asStatus(url.searchParams.get('status'));
+                    const rawStatus = url.searchParams.get('status');
+                    const status = asStatus(rawStatus);
+                    if (rawStatus !== null && status === null) {
+                        return errorResponse('Invalid task status');
+                    }
                     const data = loadAppData(filePath);
                     const tasks = pickTaskList(data, {
                         includeDeleted,
@@ -333,13 +345,21 @@ async function main() {
                         const parsed = input ? parseQuickAdd(input, data.projects, new Date(nowIso), data.areas) : { title: rawTitle, props: {} };
                         const title = (parsed.title || rawTitle || input).trim();
                         if (!title) return errorResponse('Missing task title');
+                        if (title.length > MAX_TASK_TITLE_LENGTH) {
+                            return errorResponse(`Task title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+                        }
 
                         const props: Partial<Task> = {
                             ...parsed.props,
                             ...initialProps,
                         };
 
-                        const status = asStatus((props as any).status) || 'inbox';
+                        const rawStatus = (props as any).status;
+                        const parsedStatus = asStatus(rawStatus);
+                        if (rawStatus !== undefined && parsedStatus === null) {
+                            return errorResponse('Invalid task status', 400);
+                        }
+                        const status = parsedStatus || 'inbox';
                         const tags = Array.isArray((props as any).tags) ? (props as any).tags : [];
                         const contexts = Array.isArray((props as any).contexts) ? (props as any).contexts : [];
                         const {

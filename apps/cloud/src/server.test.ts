@@ -16,6 +16,12 @@ describe('cloud server utils', () => {
         expect(result.ok).toBe(false);
     });
 
+    test('accepts only core task statuses', () => {
+        expect(__cloudTestUtils.asStatus('reference')).toBe('reference');
+        expect(__cloudTestUtils.asStatus('todo')).toBeNull();
+        expect(__cloudTestUtils.asStatus('in-progress')).toBeNull();
+    });
+
     test('enforces JSON body size limit', async () => {
         const body = JSON.stringify({ tasks: [], projects: [] });
         const req = new Request('http://localhost/v1/data', {
