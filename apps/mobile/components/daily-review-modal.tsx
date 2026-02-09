@@ -1,9 +1,20 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { View, Text, Modal, TouchableOpacity, ScrollView, StyleSheet, Platform } from 'react-native';
 import { router } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
-import { useTaskStore, isDueForReview, safeParseDate, safeParseDueDate, sortTasksBy, type Task, type TaskSortBy, type TaskStatus } from '@mindwtr/core';
+import {
+    useTaskStore,
+    isDueForReview,
+    safeFormatDate,
+    safeParseDate,
+    safeParseDueDate,
+    sortTasksBy,
+    type ExternalCalendarEvent,
+    type Task,
+    type TaskSortBy,
+    type TaskStatus,
+} from '@mindwtr/core';
 
 import { useTheme } from '../contexts/theme-context';
 import { useLanguage } from '../contexts/language-context';
@@ -12,6 +23,7 @@ import { SwipeableTaskItem } from './swipeable-task-item';
 import { TaskEditModal } from './task-edit-modal';
 import { InboxProcessingModal } from './inbox-processing-modal';
 import { ErrorBoundary } from './ErrorBoundary';
+import { fetchExternalCalendarEvents } from '../lib/external-calendar';
 
 type DailyReviewStep = 'intro' | 'today' | 'focus' | 'inbox' | 'waiting' | 'complete';
 
@@ -34,10 +46,66 @@ function DailyReviewFlow({ onClose }: { onClose: () => void }) {
     const [editingTask, setEditingTask] = useState<Task | null>(null);
     const [isTaskModalVisible, setIsTaskModalVisible] = useState(false);
     const [showInboxProcessing, setShowInboxProcessing] = useState(false);
+    const [externalEvents, setExternalEvents] = useState<ExternalCalendarEvent[]>([]);
+    const [externalLoading, setExternalLoading] = useState(false);
+    const [externalError, setExternalError] = useState<string | null>(null);
 
     const sortBy = (settings?.taskSortBy ?? 'default') as TaskSortBy;
 
     const today = useMemo(() => new Date(), []);
+    const tomorrow = useMemo(() => {
+        const d = new Date(today);
+        d.setDate(d.getDate() + 1);
+        return d;
+    }, [today]);
+
+    useEffect(() => {
+        let cancelled = false;
+        const loadEvents = async () => {
+            setExternalLoading(true);
+            setExternalError(null);
+            try {
+                const start = new Date(today);
+                start.setHours(0, 0, 0, 0);
+                const end = new Date(start);
+                end.setDate(end.getDate() + 2);
+                end.setMilliseconds(-1);
+                const { events } = await fetchExternalCalendarEvents(start, end);
+                if (cancelled) return;
+                setExternalEvents(events);
+            } catch (error) {
+                if (cancelled) return;
+                setExternalError(error instanceof Error ? error.message : String(error));
+                setExternalEvents([]);
+            } finally {
+                if (!cancelled) setExternalLoading(false);
+            }
+        };
+        loadEvents();
+        return () => {
+            cancelled = true;
+        };
+    }, [today]);
+
+    const getExternalEventsForDate = (date: Date) => {
+        const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 1);
+        return externalEvents
+            .filter((event) => {
+                const eventStart = safeParseDate(event.start);
+                const eventEnd = safeParseDate(event.end);
+                if (!eventStart || !eventEnd) return false;
+                return eventStart.getTime() < end.getTime() && eventEnd.getTime() > start.getTime();
+            })
+            .sort((a, b) => {
+                const aStart = safeParseDate(a.start)?.getTime() ?? Number.POSITIVE_INFINITY;
+                const bStart = safeParseDate(b.start)?.getTime() ?? Number.POSITIVE_INFINITY;
+                return aStart - bStart;
+            });
+    };
+    const todayEvents = useMemo(() => getExternalEventsForDate(today), [externalEvents, today]);
+    const tomorrowEvents = useMemo(() => getExternalEventsForDate(tomorrow), [externalEvents, tomorrow]);
 
     const activeTasks = useMemo(
         () => tasks.filter((task) => !task.deletedAt && task.status !== 'done' && task.status !== 'reference'),
@@ -158,6 +226,39 @@ function DailyReviewFlow({ onClose }: { onClose: () => void }) {
         </ScrollView>
     );
 
+    const renderExternalEventList = (events: ExternalCalendarEvent[]) => {
+        if (externalLoading) {
+            return <Text style={[styles.eventMeta, { color: tc.secondaryText }]}>{t('common.loading')}</Text>;
+        }
+        if (externalError) {
+            return <Text style={[styles.eventMeta, { color: tc.secondaryText }]}>{externalError}</Text>;
+        }
+        if (events.length === 0) {
+            return <Text style={[styles.eventMeta, { color: tc.secondaryText }]}>{t('calendar.noTasks')}</Text>;
+        }
+        return (
+            <View style={styles.eventList}>
+                {events.slice(0, 5).map((event) => {
+                    const start = safeParseDate(event.start);
+                    const end = safeParseDate(event.end);
+                    const timeLabel = event.allDay || !start || !end
+                        ? t('calendar.allDay')
+                        : `${safeFormatDate(start, 'HH:mm')} - ${safeFormatDate(end, 'HH:mm')}`;
+                    return (
+                        <View key={`${event.sourceId}-${event.id}-${event.start}`} style={styles.eventRow}>
+                            <Text style={[styles.eventTitle, { color: tc.text }]} numberOfLines={1}>
+                                {event.title}
+                            </Text>
+                            <Text style={[styles.eventMeta, { color: tc.secondaryText }]} numberOfLines={1}>
+                                {timeLabel}
+                            </Text>
+                        </View>
+                    );
+                })}
+            </View>
+        );
+    };
+
     const renderStep = () => {
         switch (currentStep) {
             case 'intro':
@@ -184,6 +285,20 @@ function DailyReviewFlow({ onClose }: { onClose: () => void }) {
                                 <Text style={{ fontWeight: '700' }}>{totalToday}</Text> {t('common.tasks')}
                             </Text>
                             <Text style={[styles.guideText, { color: tc.secondaryText }]}>{t('dailyReview.todayDesc')}</Text>
+                        </View>
+                        <View style={styles.calendarGrid}>
+                            <View style={[styles.calendarCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
+                                <Text style={[styles.calendarCardTitle, { color: tc.secondaryText }]}>
+                                    {safeFormatDate(today, 'MMM d')} · {t('calendar.events')}
+                                </Text>
+                                {renderExternalEventList(todayEvents)}
+                            </View>
+                            <View style={[styles.calendarCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
+                                <Text style={[styles.calendarCardTitle, { color: tc.secondaryText }]}>
+                                    {safeFormatDate(tomorrow, 'MMM d')} · {t('calendar.events')}
+                                </Text>
+                                {renderExternalEventList(tomorrowEvents)}
+                            </View>
                         </View>
                         {topTasks.length === 0 ? (
                             <View style={styles.emptyState}>
@@ -459,6 +574,34 @@ const styles = StyleSheet.create({
     guideText: {
         fontSize: 13,
         lineHeight: 18,
+    },
+    calendarGrid: {
+        gap: 10,
+    },
+    calendarCard: {
+        borderWidth: 1,
+        borderRadius: 12,
+        padding: 12,
+        gap: 8,
+    },
+    calendarCardTitle: {
+        fontSize: 11,
+        fontWeight: '700',
+        textTransform: 'uppercase',
+        letterSpacing: 0.4,
+    },
+    eventList: {
+        gap: 6,
+    },
+    eventRow: {
+        gap: 2,
+    },
+    eventTitle: {
+        fontSize: 13,
+        fontWeight: '600',
+    },
+    eventMeta: {
+        fontSize: 12,
     },
     processButton: {
         alignSelf: 'flex-start',
