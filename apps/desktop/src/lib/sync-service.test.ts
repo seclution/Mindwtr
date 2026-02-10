@@ -75,3 +75,25 @@ describe('SyncService testability hooks', () => {
         expect(invoke).toHaveBeenCalledWith('get_sync_backend', undefined);
     });
 });
+
+describe('SyncService orchestration', () => {
+    it('re-runs a queued sync cycle after the in-flight sync finishes', async () => {
+        const backendSpy = vi.spyOn(SyncService as any, 'getSyncBackend');
+        backendSpy
+            .mockImplementationOnce(async () => {
+                await new Promise((resolve) => setTimeout(resolve, 25));
+                return 'off';
+            })
+            .mockResolvedValue('off');
+
+        const first = SyncService.performSync();
+        const second = SyncService.performSync();
+
+        const [firstResult, secondResult] = await Promise.all([first, second]);
+        expect(firstResult.success).toBe(true);
+        expect(secondResult.success).toBe(true);
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(backendSpy).toHaveBeenCalledTimes(2);
+    });
+});
