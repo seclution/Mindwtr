@@ -197,6 +197,38 @@ describe('TaskStore', () => {
         expect(saved.tasks[0].projectId).toBe(project.id);
     });
 
+    it('retries failed saves with the latest queued snapshot', async () => {
+        let rejectFirstSave: ((reason?: unknown) => void) | null = null;
+        mockStorage.saveData = vi.fn().mockImplementation(() => {
+            if (!rejectFirstSave) {
+                return new Promise<void>((_, reject) => {
+                    rejectFirstSave = reject;
+                });
+            }
+            return Promise.resolve();
+        });
+        setStorageAdapter(mockStorage);
+
+        const { addTask, updateTask } = useTaskStore.getState();
+        addTask('Alpha');
+        await Promise.resolve();
+
+        const taskId = useTaskStore.getState().tasks[0].id;
+        updateTask(taskId, { title: 'Alpha Updated' });
+        expect(mockStorage.saveData).toHaveBeenCalledTimes(1);
+
+        rejectFirstSave?.(new Error('disk full'));
+        await Promise.resolve();
+
+        await flushPendingSave();
+
+        const saveCalls = (mockStorage.saveData as unknown as { mock: { calls: any[][] } }).mock.calls;
+        expect(saveCalls.length).toBeGreaterThanOrEqual(2);
+        const lastSaved = saveCalls[saveCalls.length - 1]?.[0];
+        expect(lastSaved.tasks).toHaveLength(1);
+        expect(lastSaved.tasks[0].title).toBe('Alpha Updated');
+    });
+
     it('should add a project', () => {
         const { addProject } = useTaskStore.getState();
         addProject('New Project', '#ff0000');
