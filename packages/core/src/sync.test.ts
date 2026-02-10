@@ -352,6 +352,47 @@ describe('Sync Logic', () => {
             expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:03:00.000Z');
         });
 
+        it('prefers newer timestamp when revisions tie but revBy differs', () => {
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                title: 'local newer',
+                rev: 7,
+                revBy: 'device-z',
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:01:00.000Z'),
+                title: 'incoming older',
+                rev: 7,
+                revBy: 'device-a',
+            } satisfies Task;
+
+            const merged = mergeAppData(mockAppData([localTask]), mockAppData([incomingTask]));
+
+            expect(merged.tasks).toHaveLength(1);
+            expect(merged.tasks[0].title).toBe('local newer');
+            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:05:00.000Z');
+        });
+
+        it('uses revBy tie-break only when revision and timestamp are equal', () => {
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                title: 'local',
+                rev: 7,
+                revBy: 'device-a',
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                title: 'incoming',
+                rev: 7,
+                revBy: 'device-z',
+            } satisfies Task;
+
+            const merged = mergeAppData(mockAppData([localTask]), mockAppData([incomingTask]));
+
+            expect(merged.tasks).toHaveLength(1);
+            expect(merged.tasks[0].title).toBe('incoming');
+        });
+
         it('does not bias toward deletion when operation times are equal', () => {
             const local = mockAppData([
                 createMockTask('1', '2023-01-02T00:00:00.000Z', '2023-01-02T00:05:00.000Z'),

@@ -540,10 +540,11 @@ function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; delet
                 }
             } else if (revDiff !== 0) {
                 winner = revDiff > 0 ? localItem : incomingItem;
+            } else if (safeIncomingTime !== safeLocalTime) {
+                // When revisions tie, prefer fresher timestamps before revBy tie-break.
+                winner = safeIncomingTime > safeLocalTime ? incomingItem : localItem;
             } else if (revByDiff && localRevBy && incomingRevBy) {
                 winner = incomingRevBy.localeCompare(localRevBy) > 0 ? incomingItem : localItem;
-            } else if (safeIncomingTime !== safeLocalTime) {
-                winner = safeIncomingTime > safeLocalTime ? incomingItem : localItem;
             } else {
                 winner = incomingItem;
             }
