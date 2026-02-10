@@ -146,6 +146,19 @@ function tokenToKey(token: string): string {
     return createHash('sha256').update(token).digest('hex');
 }
 
+function parseAllowedAuthTokens(rawValue?: string): Set<string> | null {
+    const tokens = String(rawValue || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+    return tokens.length > 0 ? new Set(tokens) : null;
+}
+
+function isAuthorizedToken(token: string, allowedTokens: Set<string> | null): boolean {
+    if (!allowedTokens) return true;
+    return allowedTokens.has(token);
+}
+
 function toRateLimitRoute(pathname: string): string {
     if (/^\/v1\/tasks\/[^/]+\/(complete|archive)$/.test(pathname)) {
         return '/v1/tasks/:id/:action';
@@ -271,6 +284,8 @@ export const __cloudTestUtils = {
     parseArgs,
     getToken,
     tokenToKey,
+    parseAllowedAuthTokens,
+    isAuthorizedToken,
     toRateLimitRoute,
     validateAppData,
     asStatus,
@@ -292,6 +307,7 @@ async function main() {
     const maxAttachmentPerWindow = Number(process.env.MINDWTR_CLOUD_ATTACHMENT_RATE_MAX || maxPerWindow);
     const maxBodyBytes = Number(process.env.MINDWTR_CLOUD_MAX_BODY_BYTES || 2_000_000);
     const maxAttachmentBytes = Number(process.env.MINDWTR_CLOUD_MAX_ATTACHMENT_BYTES || 50_000_000);
+    const allowedAuthTokens = parseAllowedAuthTokens(process.env.MINDWTR_CLOUD_AUTH_TOKENS);
     const encoder = new TextEncoder();
     const writeLocks = new Map<string, Promise<void>>();
     const withWriteLock = async <T>(key: string, fn: () => Promise<T>) => {
@@ -314,6 +330,13 @@ async function main() {
     }
 
     logInfo(`dataDir: ${dataDir}`);
+    if (allowedAuthTokens) {
+        logInfo('token auth allowlist enabled', { allowedTokens: String(allowedAuthTokens.size) });
+    } else {
+        logInfo('token namespace mode enabled (no auth allowlist)', {
+            hint: 'set MINDWTR_CLOUD_AUTH_TOKENS to enforce bearer authentication',
+        });
+    }
     if (!ensureWritableDir(dataDir)) {
         process.exit(1);
     }
@@ -341,6 +364,7 @@ async function main() {
             ) {
                 const token = getToken(req);
                 if (!token) return errorResponse('Unauthorized', 401);
+                if (!isAuthorizedToken(token, allowedAuthTokens)) return errorResponse('Unauthorized', 401);
                 const key = tokenToKey(token);
                 const routeKey = toRateLimitRoute(pathname);
                 const rateKey = `${key}:${req.method}:${routeKey}`;
@@ -537,6 +561,7 @@ async function main() {
             if (pathname === '/v1/data') {
                 const token = getToken(req);
                 if (!token) return errorResponse('Unauthorized', 401);
+                if (!isAuthorizedToken(token, allowedAuthTokens)) return errorResponse('Unauthorized', 401);
                 const key = tokenToKey(token);
                 const now = Date.now();
                 const state = rateLimits.get(key);
@@ -589,6 +614,7 @@ async function main() {
             if (pathname.startsWith('/v1/attachments/')) {
                 const token = getToken(req);
                 if (!token) return errorResponse('Unauthorized', 401);
+                if (!isAuthorizedToken(token, allowedAuthTokens)) return errorResponse('Unauthorized', 401);
                 const key = tokenToKey(token);
                 const now = Date.now();
                 const attachmentRateKey = `${key}:${req.method}:${toRateLimitRoute(pathname)}`;

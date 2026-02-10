@@ -11,6 +11,15 @@ describe('cloud server utils', () => {
         expect(__cloudTestUtils.tokenToKey(token!)).toHaveLength(64);
     });
 
+    test('parses optional auth token allowlist', () => {
+        expect(__cloudTestUtils.parseAllowedAuthTokens('')).toBeNull();
+        const tokens = __cloudTestUtils.parseAllowedAuthTokens('alpha, beta ,gamma');
+        expect(tokens?.size).toBe(3);
+        expect(__cloudTestUtils.isAuthorizedToken('beta', tokens || null)).toBe(true);
+        expect(__cloudTestUtils.isAuthorizedToken('delta', tokens || null)).toBe(false);
+        expect(__cloudTestUtils.isAuthorizedToken('any', null)).toBe(true);
+    });
+
     test('rejects invalid app data payload', () => {
         const result = __cloudTestUtils.validateAppData({ tasks: 'invalid', projects: [] });
         expect(result.ok).toBe(false);
