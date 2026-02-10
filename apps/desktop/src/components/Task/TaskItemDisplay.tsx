@@ -323,7 +323,8 @@ export function TaskItemDisplay({
                         <div onClick={(e) => e.stopPropagation()}>
                             {visibleAttachments.length > 0 && (
                                 <div className="flex flex-wrap items-center gap-2 mt-2 text-xs text-muted-foreground">
-                                    <Paperclip className="w-3 h-3" />
+                                    <Paperclip className="w-3 h-3" aria-hidden="true" />
+                                    <span className="sr-only">{t('attachments.title') || 'Attachments'}</span>
                                     {visibleAttachments.map((attachment) => (
                                         <div key={attachment.id} className="flex items-center gap-2">
                                             <button
@@ -335,6 +336,7 @@ export function TaskItemDisplay({
                                                 }}
                                                 className="truncate hover:underline"
                                                 title={attachment.title}
+                                                aria-label={`${t('attachments.open') || 'Open'}: ${attachment.title}`}
                                             >
                                                 {attachment.title}
                                             </button>
