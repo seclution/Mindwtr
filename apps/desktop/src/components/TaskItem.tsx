@@ -915,12 +915,8 @@ export const TaskItem = memo(function TaskItem({
             {showDiscardConfirm && (
                 <ConfirmModal
                     isOpen={showDiscardConfirm}
-                    title={t('taskEdit.discardChanges') === 'taskEdit.discardChanges'
-                        ? 'Discard unsaved changes?'
-                        : t('taskEdit.discardChanges')}
-                    description={t('taskEdit.discardChangesDesc') === 'taskEdit.discardChangesDesc'
-                        ? 'Your changes will be lost if you leave now.'
-                        : t('taskEdit.discardChangesDesc')}
+                    title={resolveText('taskEdit.discardChanges', 'Discard unsaved changes?')}
+                    description={resolveText('taskEdit.discardChangesDesc', 'Your changes will be lost if you leave now.')}
                     confirmLabel={resolveText('common.discard', 'Discard')}
                     cancelLabel={t('common.cancel')}
                     onCancel={() => setShowDiscardConfirm(false)}
