@@ -19,7 +19,6 @@ function NativeTabBar({
   navigation,
   iconTint,
   inactiveTint,
-  activeIndicator,
   tc,
   tabBarHeight,
   androidNavInset,
@@ -29,7 +28,6 @@ function NativeTabBar({
 }: BottomTabBarProps & {
   iconTint: string;
   inactiveTint: string;
-  activeIndicator: string;
   tc: { cardBg: string; border: string; onTint: string; tint: string };
   tabBarHeight: number;
   androidNavInset: number;
@@ -125,15 +123,7 @@ function NativeTabBar({
             onLongPress={onLongPress}
             style={[styles.nativeTabItem, { paddingTop: iconLift }]}
           >
-            <View style={styles.nativeTabIconWrap}>
-              {tabIcon}
-              <View
-                style={[
-                  styles.nativeTabIndicator,
-                  { backgroundColor: focused ? activeIndicator : 'transparent' },
-                ]}
-              />
-            </View>
+            <View style={styles.nativeTabIconWrap}>{tabIcon}</View>
           </TouchableOpacity>
         );
       })}
@@ -193,7 +183,6 @@ export default function TabLayout() {
             {...props}
             iconTint={iconTint}
             inactiveTint={inactiveTint}
-            activeIndicator={activeIndicator}
             tc={{ cardBg: tc.cardBg, border: tc.border, onTint: tc.onTint, tint: tc.tint }}
             tabBarHeight={tabBarHeight}
             androidNavInset={androidNavInset}
@@ -233,8 +222,8 @@ export default function TabLayout() {
             {...props}
             activeBackgroundColor="transparent"
             inactiveBackgroundColor="transparent"
-            activeIndicatorColor={activeIndicator}
-            indicatorHeight={2}
+            activeIndicatorColor="transparent"
+            indicatorHeight={0}
           />
         ),
       })}
@@ -343,12 +332,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   } as ViewStyle,
-  nativeTabIndicator: {
-    marginTop: 4,
-    width: 18,
-    height: 2,
-    borderRadius: 999,
-  },
   headerIconButton: {
     marginRight: 16,
     padding: 4,
