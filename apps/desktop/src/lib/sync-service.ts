@@ -33,6 +33,9 @@ import {
     withRetry,
     CLOCK_SKEW_THRESHOLD_MS,
     appendSyncHistory,
+    cloneAppData,
+    createWebdavDownloadBackoff,
+    isWebdavRateLimitedError,
 } from '@mindwtr/core';
 import { isTauriRuntime } from './runtime';
 import { reportError } from './report-error';
@@ -42,14 +45,11 @@ import { webStorage } from './storage-adapter-web';
 import {
     ATTACHMENTS_DIR_NAME,
     buildCloudKey,
-    cloneAppData,
     extractExtension,
     getFileSyncDir,
-    getErrorStatus,
     hashString,
     isSyncFilePath,
     isTempAttachmentFile,
-    isWebdavRateLimitedError,
     normalizeSyncBackend,
     sleep,
     stripFileScheme,
@@ -75,7 +75,10 @@ const WEBDAV_ATTACHMENT_MAX_DOWNLOADS_PER_SYNC = 10;
 const WEBDAV_ATTACHMENT_MAX_UPLOADS_PER_SYNC = 10;
 const WEBDAV_ATTACHMENT_MISSING_BACKOFF_MS = 15 * 60_000;
 const WEBDAV_ATTACHMENT_ERROR_BACKOFF_MS = 2 * 60_000;
-const webdavAttachmentDownloadBackoff = new Map<string, number>();
+const webdavDownloadBackoff = createWebdavDownloadBackoff({
+    missingBackoffMs: WEBDAV_ATTACHMENT_MISSING_BACKOFF_MS,
+    errorBackoffMs: WEBDAV_ATTACHMENT_ERROR_BACKOFF_MS,
+});
 type SyncServiceDependencies = {
     isTauriRuntime: () => boolean;
     invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -122,31 +125,15 @@ const logSyncInfo = (message: string, extra?: Record<string, string>) => {
 };
 
 const getWebdavDownloadBackoff = (attachmentId: string): number | null => {
-    const blockedUntil = webdavAttachmentDownloadBackoff.get(attachmentId);
-    if (!blockedUntil) return null;
-    if (Date.now() >= blockedUntil) {
-        webdavAttachmentDownloadBackoff.delete(attachmentId);
-        return null;
-    }
-    return blockedUntil;
+    return webdavDownloadBackoff.getBlockedUntil(attachmentId);
 };
 
 const setWebdavDownloadBackoff = (attachmentId: string, error: unknown): void => {
-    const status = getErrorStatus(error);
-    if (status === 404) {
-        webdavAttachmentDownloadBackoff.set(attachmentId, Date.now() + WEBDAV_ATTACHMENT_MISSING_BACKOFF_MS);
-        return;
-    }
-    webdavAttachmentDownloadBackoff.set(attachmentId, Date.now() + WEBDAV_ATTACHMENT_ERROR_BACKOFF_MS);
+    webdavDownloadBackoff.setFromError(attachmentId, error);
 };
 
 const pruneWebdavDownloadBackoff = (): void => {
-    const now = Date.now();
-    for (const [id, blockedUntil] of webdavAttachmentDownloadBackoff) {
-        if (blockedUntil <= now) {
-            webdavAttachmentDownloadBackoff.delete(id);
-        }
-    }
+    webdavDownloadBackoff.prune();
 };
 
 const externalCalendarProvider = {
@@ -525,7 +512,7 @@ async function syncAttachments(
             didMutate = true;
         }
         if (existsLocally) {
-            webdavAttachmentDownloadBackoff.delete(attachment.id);
+            webdavDownloadBackoff.deleteEntry(attachment.id);
         }
 
         if (attachment.cloudKey && existsLocally) {
@@ -688,7 +675,7 @@ async function syncAttachments(
                 attachment.localStatus = 'available';
                 didMutate = true;
             }
-            webdavAttachmentDownloadBackoff.delete(attachment.id);
+            webdavDownloadBackoff.deleteEntry(attachment.id);
             reportProgress(attachment.id, 'download', bytes.length, bytes.length, 'completed');
         } catch (error) {
             if (handleRateLimit(error)) {
@@ -1065,7 +1052,7 @@ export class SyncService {
         SyncService.lastObservedHash = null;
         SyncService.ignoreFileEventsUntil = 0;
         SyncService.externalSyncTimer = null;
-        webdavAttachmentDownloadBackoff.clear();
+        webdavDownloadBackoff.clear();
     }
 
     private static updateSyncStatus(partial: Partial<typeof SyncService.syncStatus>) {
@@ -1743,6 +1730,6 @@ export const __syncServiceTestUtils = {
         };
     },
     clearWebdavDownloadBackoff() {
-        webdavAttachmentDownloadBackoff.clear();
+        webdavDownloadBackoff.clear();
     },
 };

@@ -12,6 +12,8 @@ import {
   webdavMakeDirectory,
   webdavPutFile,
   withRetry,
+  createWebdavDownloadBackoff,
+  isWebdavRateLimitedError,
 } from '@mindwtr/core';
 import {
   SYNC_BACKEND_KEY,
@@ -34,7 +36,10 @@ const WEBDAV_ATTACHMENT_MAX_DOWNLOADS_PER_SYNC = 10;
 const WEBDAV_ATTACHMENT_MAX_UPLOADS_PER_SYNC = 10;
 const WEBDAV_ATTACHMENT_MISSING_BACKOFF_MS = 15 * 60_000;
 const WEBDAV_ATTACHMENT_ERROR_BACKOFF_MS = 2 * 60_000;
-const webdavAttachmentDownloadBackoff = new Map<string, number>();
+const webdavDownloadBackoff = createWebdavDownloadBackoff({
+  missingBackoffMs: WEBDAV_ATTACHMENT_MISSING_BACKOFF_MS,
+  errorBackoffMs: WEBDAV_ATTACHMENT_ERROR_BACKOFF_MS,
+});
 
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const BASE64_LOOKUP = (() => {
@@ -64,52 +69,16 @@ const logAttachmentInfo = (message: string, extra?: Record<string, string>) => {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const getErrorStatus = (error: unknown): number | null => {
-  if (!error || typeof error !== 'object') return null;
-  const anyError = error as { status?: unknown; statusCode?: unknown; response?: { status?: unknown } };
-  const status = anyError.status ?? anyError.statusCode ?? anyError.response?.status;
-  return typeof status === 'number' ? status : null;
-};
-
 const getWebdavDownloadBackoff = (attachmentId: string): number | null => {
-  const blockedUntil = webdavAttachmentDownloadBackoff.get(attachmentId);
-  if (!blockedUntil) return null;
-  if (Date.now() >= blockedUntil) {
-    webdavAttachmentDownloadBackoff.delete(attachmentId);
-    return null;
-  }
-  return blockedUntil;
+  return webdavDownloadBackoff.getBlockedUntil(attachmentId);
 };
 
 const setWebdavDownloadBackoff = (attachmentId: string, error: unknown): void => {
-  const status = getErrorStatus(error);
-  if (status === 404) {
-    webdavAttachmentDownloadBackoff.set(attachmentId, Date.now() + WEBDAV_ATTACHMENT_MISSING_BACKOFF_MS);
-    return;
-  }
-  webdavAttachmentDownloadBackoff.set(attachmentId, Date.now() + WEBDAV_ATTACHMENT_ERROR_BACKOFF_MS);
+  webdavDownloadBackoff.setFromError(attachmentId, error);
 };
 
 const pruneWebdavDownloadBackoff = (): void => {
-  const now = Date.now();
-  for (const [id, blockedUntil] of webdavAttachmentDownloadBackoff) {
-    if (blockedUntil <= now) {
-      webdavAttachmentDownloadBackoff.delete(id);
-    }
-  }
-};
-
-const isWebdavRateLimitedError = (error: unknown): boolean => {
-  const status = getErrorStatus(error);
-  if (status === 429 || status === 503) return true;
-  const message = error instanceof Error ? error.message : String(error || '');
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes('blockedtemporarily') ||
-    normalized.includes('too many requests') ||
-    normalized.includes('rate limit') ||
-    normalized.includes('rate limited')
-  );
+  webdavDownloadBackoff.prune();
 };
 
 const reportProgress = (
@@ -764,7 +733,7 @@ export const syncWebdavAttachments = async (
       didMutate = true;
     }
     if (existsLocally || isContent || isHttp) {
-      webdavAttachmentDownloadBackoff.delete(attachment.id);
+      webdavDownloadBackoff.deleteEntry(attachment.id);
     }
 
     if (attachment.cloudKey && hasLocalPath && existsLocally && !isHttp) {
@@ -785,7 +754,7 @@ export const syncWebdavAttachments = async (
         });
         if (!remoteExists) {
           attachment.cloudKey = undefined;
-          webdavAttachmentDownloadBackoff.delete(attachment.id);
+          webdavDownloadBackoff.deleteEntry(attachment.id);
           didMutate = true;
         }
       } catch (error) {
@@ -977,7 +946,7 @@ export const syncWebdavAttachments = async (
           attachment.localStatus = 'available';
           didMutate = true;
         }
-        webdavAttachmentDownloadBackoff.delete(attachment.id);
+        webdavDownloadBackoff.deleteEntry(attachment.id);
         reportProgress(attachment.id, 'download', bytes.length, bytes.length, 'completed');
       } catch (error) {
         if (handleRateLimit(error)) {
