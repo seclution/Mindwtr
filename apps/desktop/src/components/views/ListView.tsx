@@ -291,6 +291,53 @@ export function ListView({ title, statusFilter }: ListViewProps) {
             return sortTasksBy(filtered, sortBy);
         });
     }, [baseTasks, statusFilter, selectedTokens, activePriorities, activeTimeEstimates, sequentialProjectFirstTasks, projectMap, sortBy, sortByProjectOrder, resolvedAreaFilter, areaById]);
+    const isReferenceAreaGrouping = statusFilter === 'reference';
+    const referenceAreaGroups = useMemo(() => {
+        if (!isReferenceAreaGrouping) return [] as Array<{ id: string; title: string; tasks: Task[]; muted?: boolean }>;
+        const activeAreas = [...areas]
+            .filter((area) => !area.deletedAt)
+            .sort((a, b) => (a.order - b.order) || a.name.localeCompare(b.name));
+        const validAreaIds = new Set(activeAreas.map((area) => area.id));
+        const grouped = new Map<string, Task[]>();
+        const generalTasks: Task[] = [];
+
+        filteredTasks.forEach((task) => {
+            const projectAreaId = task.projectId ? projectMap.get(task.projectId)?.areaId : undefined;
+            const resolvedAreaId = task.areaId || projectAreaId;
+            if (resolvedAreaId && validAreaIds.has(resolvedAreaId)) {
+                const items = grouped.get(resolvedAreaId) ?? [];
+                items.push(task);
+                grouped.set(resolvedAreaId, items);
+            } else {
+                generalTasks.push(task);
+            }
+        });
+
+        const groups: Array<{ id: string; title: string; tasks: Task[]; muted?: boolean }> = [];
+        if (generalTasks.length > 0) {
+            groups.push({
+                id: 'general',
+                title: t('settings.general') === 'settings.general' ? 'General' : t('settings.general'),
+                tasks: generalTasks,
+                muted: true,
+            });
+        }
+        activeAreas.forEach((area) => {
+            const tasksForArea = grouped.get(area.id) ?? [];
+            if (tasksForArea.length === 0) return;
+            groups.push({
+                id: area.id,
+                title: area.name,
+                tasks: tasksForArea,
+            });
+        });
+        return groups;
+    }, [areas, filteredTasks, isReferenceAreaGrouping, projectMap, t]);
+    const taskIndexById = useMemo(() => {
+        const map = new Map<string, number>();
+        filteredTasks.forEach((task, index) => map.set(task.id, index));
+        return map;
+    }, [filteredTasks]);
 
     const showDeferredProjects = statusFilter === 'someday' || statusFilter === 'waiting';
     const deferredProjects = showDeferredProjects
@@ -310,7 +357,7 @@ export function ListView({ title, statusFilter }: ListViewProps) {
             .catch((error) => reportError('Failed to reactivate project', error));
     }, [updateProject]);
 
-    const shouldVirtualize = filteredTasks.length > VIRTUALIZATION_THRESHOLD;
+    const shouldVirtualize = !isReferenceAreaGrouping && filteredTasks.length > VIRTUALIZATION_THRESHOLD;
     const rowVirtualizer = useVirtualizer({
         count: shouldVirtualize ? filteredTasks.length : 0,
         getScrollElement: () => listScrollRef.current,
@@ -895,6 +942,41 @@ export function ListView({ title, statusFilter }: ListViewProps) {
                                 </div>
                             );
                         })}
+                    </div>
+                ) : isReferenceAreaGrouping ? (
+                    <div className="space-y-2">
+                        {referenceAreaGroups.map((group) => (
+                            <div key={group.id} className="rounded-md border border-border/40 bg-card/30">
+                                <div className={cn(
+                                    'px-3 py-2 text-xs font-semibold uppercase tracking-wide border-b border-border/30',
+                                    group.muted ? 'text-muted-foreground' : 'text-foreground/90',
+                                )}>
+                                    <span>{group.title}</span>
+                                    <span className="ml-2 text-muted-foreground">{group.tasks.length}</span>
+                                </div>
+                                <div className="divide-y divide-border/30">
+                                    {group.tasks.map((task) => {
+                                        const index = taskIndexById.get(task.id) ?? 0;
+                                        return (
+                                            <TaskItem
+                                                key={task.id}
+                                                task={task}
+                                                project={task.projectId ? projectMap.get(task.projectId) : undefined}
+                                                isSelected={index === selectedIndex}
+                                                onSelect={() => handleSelectIndex(index)}
+                                                selectionMode={selectionMode}
+                                                isMultiSelected={multiSelectedIds.has(task.id)}
+                                                onToggleSelect={() => toggleMultiSelect(task.id)}
+                                                showQuickDone={showQuickDone}
+                                                readOnly={readOnly}
+                                                compactMetaEnabled={showListDetails}
+                                                showProjectBadgeInActions={false}
+                                            />
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 ) : (
                     <div className="divide-y divide-border/30">
