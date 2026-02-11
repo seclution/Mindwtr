@@ -23,7 +23,7 @@ function NativeTabBar({
   tabBarHeight,
   androidNavInset,
   iconLift,
-  iconVerticalOffset,
+  tabItemBottomPadding,
   openQuickCapture,
   defaultAutoRecord,
 }: BottomTabBarProps & {
@@ -33,7 +33,7 @@ function NativeTabBar({
   tabBarHeight: number;
   androidNavInset: number;
   iconLift: number;
-  iconVerticalOffset: number;
+  tabItemBottomPadding: number;
   openQuickCapture: (options?: { initialValue?: string; initialProps?: Partial<Task>; autoRecord?: boolean }) => void;
   defaultAutoRecord: boolean;
 }) {
@@ -79,14 +79,9 @@ function NativeTabBar({
               accessibilityRole="button"
               accessibilityLabel={defaultAutoRecord ? 'Audio capture' : 'Add task'}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              style={[styles.nativeTabItem, { paddingTop: iconLift }]}
+              style={[styles.nativeTabItem, { paddingTop: iconLift, paddingBottom: tabItemBottomPadding }]}
             >
-              <View
-                style={[
-                  styles.captureButtonInner,
-                  { backgroundColor: tc.tint, transform: [{ translateY: iconVerticalOffset }] },
-                ]}
-              >
+              <View style={[styles.captureButtonInner, { backgroundColor: tc.tint }]}>
                 {defaultAutoRecord ? (
                   <Mic size={24} color={tc.onTint} strokeWidth={2.5} />
                 ) : (
@@ -130,11 +125,9 @@ function NativeTabBar({
             onPress={onPress}
             onLongPress={onLongPress}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            style={[styles.nativeTabItem, { paddingTop: iconLift }]}
+            style={[styles.nativeTabItem, { paddingTop: iconLift, paddingBottom: tabItemBottomPadding }]}
           >
-            <View style={[styles.nativeTabIconWrap, { transform: [{ translateY: iconVerticalOffset }] }]}>
-              {tabIcon}
-            </View>
+            <View style={styles.nativeTabIconWrap}>{tabIcon}</View>
           </TouchableOpacity>
         );
       })}
@@ -152,7 +145,7 @@ export default function TabLayout() {
     : 0;
   const tabBarHeight = 58 + androidNavInset;
   const iconLift = Platform.OS === 'android' ? 6 : 0;
-  const iconVerticalOffset = Platform.OS === 'ios' ? -8 : 0;
+  const tabItemBottomPadding = Platform.OS === 'ios' ? 12 : 0;
   const [captureState, setCaptureState] = useState<{
     visible: boolean;
     initialValue?: string;
@@ -199,7 +192,7 @@ export default function TabLayout() {
             tabBarHeight={tabBarHeight}
             androidNavInset={androidNavInset}
             iconLift={iconLift}
-            iconVerticalOffset={iconVerticalOffset}
+            tabItemBottomPadding={tabItemBottomPadding}
             openQuickCapture={openQuickCapture}
             defaultAutoRecord={defaultAutoRecord}
           />
