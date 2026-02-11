@@ -98,12 +98,12 @@ const isReleasedAudioPlayerError = (error: unknown): boolean => {
         || message.includes('cannot be cast to type expo.modules.audio.audioplayer')
     );
 };
-const COMPACT_STATUS_LABELS: Record<TaskStatus, string> = {
+const STATUS_LABEL_FALLBACKS: Record<TaskStatus, string> = {
     inbox: 'Inbox',
     next: 'Next',
-    waiting: 'Wait',
-    someday: 'Later',
-    reference: 'Ref',
+    waiting: 'Waiting',
+    someday: 'Someday',
+    reference: 'Reference',
     done: 'Done',
     archived: 'Archived',
 };
@@ -1685,6 +1685,11 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         styles.statusText,
         { color: active ? '#fff' : tc.secondaryText },
     ]);
+    const getStatusLabel = (status: TaskStatus) => {
+        const key = `status.${status}` as const;
+        const translated = t(key);
+        return translated === key ? STATUS_LABEL_FALLBACKS[status] : translated;
+    };
     const getQuickTokenChipStyle = (active: boolean) => ([
         styles.quickTokenChip,
         { backgroundColor: active ? tc.tint : tc.filterBg, borderColor: active ? tc.tint : tc.border },
@@ -1708,7 +1713,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                     onPress={() => setEditedTask(prev => ({ ...prev, status }))}
                                 >
                                     <Text style={getStatusTextStyle(editedTask.status === status)}>
-                                        {COMPACT_STATUS_LABELS[status] ?? t(`status.${status}`)}
+                                        {getStatusLabel(status)}
                                     </Text>
                                 </TouchableOpacity>
                             ))}
