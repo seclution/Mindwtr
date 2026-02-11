@@ -568,6 +568,7 @@ jobs:
                 skip_screenshots: true,
                 skip_app_version_update: true,
                 force: true,
+                run_precheck_before_submit: false,
                 submit_for_review: ENV.fetch("SUBMIT_FOR_REVIEW", "false") == "true",
                 automatic_release: false
               )
