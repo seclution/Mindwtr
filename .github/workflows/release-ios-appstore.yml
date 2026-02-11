@@ -445,12 +445,17 @@ jobs:
         if: ${{ github.event_name == 'release' || (github.event.inputs.upload || 'true') == 'true' }}
         env:
           RELEASE_BODY: ${{ github.event.release.body || '' }}
+          APP_SUPPORT_URL: "https://github.com/dongdongbh/Mindwtr/issues"
+          APP_MARKETING_URL: "https://github.com/dongdongbh/Mindwtr"
         run: |
           set -euo pipefail
 
           FASTLANE_METADATA_DIR="$RUNNER_TEMP/fastlane_metadata"
           rm -rf "$FASTLANE_METADATA_DIR"
           mkdir -p "$FASTLANE_METADATA_DIR"
+          if [ -f "metadata/copyright.txt" ]; then
+            cp "metadata/copyright.txt" "$FASTLANE_METADATA_DIR/copyright.txt"
+          fi
 
           map_metadata() {
             local src_locale="$1"
@@ -482,6 +487,16 @@ jobs:
             fi
             if [ -f "$src_dir/keywords.txt" ]; then
               cp "$src_dir/keywords.txt" "$dst_dir/keywords.txt"
+            fi
+            if [ -f "$src_dir/support_url.txt" ]; then
+              cp "$src_dir/support_url.txt" "$dst_dir/support_url.txt"
+            elif [ -n "${APP_SUPPORT_URL:-}" ]; then
+              printf '%s\n' "$APP_SUPPORT_URL" > "$dst_dir/support_url.txt"
+            fi
+            if [ -f "$src_dir/marketing_url.txt" ]; then
+              cp "$src_dir/marketing_url.txt" "$dst_dir/marketing_url.txt"
+            elif [ -n "${APP_MARKETING_URL:-}" ]; then
+              printf '%s\n' "$APP_MARKETING_URL" > "$dst_dir/marketing_url.txt"
             fi
 
             if [ -f "$src_dir/release_notes.txt" ]; then
