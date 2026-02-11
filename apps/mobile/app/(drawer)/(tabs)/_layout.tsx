@@ -143,7 +143,7 @@ export default function TabLayout() {
   const androidNavInset = Platform.OS === 'android' && insets.bottom >= 20
     ? Math.max(0, insets.bottom - 12)
     : 0;
-  const tabItemTopOffset = Platform.OS === 'ios' ? -10 : -4;
+  const tabItemTopOffset = Platform.OS === 'ios' ? -10 : -6;
   const tabBarHeight = 58 + androidNavInset;
   const iconLift = Platform.OS === 'android' ? 4 : 0;
   const [captureState, setCaptureState] = useState<{
