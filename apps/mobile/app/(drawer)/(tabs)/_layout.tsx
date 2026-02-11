@@ -21,7 +21,7 @@ function NativeTabBar({
   inactiveTint,
   tc,
   tabBarHeight,
-  androidNavInset,
+  tabBarBottomInset,
   iconLift,
   openQuickCapture,
   defaultAutoRecord,
@@ -30,7 +30,7 @@ function NativeTabBar({
   inactiveTint: string;
   tc: { cardBg: string; border: string; onTint: string; tint: string };
   tabBarHeight: number;
-  androidNavInset: number;
+  tabBarBottomInset: number;
   iconLift: number;
   openQuickCapture: (options?: { initialValue?: string; initialProps?: Partial<Task>; autoRecord?: boolean }) => void;
   defaultAutoRecord: boolean;
@@ -47,7 +47,7 @@ function NativeTabBar({
           backgroundColor: tc.cardBg,
           borderTopColor: tc.border,
           height: tabBarHeight,
-          paddingBottom: androidNavInset,
+          paddingBottom: tabBarBottomInset,
         },
       ]}
     >
@@ -139,7 +139,9 @@ export default function TabLayout() {
   const androidNavInset = Platform.OS === 'android' && insets.bottom >= 20
     ? Math.max(0, insets.bottom - 12)
     : 0;
-  const tabBarHeight = 58 + androidNavInset;
+  const iosBottomInset = Platform.OS === 'ios' ? Math.max(8, insets.bottom) : 0;
+  const tabBarBottomInset = androidNavInset + iosBottomInset;
+  const tabBarHeight = 58 + tabBarBottomInset;
   const iconLift = Platform.OS === 'android' ? 6 : 0;
   const [captureState, setCaptureState] = useState<{
     visible: boolean;
@@ -185,7 +187,7 @@ export default function TabLayout() {
             inactiveTint={inactiveTint}
             tc={{ cardBg: tc.cardBg, border: tc.border, onTint: tc.onTint, tint: tc.tint }}
             tabBarHeight={tabBarHeight}
-            androidNavInset={androidNavInset}
+            tabBarBottomInset={tabBarBottomInset}
             iconLift={iconLift}
             openQuickCapture={openQuickCapture}
             defaultAutoRecord={defaultAutoRecord}
