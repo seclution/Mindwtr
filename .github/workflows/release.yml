@@ -445,7 +445,7 @@ jobs:
           Copy-Item "metadata/chocolatey/mindwtr.nuspec" -Destination (Join-Path $pkgRoot "mindwtr.nuspec") -Force
           $template = Get-Content -Raw "metadata/chocolatey/tools/chocolateyInstall.ps1.template"
           $installScript = $template.Replace("__INSTALLER_URL__", $installerUrl).Replace("__CHECKSUM__", $sha)
-          Set-Content -Path (Join-Path $toolsDir "chocolateyInstall.ps1") -Value $installScript -NoNewline
+          Set-Content -Path (Join-Path $toolsDir "chocolateyInstall.ps1") -Value $installScript -Encoding UTF8 -NoNewline
 
           Push-Location $pkgRoot
           choco pack "mindwtr.nuspec" --version "$version"
@@ -457,6 +457,14 @@ jobs:
           }
           "nupkg_path=$($nupkg.FullName)" >> $env:GITHUB_OUTPUT
           Write-Host "Generated package: $($nupkg.FullName)"
+
+      - name: Smoke test Chocolatey package locally
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $pkgRoot = Join-Path $PWD "chocolatey-package"
+          choco install mindwtr --source "$pkgRoot" --force --no-progress -y
 
       - name: Push package to Chocolatey
         shell: pwsh
