@@ -14,6 +14,7 @@ import {
   withRetry,
   createWebdavDownloadBackoff,
   isWebdavRateLimitedError,
+  getErrorStatus,
 } from '@mindwtr/core';
 import {
   SYNC_BACKEND_KEY,
@@ -969,7 +970,17 @@ export const syncWebdavAttachments = async (
           abortedByRateLimit = true;
           break;
         }
-        setWebdavDownloadBackoff(attachment.id, error);
+        const status = getErrorStatus(error);
+        if (status === 404 && attachment.cloudKey) {
+          attachment.cloudKey = undefined;
+          webdavDownloadBackoff.deleteEntry(attachment.id);
+          didMutate = true;
+          logAttachmentInfo('Cleared missing WebDAV cloud key after 404', {
+            id: attachment.id,
+          });
+        } else {
+          setWebdavDownloadBackoff(attachment.id, error);
+        }
         if (attachment.localStatus !== 'missing') {
           attachment.localStatus = 'missing';
           didMutate = true;

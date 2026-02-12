@@ -36,6 +36,7 @@ import {
     cloneAppData,
     createWebdavDownloadBackoff,
     isWebdavRateLimitedError,
+    getErrorStatus,
 } from '@mindwtr/core';
 import { isTauriRuntime } from './runtime';
 import { reportError } from './report-error';
@@ -682,7 +683,17 @@ async function syncAttachments(
                 abortedByRateLimit = true;
                 break;
             }
-            setWebdavDownloadBackoff(attachment.id, error);
+            const status = getErrorStatus(error);
+            if (status === 404 && attachment.cloudKey) {
+                attachment.cloudKey = undefined;
+                webdavDownloadBackoff.deleteEntry(attachment.id);
+                didMutate = true;
+                logSyncInfo('Cleared missing WebDAV cloud key after 404', {
+                    id: attachment.id,
+                });
+            } else {
+                setWebdavDownloadBackoff(attachment.id, error);
+            }
             if (attachment.localStatus !== 'missing') {
                 attachment.localStatus = 'missing';
                 didMutate = true;

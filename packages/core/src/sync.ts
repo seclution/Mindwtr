@@ -473,6 +473,16 @@ const toComparableValue = (value: unknown): unknown => {
 const hasContentDifference = (localItem: unknown, incomingItem: unknown): boolean =>
     JSON.stringify(toComparableValue(localItem)) !== JSON.stringify(toComparableValue(incomingItem));
 
+const toComparableSignature = (value: unknown): string =>
+    JSON.stringify(toComparableValue(value));
+
+const chooseDeterministicWinner = <T>(localItem: T, incomingItem: T): T => {
+    const localSignature = toComparableSignature(localItem);
+    const incomingSignature = toComparableSignature(incomingItem);
+    if (localSignature === incomingSignature) return incomingItem;
+    return incomingSignature.localeCompare(localSignature) > 0 ? incomingItem : localItem;
+};
+
 function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; deletedAt?: string }>(
     local: T[],
     incoming: T[],
@@ -597,7 +607,8 @@ function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; delet
             } else if (revByDiff && localRevBy && incomingRevBy) {
                 winner = incomingRevBy.localeCompare(localRevBy) > 0 ? incomingItem : localItem;
             } else {
-                winner = incomingItem;
+                // Preserve deterministic convergence when metadata ties but content differs.
+                winner = chooseDeterministicWinner(localItem, incomingItem);
             }
         } else if (localDeleted !== incomingDeleted) {
             const localOpTime = resolveOperationTime(localItem);
@@ -609,10 +620,10 @@ function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; delet
             } else if (safeIncomingTime !== safeLocalTime) {
                 winner = safeIncomingTime > safeLocalTime ? incomingItem : localItem;
             } else {
-                winner = incomingItem;
+                winner = chooseDeterministicWinner(localItem, incomingItem);
             }
         } else if (withinSkew && safeIncomingTime === safeLocalTime) {
-            winner = incomingItem;
+            winner = chooseDeterministicWinner(localItem, incomingItem);
         }
         if (winner === incomingItem) stats.resolvedUsingIncoming += 1;
         else stats.resolvedUsingLocal += 1;

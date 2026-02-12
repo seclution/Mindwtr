@@ -396,13 +396,13 @@ describe('Sync Logic', () => {
         it('counts a conflict when revision metadata matches but content differs', () => {
             const localTask = {
                 ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
-                title: 'local',
+                title: 'omega',
                 rev: 7,
                 revBy: 'device-a',
             } satisfies Task;
             const incomingTask = {
                 ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
-                title: 'incoming',
+                title: 'alpha',
                 rev: 7,
                 revBy: 'device-a',
             } satisfies Task;
@@ -410,9 +410,47 @@ describe('Sync Logic', () => {
             const result = mergeAppDataWithStats(mockAppData([localTask]), mockAppData([incomingTask]));
 
             expect(result.data.tasks).toHaveLength(1);
-            expect(result.data.tasks[0].title).toBe('incoming');
+            expect(result.data.tasks[0].title).toBe('omega');
             expect(result.stats.tasks.conflicts).toBe(1);
             expect(result.stats.tasks.conflictIds).toContain('1');
+        });
+
+        it('resolves equal revision/timestamp conflicts consistently across sync direction', () => {
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                title: 'omega',
+                rev: 7,
+                revBy: 'device-a',
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                title: 'alpha',
+                rev: 7,
+                revBy: 'device-a',
+            } satisfies Task;
+
+            const forward = mergeAppData(mockAppData([localTask]), mockAppData([incomingTask]));
+            const reverse = mergeAppData(mockAppData([incomingTask]), mockAppData([localTask]));
+
+            expect(forward.tasks[0].title).toBe('omega');
+            expect(reverse.tasks[0].title).toBe('omega');
+        });
+
+        it('resolves legacy equal-timestamp conflicts consistently across sync direction', () => {
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                title: 'omega',
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                title: 'alpha',
+            } satisfies Task;
+
+            const forward = mergeAppData(mockAppData([localTask]), mockAppData([incomingTask]));
+            const reverse = mergeAppData(mockAppData([incomingTask]), mockAppData([localTask]));
+
+            expect(forward.tasks[0].title).toBe('omega');
+            expect(reverse.tasks[0].title).toBe('omega');
         });
 
         it('does not bias toward deletion when operation times are equal', () => {
