@@ -723,7 +723,7 @@ function TaskListComponent({
             <View style={[styles.typeaheadContainer, { backgroundColor: themeColors.cardBg, borderColor: themeColors.border }]}>
               {typeaheadOptions.map((option, index) => (
                 <TouchableOpacity
-                  key={`${option.kind}-${option.value}-${index}`}
+                  key={`${option.kind}:${option.value}`}
                   onPress={() => applyTypeaheadOption(option)}
                   style={[
                     styles.typeaheadRow,
