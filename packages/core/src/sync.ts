@@ -569,21 +569,24 @@ function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; delet
         }
         const withinSkew = Math.abs(timeDiff) <= CLOCK_SKEW_THRESHOLD_MS;
         const resolveOperationTime = (item: T): number => {
-            if (item.deletedAt) {
-                const deletedTimeRaw = new Date(item.deletedAt).getTime();
-                if (Number.isFinite(deletedTimeRaw)) return deletedTimeRaw;
+            const updatedTimeRaw = item.updatedAt ? new Date(item.updatedAt).getTime() : NaN;
+            const updatedTime = Number.isFinite(updatedTimeRaw) ? updatedTimeRaw : 0;
+            if (!item.deletedAt) return updatedTime;
+
+            const deletedTimeRaw = new Date(item.deletedAt).getTime();
+            if (!Number.isFinite(deletedTimeRaw)) {
                 invalidDeletedAtWarnings += 1;
                 if (invalidDeletedAtWarnings <= 5) {
-                    logWarn('Invalid deletedAt timestamp during merge; treating deletion as older than live updates', {
+                    logWarn('Invalid deletedAt timestamp during merge; falling back to updatedAt operation time', {
                         scope: 'sync',
                         category: 'sync',
-                        context: { id: item.id, deletedAt: item.deletedAt },
+                        context: { id: item.id, deletedAt: item.deletedAt, updatedAt: item.updatedAt },
                     });
                 }
-                return Number.NEGATIVE_INFINITY;
+                return updatedTime;
             }
-            const updatedTimeRaw = item.updatedAt ? new Date(item.updatedAt).getTime() : NaN;
-            return Number.isFinite(updatedTimeRaw) ? updatedTimeRaw : 0;
+
+            return Math.max(updatedTime, deletedTimeRaw);
         };
         let winner = safeIncomingTime > safeLocalTime ? incomingItem : localItem;
         if (hasRevision) {
@@ -594,10 +597,8 @@ function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; delet
                     winner = incomingItem;
                 } else if (localOpTime > incomingOpTime) {
                     winner = localItem;
-                } else if (safeIncomingTime !== safeLocalTime) {
-                    winner = safeIncomingTime > safeLocalTime ? incomingItem : localItem;
                 } else {
-                    winner = incomingItem;
+                    winner = localDeleted ? localItem : incomingItem;
                 }
             } else if (revDiff !== 0) {
                 winner = revDiff > 0 ? localItem : incomingItem;
@@ -617,10 +618,8 @@ function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; delet
                 winner = incomingItem;
             } else if (localOpTime > incomingOpTime) {
                 winner = localItem;
-            } else if (safeIncomingTime !== safeLocalTime) {
-                winner = safeIncomingTime > safeLocalTime ? incomingItem : localItem;
             } else {
-                winner = chooseDeterministicWinner(localItem, incomingItem);
+                winner = localDeleted ? localItem : incomingItem;
             }
         } else if (withinSkew && safeIncomingTime === safeLocalTime) {
             winner = chooseDeterministicWinner(localItem, incomingItem);
