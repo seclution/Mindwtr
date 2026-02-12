@@ -11,9 +11,9 @@ Mindwtr currently provides security fixes for the latest stable release line.
 
 ## Reporting a Vulnerability
 
-Please report security vulnerabilities privately by email:
+Please report security vulnerabilities using GitHub Private Vulnerability Reporting:
 
-- **Email:** dongdongbhbh@gmail.com
+- **Report here:** https://github.com/dongdongbh/Mindwtr/security/advisories/new
 
 Please include:
 
