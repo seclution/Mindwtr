@@ -49,6 +49,7 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 
 ### Data & Sync
 - [[Data and Sync]] — Storage locations and sync setup
+- [[Sync Algorithm]] — Conflict rules, tombstones, and merge behavior
 - [[Calendar Integration]] — External calendars (ICS)
 - [[AI Assistant]] — Optional BYOK assistant
 - [[Reusable Lists]] — Templates and checklist reset
@@ -59,6 +60,8 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 - [[Developer Guide]] — Development setup and overview
 - [[Architecture]] — Technical architecture and design
 - [[Core API]] — `@mindwtr/core` package documentation
+- [[Deployment Guide]] — Platform deployment entry points
+- [[Performance Guide]] — Performance-focused implementation notes
 - [[Contributing]] — How to contribute to Mindwtr
 
 ---

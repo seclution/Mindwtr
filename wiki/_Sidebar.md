@@ -30,6 +30,7 @@
 
 **Data & Sync**
 * [[Data and Sync]]
+* [[Sync Algorithm]]
 * [[Cloud Sync]]
 * [[Local API]]
 * [[MCP Server]]
@@ -46,6 +47,8 @@
 * [[Developer Guide]]
 * [[Architecture]]
 * [[Core API]]
+* [[Deployment Guide]]
+* [[Performance Guide]]
 * [[Contributing]]
 
 ---
