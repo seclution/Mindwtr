@@ -598,15 +598,16 @@ function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; delet
 
             const deletedTimeRaw = new Date(item.deletedAt).getTime();
             if (!Number.isFinite(deletedTimeRaw)) {
+                const fallbackDeletedTime = Date.now();
                 invalidDeletedAtWarnings += 1;
                 if (invalidDeletedAtWarnings <= 5) {
-                    logWarn('Invalid deletedAt timestamp during merge; falling back to updatedAt operation time', {
+                    logWarn('Invalid deletedAt timestamp during merge; using conservative current-time fallback', {
                         scope: 'sync',
                         category: 'sync',
-                        context: { id: item.id, deletedAt: item.deletedAt, updatedAt: item.updatedAt },
+                        context: { id: item.id, deletedAt: item.deletedAt, updatedAt: item.updatedAt, fallbackDeletedTime },
                     });
                 }
-                return updatedTime;
+                return Math.max(updatedTime, fallbackDeletedTime);
             }
 
             return Math.max(updatedTime, deletedTimeRaw);
@@ -629,7 +630,7 @@ function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; delet
                 // When revisions tie, prefer fresher timestamps before revBy tie-break.
                 winner = safeIncomingTime > safeLocalTime ? incomingItem : localItem;
             } else if (revByDiff && localRevBy && incomingRevBy) {
-                winner = incomingRevBy.localeCompare(localRevBy) > 0 ? incomingItem : localItem;
+                winner = incomingRevBy > localRevBy ? incomingItem : localItem;
             } else {
                 // Preserve deterministic convergence when metadata ties but content differs.
                 winner = chooseDeterministicWinner(localItem, incomingItem);
