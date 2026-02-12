@@ -404,6 +404,17 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
 
       const webdavConfigValue = webdavConfig as { url: string; username: string; password: string } | null;
       const cloudConfigValue = cloudConfig as { url: string; token: string } | null;
+      const applyAttachmentSyncMutation = async (
+        syncAttachments: (candidateData: AppData) => Promise<boolean>
+      ): Promise<void> => {
+        const candidateData = cloneAppData(mergedData);
+        const mutated = await syncAttachments(candidateData);
+        if (!mutated) return;
+        ensureLocalSnapshotFresh();
+        mergedData = candidateData;
+        await mobileStorage.saveData(mergedData);
+        wroteLocal = true;
+      };
 
       if (backend === 'webdav' && webdavConfigValue?.url) {
         step = 'attachments';
@@ -411,14 +422,9 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
         ensureLocalSnapshotFresh();
         await ensureNetworkStillAvailable();
         const baseSyncUrl = getBaseSyncUrl(webdavConfigValue.url);
-        const candidateData = cloneAppData(mergedData);
-        const mutated = await syncWebdavAttachments(candidateData, webdavConfigValue, baseSyncUrl);
-        if (mutated) {
-          ensureLocalSnapshotFresh();
-          mergedData = candidateData;
-          await mobileStorage.saveData(mergedData);
-          wroteLocal = true;
-        }
+        await applyAttachmentSyncMutation((candidateData) =>
+          syncWebdavAttachments(candidateData, webdavConfigValue, baseSyncUrl)
+        );
       }
 
       if (backend === 'cloud' && cloudConfigValue?.url) {
@@ -427,28 +433,18 @@ export async function performMobileSync(syncPathOverride?: string): Promise<{ su
         ensureLocalSnapshotFresh();
         await ensureNetworkStillAvailable();
         const baseSyncUrl = getCloudBaseUrl(cloudConfigValue.url);
-        const candidateData = cloneAppData(mergedData);
-        const mutated = await syncCloudAttachments(candidateData, cloudConfigValue, baseSyncUrl);
-        if (mutated) {
-          ensureLocalSnapshotFresh();
-          mergedData = candidateData;
-          await mobileStorage.saveData(mergedData);
-          wroteLocal = true;
-        }
+        await applyAttachmentSyncMutation((candidateData) =>
+          syncCloudAttachments(candidateData, cloudConfigValue, baseSyncUrl)
+        );
       }
 
       if (backend === 'file' && fileSyncPath) {
         step = 'attachments';
         logSyncInfo('Sync step', { step });
         ensureLocalSnapshotFresh();
-        const candidateData = cloneAppData(mergedData);
-        const mutated = await syncFileAttachments(candidateData, fileSyncPath);
-        if (mutated) {
-          ensureLocalSnapshotFresh();
-          mergedData = candidateData;
-          await mobileStorage.saveData(mergedData);
-          wroteLocal = true;
-        }
+        await applyAttachmentSyncMutation((candidateData) =>
+          syncFileAttachments(candidateData, fileSyncPath)
+        );
       }
 
       await cleanupAttachmentTempFiles();
