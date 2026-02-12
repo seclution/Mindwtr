@@ -612,6 +612,31 @@ describe('Sync Logic', () => {
             expect(wroteRemote).toBe(false);
         });
 
+        it('drops empty task revBy values from incoming payloads', async () => {
+            let saved: AppData | null = null;
+            const incoming = mockAppData([
+                {
+                    ...createMockTask('legacy-task', '2024-01-01T00:00:00.000Z'),
+                    rev: 2,
+                    revBy: '',
+                },
+            ]);
+
+            await performSyncCycle({
+                readLocal: async () => mockAppData(),
+                readRemote: async () => incoming,
+                writeLocal: async (data) => {
+                    saved = data;
+                },
+                writeRemote: async () => undefined,
+            });
+
+            expect(saved).not.toBeNull();
+            expect(saved!.tasks).toHaveLength(1);
+            expect(saved!.tasks[0].rev).toBe(2);
+            expect(saved!.tasks[0].revBy).toBeUndefined();
+        });
+
         it('purges expired task tombstones and deleted attachment tombstones by default', async () => {
             let saved: AppData | null = null;
             const oldPurgedTask = {
