@@ -69,3 +69,5 @@ export const getFileSyncBaseDir = (syncPath: string) => {
 };
 
 export const resolveBackend = (value: string | null): SyncBackend => normalizeSyncBackend(value);
+
+export type { SyncBackend };
