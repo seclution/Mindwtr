@@ -49,7 +49,7 @@ import {
     type TimeEstimate,
     useTaskStore,
 } from '@mindwtr/core';
-import { pickAndParseSyncFile, pickAndParseSyncFolder, exportData } from '../../lib/storage-file';
+import { pickAndParseSyncFolder, exportData } from '../../lib/storage-file';
 import { fetchExternalCalendarEvents, getExternalCalendars, saveExternalCalendars } from '../../lib/external-calendar';
 import { loadAIKey, saveAIKey } from '../../lib/ai-config';
 import { clearLog, ensureLogFilePath, logError, logInfo, logWarn } from '../../lib/app-log';
@@ -851,6 +851,9 @@ export default function SettingsPage() {
     const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=tech.dongdongbh.mindwtr';
     const PLAY_STORE_LOOKUP_URL = 'https://play.google.com/store/apps/details?id=tech.dongdongbh.mindwtr&hl=en_US&gl=US';
     const PLAY_STORE_MARKET_URL = 'market://details?id=tech.dongdongbh.mindwtr';
+    const APP_STORE_BUNDLE_ID = Constants.expoConfig?.ios?.bundleIdentifier || 'tech.dongdongbh.mindwtr';
+    const APP_STORE_LOOKUP_URL = `https://itunes.apple.com/lookup?bundleId=${encodeURIComponent(APP_STORE_BUNDLE_ID)}&country=US`;
+    const APP_STORE_LOOKUP_FALLBACK_URL = `https://itunes.apple.com/lookup?bundleId=${encodeURIComponent(APP_STORE_BUNDLE_ID)}`;
 
     const persistUpdateBadge = useCallback(async (next: boolean, latestVersion?: string) => {
         setHasUpdateBadge(next);
@@ -883,6 +886,38 @@ export default function SettingsPage() {
         const release = await fetchLatestRelease();
         return release.tag_name?.replace(/^v/, '') || '0.0.0';
     }, [fetchLatestRelease]);
+
+    const fetchLatestAppStoreInfo = useCallback(async (): Promise<{ version: string; trackViewUrl: string | null }> => {
+        const lookupUrls = [APP_STORE_LOOKUP_URL, APP_STORE_LOOKUP_FALLBACK_URL];
+        let lastError: Error | null = null;
+        for (const url of lookupUrls) {
+            const response = await fetch(url, {
+                headers: {
+                    'Accept': 'application/json',
+                    'User-Agent': 'Mindwtr-App'
+                }
+            });
+            if (!response.ok) {
+                lastError = new Error(`App Store lookup failed (${url}): ${response.status}`);
+                continue;
+            }
+            const payload = await response.json() as { results?: { version?: unknown; trackViewUrl?: unknown }[] };
+            const candidate = Array.isArray(payload.results) ? payload.results[0] : null;
+            const version = typeof candidate?.version === 'string' ? candidate.version.trim() : '';
+            if (!version) {
+                lastError = new Error(`Unable to parse App Store version from ${url}`);
+                continue;
+            }
+            const trackViewUrl = typeof candidate?.trackViewUrl === 'string' && candidate.trackViewUrl.trim()
+                ? candidate.trackViewUrl.trim()
+                : null;
+            return { version, trackViewUrl };
+        }
+        if (lastError) {
+            throw lastError;
+        }
+        throw new Error('Unable to fetch App Store version');
+    }, [APP_STORE_LOOKUP_FALLBACK_URL, APP_STORE_LOOKUP_URL]);
 
     const parsePlayStoreVersion = useCallback((html: string): string | null => {
         const patterns = [
@@ -933,8 +968,16 @@ export default function SettingsPage() {
         throw new Error('Unable to fetch Play Store version');
     }, [PLAY_STORE_LOOKUP_URL, PLAY_STORE_URL, parsePlayStoreVersion]);
 
-    const fetchLatestComparableVersion = useCallback(async (): Promise<{ version: string; source: 'play-store' | 'github-release' }> => {
-        if (Platform.OS !== 'android' || isFossBuild) {
+    const fetchLatestComparableVersion = useCallback(async (): Promise<{ version: string; source: 'play-store' | 'app-store' | 'github-release' }> => {
+        if (isFossBuild) {
+            const githubVersion = await fetchLatestGithubVersion();
+            return { version: githubVersion, source: 'github-release' };
+        }
+        if (Platform.OS === 'ios') {
+            const appStoreInfo = await fetchLatestAppStoreInfo();
+            return { version: appStoreInfo.version, source: 'app-store' };
+        }
+        if (Platform.OS !== 'android') {
             const githubVersion = await fetchLatestGithubVersion();
             return { version: githubVersion, source: 'github-release' };
         }
@@ -946,7 +989,7 @@ export default function SettingsPage() {
             const githubVersion = await fetchLatestGithubVersion();
             return { version: githubVersion, source: 'github-release' };
         }
-    }, [fetchLatestGithubVersion, fetchLatestPlayStoreVersion, isFossBuild]);
+    }, [fetchLatestAppStoreInfo, fetchLatestGithubVersion, fetchLatestPlayStoreVersion, isFossBuild]);
 
     useEffect(() => {
         let cancelled = false;
@@ -1031,6 +1074,38 @@ export default function SettingsPage() {
                     Alert.alert(
                         localize('Up to Date', '已是最新'),
                         upToDateMessage
+                    );
+                    await persistUpdateBadge(false);
+                }
+                return;
+            }
+
+            if (Platform.OS === 'ios' && !isFossBuild) {
+                const { version: latestVersion, trackViewUrl } = await fetchLatestAppStoreInfo();
+                const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
+                const trackIdMatch = trackViewUrl?.match(/\/id(\d+)/i);
+                const appStoreDeepLink = trackIdMatch?.[1] ? `itms-apps://apps.apple.com/app/id${trackIdMatch[1]}` : null;
+                const canOpenDeepLink = appStoreDeepLink ? await Linking.canOpenURL(appStoreDeepLink) : false;
+                const targetUrl = canOpenDeepLink ? appStoreDeepLink : trackViewUrl;
+                if (hasUpdate) {
+                    Alert.alert(
+                        localize('Update Available', '有可用更新'),
+                        localize(
+                            `v${currentVersion} → v${latestVersion}\n\nUpdate is available on the App Store. Open app listing now?`,
+                            `v${currentVersion} → v${latestVersion}\n\nApp Store 已提供更新，是否立即打开应用页面？`
+                        ),
+                        [
+                            { text: localize('Later', '稍后'), style: 'cancel' },
+                            ...(targetUrl
+                                ? [{ text: localize('Open', '打开'), onPress: () => Linking.openURL(targetUrl) }]
+                                : [])
+                        ]
+                    );
+                    await persistUpdateBadge(true, latestVersion);
+                } else {
+                    Alert.alert(
+                        localize('Up to Date', '已是最新'),
+                        localize('You are using the latest App Store version!', '您正在使用 App Store 最新版本！')
                     );
                     await persistUpdateBadge(false);
                 }

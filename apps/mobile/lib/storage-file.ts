@@ -1,6 +1,7 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Directory as ExpoDirectory, File as ExpoFile } from 'expo-file-system';
 import { AppData } from '@mindwtr/core';
 import { Platform } from 'react-native';
 import { logError, logInfo, logWarn } from './app-log';
@@ -22,9 +23,19 @@ const isReadOnlyError = (error: unknown): boolean => {
     return /isn't writable|not writable|read-only|read only|permission denied|EACCES/i.test(message);
 };
 
+const isPickerCanceledError = (error: unknown): boolean => {
+    const message = String(error);
+    return /cancel/i.test(message);
+};
+
 function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+const normalizeDirectoryUri = (uri: string): string => uri.replace(/\/+$/, '');
+
+const buildSyncFileUri = (directoryUri: string, fileName = SYNC_FILE_NAME): string =>
+    `${normalizeDirectoryUri(directoryUri)}/${fileName}`;
 
 const decodeUriSafe = (value: string): string => {
     try {
@@ -152,6 +163,14 @@ function parseAppData(text: string): AppData {
     }
 }
 
+const writeWithModernFileApi = (fileUri: string, content: string): void => {
+    const file = new ExpoFile(fileUri);
+    if (!file.exists) {
+        file.create({ intermediates: true, overwrite: false });
+    }
+    file.write(content);
+};
+
 async function readFileText(fileUri: string): Promise<string | null> {
     if (fileUri.startsWith('content://')) {
         if (!StorageAccessFramework?.readAsStringAsync) {
@@ -159,6 +178,19 @@ async function readFileText(fileUri: string): Promise<string | null> {
         }
         // Do not fall back to FileSystem.* for content:// URIs — it will throw Invalid URI.
         return await StorageAccessFramework.readAsStringAsync(fileUri);
+    }
+
+    if (Platform.OS === 'ios' && fileUri.startsWith('file://')) {
+        try {
+            const file = new ExpoFile(fileUri);
+            if (!file.exists) {
+                void logInfo('Sync file does not exist', { scope: 'sync', extra: { fileUri } });
+                return null;
+            }
+            return await file.text();
+        } catch {
+            // Fall back to legacy API for compatibility with older paths.
+        }
     }
 
     const fileInfo = await FileSystem.getInfoAsync(fileUri);
@@ -278,7 +310,78 @@ const assertDirectoryWritable = async (
     }
 };
 
+const assertIosDirectoryWritable = async (
+    directoryUri: string,
+): Promise<void> => {
+    const testFileUri = buildSyncFileUri(directoryUri, `mindwtr-write-test-${Date.now()}.txt`);
+    try {
+        writeWithModernFileApi(testFileUri, 'ok');
+    } catch (error) {
+        if (isReadOnlyError(error)) {
+            throw new Error(READONLY_FOLDER_MESSAGE);
+        }
+        throw error;
+    } finally {
+        try {
+            const file = new ExpoFile(testFileUri);
+            if (file.exists) {
+                file.delete();
+            }
+        } catch {
+            // Ignore cleanup failures for test file.
+        }
+    }
+};
+
+const pickAndParseIosSyncFolder = async (): Promise<PickResult | null> => {
+    try {
+        const directory = await ExpoDirectory.pickDirectoryAsync();
+        const directoryUri = directory?.uri;
+        if (!directoryUri) return null;
+
+        await assertIosDirectoryWritable(directoryUri);
+
+        const primaryFileUri = buildSyncFileUri(directoryUri, SYNC_FILE_NAME);
+        const legacyFileUri = buildSyncFileUri(directoryUri, LEGACY_SYNC_FILE_NAME);
+        let fileUri = primaryFileUri;
+        let fileContent = await readFileText(primaryFileUri);
+        if (fileContent === null) {
+            const legacyContent = await readFileText(legacyFileUri);
+            if (legacyContent !== null) {
+                fileUri = legacyFileUri;
+                fileContent = legacyContent;
+            }
+        }
+
+        if (!fileContent) {
+            return {
+                tasks: [],
+                projects: [],
+                sections: [],
+                areas: [],
+                settings: {},
+                __fileUri: primaryFileUri,
+            };
+        }
+        const data = parseAppData(fileContent);
+        return { ...data, __fileUri: fileUri };
+    } catch (error) {
+        if (isPickerCanceledError(error)) {
+            return null;
+        }
+        throw error;
+    }
+};
+
 export const pickAndParseSyncFolder = async (): Promise<PickResult | null> => {
+    if (Platform.OS === 'ios' && typeof ExpoDirectory.pickDirectoryAsync === 'function') {
+        try {
+            return await pickAndParseIosSyncFolder();
+        } catch (error) {
+            void logError(error, { scope: 'sync', extra: { operation: 'import', message: 'Failed to import data from iOS folder' } });
+            throw error;
+        }
+    }
     if (Platform.OS !== 'android' || !StorageAccessFramework?.requestDirectoryPermissionsAsync) {
         return pickAndParseSyncFile();
     }
@@ -363,6 +466,18 @@ export const writeSyncFile = async (fileUri: string, data: AppData): Promise<voi
             await StorageAccessFramework.writeAsStringAsync(resolvedUri, content);
             void logInfo('Written sync file via SAF', { scope: 'sync', extra: { fileUri: resolvedUri } });
         } else {
+            if (Platform.OS === 'ios' && resolvedUri.startsWith('file://')) {
+                try {
+                    writeWithModernFileApi(resolvedUri, content);
+                    void logInfo('Written sync file via modern iOS File API', { scope: 'sync', extra: { fileUri: resolvedUri } });
+                    return;
+                } catch (error) {
+                    void logWarn('Modern iOS sync write failed; falling back to legacy path', {
+                        scope: 'sync',
+                        extra: { error: error instanceof Error ? error.message : String(error) },
+                    });
+                }
+            }
             const tempUri = `${resolvedUri}.tmp`;
             await FileSystem.writeAsStringAsync(tempUri, content);
             const existing = await FileSystem.getInfoAsync(resolvedUri);
