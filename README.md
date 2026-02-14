@@ -99,7 +99,7 @@ Mindwtr is built to be **simple by default and powerful when you need it**. We f
 - 📎 **Attachments** - Files and links on tasks
 - ✏️ **Markdown Notes** - Rich text descriptions with preview
 - 🗂️ **Project States** - Active, Waiting, Someday, Archived
-- ♾️ **Fluid Recurrence** - Strict dates or “X days after completion”
+- ♾️ **Fluid Recurrence** - Next date is calculated after completion
 - ♻️ **Reusable Lists** - Duplicate tasks or reset checklists
 - ✅ **Checklist Mode** - Fast list-style checking for checklist tasks
 - ✅ **Audio Capture** - Quick voice capture with automatic transcription and task creation

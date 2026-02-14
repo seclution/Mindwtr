@@ -129,7 +129,14 @@ You can also reorder the fields there.
 
 ### How do recurring tasks work?
 
-When you complete a recurring task, Mindwtr automatically creates the next instance with updated dates. If a due date is set, the next occurrence is calculated from that due date; otherwise it uses the completion time. Set recurrence in the task editor (daily, weekly, monthly, yearly).
+Mindwtr supports two recurrence strategies:
+
+- **Strict** (fixed schedule): next date is based on the schedule pattern itself.
+  Example: every 5 days stays on that cadence even if you complete late.
+- **Repeat after completion** (fluid): next date is calculated from when you actually complete the task.
+  Example: complete today, then next is due in 5 days from today.
+
+Set recurrence in the task editor (daily/weekly/monthly/yearly), then enable **Repeat after completion** if you want fluid behavior.
 
 ### How do I collect logs for a bug report?
 

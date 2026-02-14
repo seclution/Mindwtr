@@ -228,6 +228,12 @@ The editor starts minimal. Tap **More options** to reveal advanced fields; any f
 Description markdown supports unordered lists and task checkboxes (`- item`, `[ ] item`, `[x] item`).
 Markdown checkbox lines can populate checklist items when you save.
 
+Recurring tasks support two strategies:
+- **Strict** (fixed cadence)
+- **Repeat after completion** (next date from completion time)
+
+Use the recurrence field in the task editor, then toggle **Repeat after completion** when needed.
+
 ### Attachments
 
 You can attach files or links to a task from the editor. Audio notes can be saved as attachments when **Save audio attachments** is enabled.
