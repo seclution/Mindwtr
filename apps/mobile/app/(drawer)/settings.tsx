@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Constants from 'expo-constants';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import {
     View,
     Text,
@@ -11,13 +13,11 @@ import {
     Linking,
     Alert,
     ActivityIndicator,
-    BackHandler,
     Platform,
     KeyboardAvoidingView,
     Modal,
     Pressable,
 } from 'react-native';
-import { HeaderBackButton, type HeaderBackButtonProps } from '@react-navigation/elements';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -25,7 +25,6 @@ import { Directory, File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
-import { useNavigation, useRouter } from 'expo-router';
 import { useTheme } from '../../contexts/theme-context';
 import { useLanguage, Language } from '../../contexts/language-context';
 
@@ -49,7 +48,7 @@ import {
     type TimeEstimate,
     useTaskStore,
 } from '@mindwtr/core';
-import { pickAndParseSyncFile, pickAndParseSyncFolder, exportData } from '../../lib/storage-file';
+import { pickAndParseSyncFolder, exportData } from '../../lib/storage-file';
 import { fetchExternalCalendarEvents, getExternalCalendars, saveExternalCalendars } from '../../lib/external-calendar';
 import { loadAIKey, saveAIKey } from '../../lib/ai-config';
 import { clearLog, ensureLogFilePath, logError, logInfo, logWarn } from '../../lib/app-log';
@@ -78,6 +77,21 @@ type SettingsScreen =
     | 'gtd-task-editor'
     | 'sync'
     | 'about';
+
+const SETTINGS_SCREEN_SET: Record<SettingsScreen, true> = {
+    main: true,
+    general: true,
+    notifications: true,
+    ai: true,
+    calendar: true,
+    advanced: true,
+    gtd: true,
+    'gtd-archive': true,
+    'gtd-time-estimates': true,
+    'gtd-task-editor': true,
+    sync: true,
+    about: true,
+};
 
 const LANGUAGES: { id: Language; native: string }[] = [
     { id: 'en', native: 'English' },
@@ -183,15 +197,26 @@ const isValidHttpUrl = (value: string): boolean => {
 };
 
 export default function SettingsPage() {
-    const navigation = useNavigation();
     const router = useRouter();
+    const { settingsScreen } = useLocalSearchParams<{ settingsScreen?: string | string[] }>();
     const { themeMode, setThemeMode } = useTheme();
     const { language, setLanguage, t } = useLanguage();
     const localize = (enText: string, zhText?: string) =>
         language === 'zh' && zhText ? zhText : translateText(enText, language);
     const { tasks, projects, sections, areas, settings, updateSettings } = useTaskStore();
     const [isSyncing, setIsSyncing] = useState(false);
-    const [currentScreen, setCurrentScreen] = useState<SettingsScreen>('main');
+    const currentScreen = useMemo<SettingsScreen>(() => {
+        const rawScreen = Array.isArray(settingsScreen) ? settingsScreen[0] : settingsScreen;
+        if (!rawScreen) return 'main';
+        return SETTINGS_SCREEN_SET[rawScreen as SettingsScreen] ? (rawScreen as SettingsScreen) : 'main';
+    }, [settingsScreen]);
+    const pushSettingsScreen = useCallback((nextScreen: SettingsScreen) => {
+        if (nextScreen === 'main') {
+            router.push('/settings');
+            return;
+        }
+        router.push({ pathname: '/settings', params: { settingsScreen: nextScreen } });
+    }, [router]);
     const [syncPath, setSyncPath] = useState<string | null>(null);
     const [syncBackend, setSyncBackend] = useState<'file' | 'webdav' | 'cloud' | 'off'>('off');
     const [webdavUrl, setWebdavUrl] = useState('');
@@ -224,6 +249,8 @@ export default function SettingsPage() {
     const tc = useThemeColors();
     const insets = useSafeAreaInsets();
     const isExpoGo = Constants.appOwnership === 'expo';
+    const extraConfig = Constants.expoConfig?.extra as { isFossBuild?: boolean | string } | undefined;
+    const isFossBuild = extraConfig?.isFossBuild === true || extraConfig?.isFossBuild === 'true';
     const currentVersion = Constants.expoConfig?.version || '0.0.0';
     const notificationsEnabled = settings.notificationsEnabled !== false;
     const dailyDigestMorningEnabled = settings.dailyDigestMorningEnabled === true;
@@ -501,47 +528,6 @@ export default function SettingsPage() {
         }
         loadAIKey(speechProvider).then(setSpeechApiKey).catch(logSettingsError);
     }, [speechProvider]);
-
-    const handleSettingsBack = useCallback(() => {
-        if (currentScreen !== 'main') {
-            if (currentScreen === 'gtd-time-estimates' || currentScreen === 'gtd-task-editor' || currentScreen === 'gtd-archive') {
-                setCurrentScreen('gtd');
-            } else if (currentScreen === 'ai' || currentScreen === 'calendar') {
-                setCurrentScreen('advanced');
-            } else {
-                setCurrentScreen('main');
-            }
-            return true;
-        }
-        return false;
-    }, [currentScreen]);
-
-    const handleHeaderBack = useCallback(() => {
-        if (handleSettingsBack()) return;
-        if (router.canGoBack()) {
-            router.back();
-        }
-    }, [handleSettingsBack, router]);
-
-    useLayoutEffect(() => {
-        navigation.setOptions({
-            headerLeft: (props: HeaderBackButtonProps) => (
-                <HeaderBackButton
-                    {...props}
-                    onPress={handleHeaderBack}
-                />
-            ),
-            headerBackTitleVisible: false,
-            headerBackTitle: '',
-        });
-    }, [navigation, handleHeaderBack]);
-
-    // Handle Android hardware back button
-    useEffect(() => {
-        const onBackPress = () => handleSettingsBack();
-        const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
-        return () => subscription.remove();
-    }, [handleSettingsBack]);
 
     const themeOptions: { value: typeof themeMode; label: string }[] = [
         { value: 'system', label: t('settings.system') },
@@ -849,6 +835,9 @@ export default function SettingsPage() {
     const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=tech.dongdongbh.mindwtr';
     const PLAY_STORE_LOOKUP_URL = 'https://play.google.com/store/apps/details?id=tech.dongdongbh.mindwtr&hl=en_US&gl=US';
     const PLAY_STORE_MARKET_URL = 'market://details?id=tech.dongdongbh.mindwtr';
+    const APP_STORE_BUNDLE_ID = Constants.expoConfig?.ios?.bundleIdentifier || 'tech.dongdongbh.mindwtr';
+    const APP_STORE_LOOKUP_URL = `https://itunes.apple.com/lookup?bundleId=${encodeURIComponent(APP_STORE_BUNDLE_ID)}&country=US`;
+    const APP_STORE_LOOKUP_FALLBACK_URL = `https://itunes.apple.com/lookup?bundleId=${encodeURIComponent(APP_STORE_BUNDLE_ID)}`;
 
     const persistUpdateBadge = useCallback(async (next: boolean, latestVersion?: string) => {
         setHasUpdateBadge(next);
@@ -877,12 +866,52 @@ export default function SettingsPage() {
         return response.json();
     }, [GITHUB_RELEASES_API]);
 
+    const fetchLatestGithubVersion = useCallback(async () => {
+        const release = await fetchLatestRelease();
+        return release.tag_name?.replace(/^v/, '') || '0.0.0';
+    }, [fetchLatestRelease]);
+
+    const fetchLatestAppStoreInfo = useCallback(async (): Promise<{ version: string; trackViewUrl: string | null }> => {
+        const lookupUrls = [APP_STORE_LOOKUP_URL, APP_STORE_LOOKUP_FALLBACK_URL];
+        let lastError: Error | null = null;
+        for (const url of lookupUrls) {
+            const response = await fetch(url, {
+                headers: {
+                    'Accept': 'application/json',
+                    'User-Agent': 'Mindwtr-App'
+                }
+            });
+            if (!response.ok) {
+                lastError = new Error(`App Store lookup failed (${url}): ${response.status}`);
+                continue;
+            }
+            const payload = await response.json() as { results?: { version?: unknown; trackViewUrl?: unknown }[] };
+            const candidate = Array.isArray(payload.results) ? payload.results[0] : null;
+            const version = typeof candidate?.version === 'string' ? candidate.version.trim() : '';
+            if (!version) {
+                lastError = new Error(`Unable to parse App Store version from ${url}`);
+                continue;
+            }
+            const trackViewUrl = typeof candidate?.trackViewUrl === 'string' && candidate.trackViewUrl.trim()
+                ? candidate.trackViewUrl.trim()
+                : null;
+            return { version, trackViewUrl };
+        }
+        if (lastError) {
+            throw lastError;
+        }
+        throw new Error('Unable to fetch App Store version');
+    }, [APP_STORE_LOOKUP_FALLBACK_URL, APP_STORE_LOOKUP_URL]);
+
     const parsePlayStoreVersion = useCallback((html: string): string | null => {
         const patterns = [
             /"softwareVersion"\s*:\s*"([^"]+)"/i,
             /\\"softwareVersion\\"\s*:\s*\\"([^"]+)\\"/i,
             /itemprop="softwareVersion"[^>]*>\s*([^<]+)\s*</i,
             /"versionName"\s*:\s*"([^"]+)"/i,
+            // New Play Store payload format (AF_initDataCallback ds:5)
+            /"141"\s*:\s*\[\[\["([^"]+)"/i,
+            /\\"141\\"\s*:\s*\[\[\[\\"([^"]+)/i,
         ];
         for (const pattern of patterns) {
             const match = html.match(pattern);
@@ -923,6 +952,29 @@ export default function SettingsPage() {
         throw new Error('Unable to fetch Play Store version');
     }, [PLAY_STORE_LOOKUP_URL, PLAY_STORE_URL, parsePlayStoreVersion]);
 
+    const fetchLatestComparableVersion = useCallback(async (): Promise<{ version: string; source: 'play-store' | 'app-store' | 'github-release' }> => {
+        if (isFossBuild) {
+            const githubVersion = await fetchLatestGithubVersion();
+            return { version: githubVersion, source: 'github-release' };
+        }
+        if (Platform.OS === 'ios') {
+            const appStoreInfo = await fetchLatestAppStoreInfo();
+            return { version: appStoreInfo.version, source: 'app-store' };
+        }
+        if (Platform.OS !== 'android') {
+            const githubVersion = await fetchLatestGithubVersion();
+            return { version: githubVersion, source: 'github-release' };
+        }
+        try {
+            const playStoreVersion = await fetchLatestPlayStoreVersion();
+            return { version: playStoreVersion, source: 'play-store' };
+        } catch (error) {
+            logSettingsWarn('Play Store update check failed; falling back to GitHub release', error);
+            const githubVersion = await fetchLatestGithubVersion();
+            return { version: githubVersion, source: 'github-release' };
+        }
+    }, [fetchLatestAppStoreInfo, fetchLatestGithubVersion, fetchLatestPlayStoreVersion, isFossBuild]);
+
     useEffect(() => {
         let cancelled = false;
         AsyncStorage.multiGet([UPDATE_BADGE_AVAILABLE_KEY, UPDATE_BADGE_LATEST_KEY])
@@ -953,9 +1005,7 @@ export default function SettingsPage() {
                 const lastCheck = Number(lastCheckRaw || 0);
                 if (Date.now() - lastCheck < UPDATE_BADGE_INTERVAL_MS) return;
                 await AsyncStorage.setItem(UPDATE_BADGE_LAST_CHECK_KEY, String(Date.now()));
-                const latestVersion = Platform.OS === 'android'
-                    ? await fetchLatestPlayStoreVersion()
-                    : (await fetchLatestRelease()).tag_name?.replace(/^v/, '') || '0.0.0';
+                const { version: latestVersion } = await fetchLatestComparableVersion();
                 const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
                 if (cancelled) return;
                 await persistUpdateBadge(hasUpdate, hasUpdate ? latestVersion : undefined);
@@ -967,25 +1017,31 @@ export default function SettingsPage() {
         return () => {
             cancelled = true;
         };
-    }, [currentVersion, fetchLatestPlayStoreVersion, fetchLatestRelease, isExpoGo, persistUpdateBadge]);
+    }, [currentVersion, fetchLatestComparableVersion, isExpoGo, persistUpdateBadge]);
 
     const handleCheckUpdates = async () => {
         setIsCheckingUpdate(true);
         try {
             await AsyncStorage.setItem(UPDATE_BADGE_LAST_CHECK_KEY, String(Date.now()));
 
-            if (Platform.OS === 'android') {
+            if (Platform.OS === 'android' && !isFossBuild) {
                 const canOpenMarket = await Linking.canOpenURL(PLAY_STORE_MARKET_URL);
                 const targetUrl = canOpenMarket ? PLAY_STORE_MARKET_URL : PLAY_STORE_URL;
-                const latestVersion = await fetchLatestPlayStoreVersion();
+                const { version: latestVersion, source } = await fetchLatestComparableVersion();
                 const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
                 if (hasUpdate) {
-                    Alert.alert(
-                        localize('Update Available', '有可用更新'),
-                        localize(
+                    const updateMessage = source === 'play-store'
+                        ? localize(
                             `v${currentVersion} → v${latestVersion}\n\nUpdate is available on Google Play. Open app listing now?`,
                             `v${currentVersion} → v${latestVersion}\n\nGoogle Play 已提供更新，是否立即打开应用页面？`
-                        ),
+                        )
+                        : localize(
+                            `v${currentVersion} → v${latestVersion}\n\nPlay Store version lookup is temporarily unavailable. A newer GitHub release is available, and Play rollout may lag. Open app listing now?`,
+                            `v${currentVersion} → v${latestVersion}\n\n暂时无法直接获取 Google Play 版本，GitHub 已有更新，Play 商店可能会延迟推送。是否立即打开应用页面？`
+                        );
+                    Alert.alert(
+                        localize('Update Available', '有可用更新'),
+                        updateMessage,
                         [
                             { text: localize('Later', '稍后'), style: 'cancel' },
                             { text: localize('Open', '打开'), onPress: () => Linking.openURL(targetUrl) }
@@ -993,9 +1049,47 @@ export default function SettingsPage() {
                     );
                     await persistUpdateBadge(true, latestVersion);
                 } else {
+                    const upToDateMessage = source === 'play-store'
+                        ? localize('You are using the latest Google Play version!', '您正在使用 Google Play 最新版本！')
+                        : localize(
+                            'Play Store version lookup is temporarily unavailable. Your version matches the latest GitHub release.',
+                            '暂时无法直接获取 Google Play 版本，但当前版本与 GitHub 最新发布一致。'
+                        );
                     Alert.alert(
                         localize('Up to Date', '已是最新'),
-                        localize('You are using the latest Google Play version!', '您正在使用 Google Play 最新版本！')
+                        upToDateMessage
+                    );
+                    await persistUpdateBadge(false);
+                }
+                return;
+            }
+
+            if (Platform.OS === 'ios' && !isFossBuild) {
+                const { version: latestVersion, trackViewUrl } = await fetchLatestAppStoreInfo();
+                const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
+                const trackIdMatch = trackViewUrl?.match(/\/id(\d+)/i);
+                const appStoreDeepLink = trackIdMatch?.[1] ? `itms-apps://apps.apple.com/app/id${trackIdMatch[1]}` : null;
+                const canOpenDeepLink = appStoreDeepLink ? await Linking.canOpenURL(appStoreDeepLink) : false;
+                const targetUrl = canOpenDeepLink ? appStoreDeepLink : trackViewUrl;
+                if (hasUpdate) {
+                    Alert.alert(
+                        localize('Update Available', '有可用更新'),
+                        localize(
+                            `v${currentVersion} → v${latestVersion}\n\nUpdate is available on the App Store. Open app listing now?`,
+                            `v${currentVersion} → v${latestVersion}\n\nApp Store 已提供更新，是否立即打开应用页面？`
+                        ),
+                        [
+                            { text: localize('Later', '稍后'), style: 'cancel' },
+                            ...(targetUrl
+                                ? [{ text: localize('Open', '打开'), onPress: () => Linking.openURL(targetUrl) }]
+                                : [])
+                        ]
+                    );
+                    await persistUpdateBadge(true, latestVersion);
+                } else {
+                    Alert.alert(
+                        localize('Up to Date', '已是最新'),
+                        localize('You are using the latest App Store version!', '您正在使用 App Store 最新版本！')
                     );
                     await persistUpdateBadge(false);
                 }
@@ -1297,10 +1391,45 @@ export default function SettingsPage() {
         </TouchableOpacity>
     );
 
+    const SettingsTopBar = () => {
+        const canGoBack = router.canGoBack();
+        return (
+            <View
+                style={[
+                    styles.topBar,
+                    {
+                        backgroundColor: tc.cardBg,
+                        borderBottomColor: tc.border,
+                        height: 52 + insets.top,
+                        paddingTop: insets.top,
+                    },
+                ]}
+            >
+                <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Back"
+                    disabled={!canGoBack}
+                    hitSlop={8}
+                    onPress={() => {
+                        if (canGoBack) router.back();
+                    }}
+                    style={[styles.topBarBackButton, !canGoBack && styles.topBarBackButtonHidden]}
+                >
+                    <Ionicons color={tc.text} name="chevron-back" size={24} />
+                </Pressable>
+                <Text style={[styles.topBarTitle, { color: tc.text }]} numberOfLines={1}>
+                    {t('settings.title')}
+                </Text>
+                <View style={styles.topBarBackButton} />
+            </View>
+        );
+    };
+
     // ============ NOTIFICATIONS SCREEN ============
     if (currentScreen === 'notifications') {
         return (
             <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
                 <SubHeader title={t('settings.notifications')} />
                 <ScrollView style={styles.scrollView} contentContainerStyle={scrollContentStyle}>
                     <View style={[styles.settingCard, { backgroundColor: tc.cardBg }]}>
@@ -1641,6 +1770,7 @@ export default function SettingsPage() {
     if (currentScreen === 'general') {
         return (
             <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
                 <SubHeader title={t('settings.general')} />
                 <ScrollView style={styles.scrollView} contentContainerStyle={scrollContentStyle}>
                     <Text style={[styles.sectionTitle, { color: tc.secondaryText }]}>{t('settings.appearance')}</Text>
@@ -1806,6 +1936,7 @@ export default function SettingsPage() {
     if (currentScreen === 'ai') {
         return (
             <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
                 <SubHeader title={t('settings.ai')} />
                 <KeyboardAvoidingView
                     behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -2484,6 +2615,7 @@ export default function SettingsPage() {
             : featurePomodoroDescRaw;
         return (
             <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
                 <SubHeader title={t('settings.gtd')} />
                 <ScrollView style={styles.scrollView} contentContainerStyle={scrollContentStyle}>
                     <Text style={[styles.description, { color: tc.secondaryText }]}>{t('settings.gtdDesc')}</Text>
@@ -2540,16 +2672,16 @@ export default function SettingsPage() {
                         {timeEstimatesEnabled && (
                             <MenuItem
                                 title={t('settings.timeEstimatePresets')}
-                                onPress={() => setCurrentScreen('gtd-time-estimates')}
+                                onPress={() => pushSettingsScreen('gtd-time-estimates')}
                             />
                         )}
                         <MenuItem
                             title={t('settings.autoArchive')}
-                            onPress={() => setCurrentScreen('gtd-archive')}
+                            onPress={() => pushSettingsScreen('gtd-archive')}
                         />
                         <MenuItem
                             title={t('settings.taskEditorLayout')}
-                            onPress={() => setCurrentScreen('gtd-task-editor')}
+                            onPress={() => pushSettingsScreen('gtd-task-editor')}
                         />
                     </View>
                     <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginTop: 12 }]}>
@@ -2689,6 +2821,7 @@ export default function SettingsPage() {
 
         return (
             <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
                 <SubHeader title={t('settings.autoArchive')} />
                 <ScrollView style={styles.scrollView} contentContainerStyle={scrollContentStyle}>
                     <Text style={[styles.description, { color: tc.secondaryText }]}>{t('settings.autoArchiveDesc')}</Text>
@@ -2717,6 +2850,7 @@ export default function SettingsPage() {
         if (!timeEstimatesEnabled) {
             return (
                 <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
                     <SubHeader title={t('settings.timeEstimatePresets')} />
                     <ScrollView style={styles.scrollView} contentContainerStyle={scrollContentStyle}>
                         <Text style={[styles.description, { color: tc.secondaryText }]}>
@@ -2763,6 +2897,7 @@ export default function SettingsPage() {
 
         return (
             <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
                 <SubHeader title={t('settings.timeEstimatePresets')} />
                 <ScrollView style={styles.scrollView} contentContainerStyle={scrollContentStyle}>
                     <Text style={[styles.description, { color: tc.secondaryText }]}>{t('settings.timeEstimatePresetsDesc')}</Text>
@@ -3017,6 +3152,7 @@ export default function SettingsPage() {
 
         return (
             <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
                 <SubHeader title={t('settings.taskEditorLayout')} />
                 <ScrollView style={styles.scrollView} contentContainerStyle={scrollContentStyle}>
                     <Text style={[styles.description, { color: tc.secondaryText }]}>{t('settings.taskEditorLayoutDesc')}</Text>
@@ -3108,6 +3244,7 @@ export default function SettingsPage() {
 
         return (
             <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
                 <SubHeader title={t('settings.calendar')} />
                 <ScrollView style={styles.scrollView} contentContainerStyle={scrollContentStyle}>
                     <Text style={[styles.description, { color: tc.secondaryText }]}>
@@ -3207,11 +3344,12 @@ export default function SettingsPage() {
     if (currentScreen === 'advanced') {
         return (
             <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
                 <SubHeader title={t('settings.advanced')} />
                 <ScrollView style={styles.scrollView} contentContainerStyle={scrollContentStyle}>
                     <View style={[styles.menuCard, { backgroundColor: tc.cardBg }]}>
-                        <MenuItem title={t('settings.ai')} onPress={() => setCurrentScreen('ai')} />
-                        <MenuItem title={t('settings.calendar')} onPress={() => setCurrentScreen('calendar')} />
+                        <MenuItem title={t('settings.ai')} onPress={() => pushSettingsScreen('ai')} />
+                        <MenuItem title={t('settings.calendar')} onPress={() => pushSettingsScreen('calendar')} />
                     </View>
                 </ScrollView>
             </SafeAreaView>
@@ -3222,6 +3360,7 @@ export default function SettingsPage() {
     if (currentScreen === 'sync') {
         return (
             <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
                 <SubHeader title={t('settings.dataSync')} />
                 <ScrollView style={styles.scrollView} contentContainerStyle={scrollContentStyle}>
                     <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginBottom: 12 }]}>
@@ -3827,6 +3966,7 @@ export default function SettingsPage() {
     if (currentScreen === 'about') {
         return (
             <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
                 <SubHeader title={t('settings.about')} />
                 <ScrollView style={styles.scrollView} contentContainerStyle={scrollContentStyle}>
                     <View style={[styles.settingCard, { backgroundColor: tc.cardBg }]}>
@@ -3897,14 +4037,15 @@ export default function SettingsPage() {
     // ============ MAIN SETTINGS SCREEN ============
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
+                <SettingsTopBar />
             <ScrollView style={styles.scrollView} contentContainerStyle={scrollContentStyle}>
                 <View style={[styles.menuCard, { backgroundColor: tc.cardBg, marginTop: 16 }]}>
-                    <MenuItem title={t('settings.general')} onPress={() => setCurrentScreen('general')} />
-                    <MenuItem title={t('settings.gtd')} onPress={() => setCurrentScreen('gtd')} />
-                    <MenuItem title={t('settings.notifications')} onPress={() => setCurrentScreen('notifications')} />
-                    <MenuItem title={t('settings.dataSync')} onPress={() => setCurrentScreen('sync')} />
-                    <MenuItem title={t('settings.advanced')} onPress={() => setCurrentScreen('advanced')} />
-                    <MenuItem title={t('settings.about')} onPress={() => setCurrentScreen('about')} showIndicator={hasUpdateBadge} />
+                    <MenuItem title={t('settings.general')} onPress={() => pushSettingsScreen('general')} />
+                    <MenuItem title={t('settings.gtd')} onPress={() => pushSettingsScreen('gtd')} />
+                    <MenuItem title={t('settings.notifications')} onPress={() => pushSettingsScreen('notifications')} />
+                    <MenuItem title={t('settings.dataSync')} onPress={() => pushSettingsScreen('sync')} />
+                    <MenuItem title={t('settings.advanced')} onPress={() => pushSettingsScreen('advanced')} />
+                    <MenuItem title={t('settings.about')} onPress={() => pushSettingsScreen('about')} showIndicator={hasUpdateBadge} />
                 </View>
             </ScrollView>
         </SafeAreaView>
@@ -3915,6 +4056,27 @@ const styles = StyleSheet.create({
     container: { flex: 1 },
     scrollView: { flex: 1 },
     scrollContent: { padding: 16 },
+    topBar: {
+        height: 52,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 8,
+    },
+    topBarBackButton: {
+        width: 40,
+        height: 40,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    topBarBackButtonHidden: {
+        opacity: 0,
+    },
+    topBarTitle: {
+        fontSize: 17,
+        fontWeight: '700',
+    },
     subHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12 },
     backButton: { fontSize: 16, fontWeight: '500' },
     subHeaderTitle: { fontSize: 18, fontWeight: '600' },

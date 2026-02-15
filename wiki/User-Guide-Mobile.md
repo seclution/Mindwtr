@@ -1,6 +1,6 @@
 # User Guide: Mobile
 
-The Mindwtr mobile app is built with React Native and Expo. Android is fully supported; iOS is currently available via simulator builds.
+The Mindwtr mobile app is built with React Native and Expo. Android is fully supported; iOS is available on the App Store and via TestFlight beta.
 
 ## Overview
 
@@ -227,6 +227,12 @@ The editor starts minimal. Tap **More options** to reveal advanced fields; any f
 
 Description markdown supports unordered lists and task checkboxes (`- item`, `[ ] item`, `[x] item`).
 Markdown checkbox lines can populate checklist items when you save.
+
+Recurring tasks support two strategies:
+- **Strict** (fixed cadence)
+- **Repeat after completion** (next date from completion time)
+
+Use the recurrence field in the task editor, then toggle **Repeat after completion** when needed.
 
 ### Attachments
 

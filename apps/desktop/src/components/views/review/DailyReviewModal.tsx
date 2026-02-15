@@ -1,10 +1,24 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, Calendar, Check, CheckSquare, ChevronLeft, RefreshCw, Star, X, type LucideIcon } from 'lucide-react';
-import { PRESET_CONTEXTS, isDueForReview, safeParseDate, safeParseDueDate, sortTasksBy, type Task, type TaskSortBy, shallow, useTaskStore, isTaskInActiveProject } from '@mindwtr/core';
+import {
+    PRESET_CONTEXTS,
+    isDueForReview,
+    safeFormatDate,
+    safeParseDate,
+    safeParseDueDate,
+    sortTasksBy,
+    type ExternalCalendarEvent,
+    type Task,
+    type TaskSortBy,
+    shallow,
+    useTaskStore,
+    isTaskInActiveProject,
+} from '@mindwtr/core';
 import { cn } from '../../../lib/utils';
 import { useLanguage } from '../../../contexts/language-context';
 import { InboxProcessor } from '../InboxProcessor';
 import { TaskItem } from '../../TaskItem';
+import { fetchExternalCalendarEvents } from '../../../lib/external-calendar-events';
 
 type DailyReviewStep = 'intro' | 'today' | 'focus' | 'inbox' | 'waiting' | 'completed';
 
@@ -32,6 +46,9 @@ export function DailyReviewGuideModal({ onClose }: DailyReviewGuideModalProps) {
     );
     const { t } = useLanguage();
     const [isProcessing, setIsProcessing] = useState(false);
+    const [externalCalendarEvents, setExternalCalendarEvents] = useState<ExternalCalendarEvent[]>([]);
+    const [externalCalendarLoading, setExternalCalendarLoading] = useState(false);
+    const [externalCalendarError, setExternalCalendarError] = useState<string | null>(null);
 
     const today = new Date();
     const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -156,6 +173,60 @@ export function DailyReviewGuideModal({ onClose }: DailyReviewGuideModalProps) {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [onClose]);
 
+    useEffect(() => {
+        let cancelled = false;
+        const loadCalendar = async () => {
+            setExternalCalendarLoading(true);
+            setExternalCalendarError(null);
+            try {
+                const todayStart = new Date();
+                todayStart.setHours(0, 0, 0, 0);
+                const tomorrowEnd = new Date(todayStart);
+                tomorrowEnd.setDate(tomorrowEnd.getDate() + 2);
+                tomorrowEnd.setMilliseconds(-1);
+                const { events } = await fetchExternalCalendarEvents(todayStart, tomorrowEnd);
+                if (cancelled) return;
+                setExternalCalendarEvents(events);
+            } catch (error) {
+                if (cancelled) return;
+                setExternalCalendarError(error instanceof Error ? error.message : String(error));
+                setExternalCalendarEvents([]);
+            } finally {
+                if (!cancelled) setExternalCalendarLoading(false);
+            }
+        };
+        loadCalendar();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const getEventsForDay = (date: Date) => {
+        const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+        const dayEnd = new Date(dayStart);
+        dayEnd.setDate(dayEnd.getDate() + 1);
+        return externalCalendarEvents
+            .filter((event) => {
+                const start = safeParseDate(event.start);
+                const end = safeParseDate(event.end);
+                if (!start || !end) return false;
+                return start.getTime() < dayEnd.getTime() && end.getTime() > dayStart.getTime();
+            })
+            .sort((a, b) => {
+                const aStart = safeParseDate(a.start)?.getTime() ?? Number.POSITIVE_INFINITY;
+                const bStart = safeParseDate(b.start)?.getTime() ?? Number.POSITIVE_INFINITY;
+                return aStart - bStart;
+            });
+    };
+
+    const tomorrow = useMemo(() => {
+        const d = new Date(today);
+        d.setDate(d.getDate() + 1);
+        return d;
+    }, [today]);
+    const todayCalendarEvents = useMemo(() => getEventsForDay(today), [externalCalendarEvents, today]);
+    const tomorrowCalendarEvents = useMemo(() => getEventsForDay(tomorrow), [externalCalendarEvents, tomorrow]);
+
     const steps: { id: DailyReviewStep; title: string; description: string; icon: LucideIcon }[] = [
         { id: 'intro', title: t('dailyReview.title'), description: t('dailyReview.introDesc'), icon: RefreshCw },
         { id: 'today', title: t('dailyReview.todayStep'), description: t('dailyReview.todayDesc'), icon: Calendar },
@@ -274,6 +345,35 @@ export function DailyReviewGuideModal({ onClose }: DailyReviewGuideModalProps) {
         );
     };
 
+    const renderCalendarEventList = (events: ExternalCalendarEvent[]) => {
+        if (externalCalendarLoading) {
+            return <p className="text-xs text-muted-foreground">{t('common.loading')}</p>;
+        }
+        if (externalCalendarError) {
+            return <p className="text-xs text-muted-foreground">{externalCalendarError}</p>;
+        }
+        if (events.length === 0) {
+            return <p className="text-xs text-muted-foreground">{t('calendar.noTasks')}</p>;
+        }
+        return (
+            <div className="space-y-1.5">
+                {events.slice(0, 5).map((event) => {
+                    const start = safeParseDate(event.start);
+                    const end = safeParseDate(event.end);
+                    const timeLabel = event.allDay || !start || !end
+                        ? t('calendar.allDay')
+                        : `${safeFormatDate(start, 'HH:mm')} - ${safeFormatDate(end, 'HH:mm')}`;
+                    return (
+                        <div key={event.id} className="text-xs text-muted-foreground">
+                            <span className="font-medium text-foreground mr-2">{event.title}</span>
+                            <span>{timeLabel}</span>
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    };
+
     const renderStepContent = () => {
         switch (currentStep) {
             case 'intro':
@@ -303,6 +403,20 @@ export function DailyReviewGuideModal({ onClose }: DailyReviewGuideModalProps) {
                             <p className="text-sm text-muted-foreground mt-2">
                                 <span className="font-bold text-foreground">{list.length}</span> {t('common.tasks')}
                             </p>
+                        </div>
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                            <div className="bg-card border border-border rounded-lg p-3 space-y-2">
+                                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                    {safeFormatDate(today, 'MMM d')} · {t('calendar.events')}
+                                </h4>
+                                {renderCalendarEventList(todayCalendarEvents)}
+                            </div>
+                            <div className="bg-card border border-border rounded-lg p-3 space-y-2">
+                                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                    {safeFormatDate(tomorrow, 'MMM d')} · {t('calendar.events')}
+                                </h4>
+                                {renderCalendarEventList(tomorrowCalendarEvents)}
+                            </div>
                         </div>
                         {renderTaskList(list, t('agenda.noTasks'))}
                     </div>

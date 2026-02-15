@@ -1,0 +1,3 @@
+- Improved sync conflict safety and data integrity across devices.
+- Streamlined iOS inbox processing into a faster single-page workflow.
+- Improved iOS task editing and daily review headers with better safe-area handling and larger tap targets.

@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
-import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, realpathSync } from 'fs';
 import { createHash } from 'crypto';
-import { dirname, join, resolve } from 'path';
+import { dirname, join, resolve, sep } from 'path';
 import {
     applyTaskUpdates,
     generateUUID,
+    mergeAppData,
     parseQuickAdd,
     searchAll,
     type AppData,
@@ -41,6 +42,10 @@ const logInfo = (message: string, context?: Record<string, unknown>) => {
     writeLog({ ts: new Date().toISOString(), level: 'info', scope: 'cloud', message, context });
 };
 
+const logWarn = (message: string, context?: Record<string, unknown>) => {
+    writeLog({ ts: new Date().toISOString(), level: 'warn', scope: 'cloud', message, context });
+};
+
 const logError = (message: string, error?: unknown) => {
     const context: Record<string, unknown> = {};
     if (error instanceof Error) {
@@ -61,6 +66,47 @@ const maxTaskTitleLengthValue = Number(process.env.MINDWTR_CLOUD_MAX_TASK_TITLE_
 const MAX_TASK_TITLE_LENGTH = Number.isFinite(maxTaskTitleLengthValue) && maxTaskTitleLengthValue > 0
     ? Math.floor(maxTaskTitleLengthValue)
     : 500;
+const maxItemsPerCollectionValue = Number(process.env.MINDWTR_CLOUD_MAX_ITEMS_PER_COLLECTION || 50_000);
+const MAX_ITEMS_PER_COLLECTION = Number.isFinite(maxItemsPerCollectionValue) && maxItemsPerCollectionValue > 0
+    ? Math.floor(maxItemsPerCollectionValue)
+    : 50_000;
+const ATTACHMENT_PATH_ALLOWLIST = /^[a-zA-Z0-9._/-]+$/;
+
+function isPathWithinRoot(pathValue: string, rootPath: string): boolean {
+    return pathValue === rootPath || pathValue.startsWith(`${rootPath}${sep}`);
+}
+
+function normalizeAttachmentRelativePath(rawPath: string): string | null {
+    let decoded = '';
+    try {
+        decoded = decodeURIComponent(rawPath);
+    } catch {
+        return null;
+    }
+    if (!decoded || !ATTACHMENT_PATH_ALLOWLIST.test(decoded)) {
+        return null;
+    }
+    const normalized = decoded.replace(/^\/+|\/+$/g, '');
+    if (!normalized) return null;
+    const segments = normalized.split('/').filter(Boolean);
+    if (segments.length === 0) return null;
+    if (segments.some((segment) => segment === '.' || segment === '..')) {
+        return null;
+    }
+    return segments.join('/');
+}
+
+function resolveAttachmentPath(dataDir: string, key: string, rawPath: string): { rootRealPath: string; filePath: string } | null {
+    const relativePath = normalizeAttachmentRelativePath(rawPath);
+    if (!relativePath) return null;
+    const rootDir = resolve(join(dataDir, key, 'attachments'));
+    mkdirSync(rootDir, { recursive: true });
+    const rootRealPath = realpathSync(rootDir);
+    const filePath = resolve(join(rootRealPath, relativePath));
+    if (!isPathWithinRoot(filePath, rootRealPath)) return null;
+    return { rootRealPath, filePath };
+}
+
 const shutdown = (signal: string) => {
     logInfo(`received ${signal}, shutting down`);
     process.exit(0);
@@ -109,7 +155,34 @@ function tokenToKey(token: string): string {
     return createHash('sha256').update(token).digest('hex');
 }
 
+function parseAllowedAuthTokens(rawValue?: string): Set<string> | null {
+    const tokens = String(rawValue || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+    return tokens.length > 0 ? new Set(tokens) : null;
+}
+
+function resolveAllowedAuthTokensFromEnv(env: Record<string, string | undefined>): Set<string> | null {
+    const values = [
+        env.MINDWTR_CLOUD_AUTH_TOKENS,
+        env.MINDWTR_CLOUD_TOKEN, // legacy name kept for backward compatibility
+    ]
+        .map((value) => String(value || '').trim())
+        .filter((value) => value.length > 0);
+    if (values.length === 0) return null;
+    return parseAllowedAuthTokens(values.join(','));
+}
+
+function isAuthorizedToken(token: string, allowedTokens: Set<string> | null): boolean {
+    if (!allowedTokens) return true;
+    return allowedTokens.has(token);
+}
+
 function toRateLimitRoute(pathname: string): string {
+    if (/^\/v1\/attachments\/.+/.test(pathname)) {
+        return '/v1/attachments/:path';
+    }
     if (/^\/v1\/tasks\/[^/]+\/(complete|archive)$/.test(pathname)) {
         return '/v1/tasks/:id/:action';
     }
@@ -123,27 +196,98 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isValidIsoTimestamp(value: unknown): boolean {
+    if (typeof value !== 'string' || value.trim().length === 0) return false;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed);
+}
+
 function validateAppData(value: unknown): { ok: true; data: Record<string, unknown> } | { ok: false; error: string } {
     if (!isRecord(value)) return { ok: false, error: 'Invalid data: expected an object' };
     const tasks = value.tasks;
     const projects = value.projects;
+    const sections = value.sections;
     const settings = value.settings;
     const areas = value.areas;
 
     if (!Array.isArray(tasks)) return { ok: false, error: 'Invalid data: tasks must be an array' };
     if (!Array.isArray(projects)) return { ok: false, error: 'Invalid data: projects must be an array' };
+    if (sections !== undefined && !Array.isArray(sections)) return { ok: false, error: 'Invalid data: sections must be an array' };
     if (areas !== undefined && !Array.isArray(areas)) return { ok: false, error: 'Invalid data: areas must be an array' };
     if (settings !== undefined && !isRecord(settings)) return { ok: false, error: 'Invalid data: settings must be an object' };
+    if (tasks.length > MAX_ITEMS_PER_COLLECTION) return { ok: false, error: `Invalid data: tasks exceeds limit (${MAX_ITEMS_PER_COLLECTION})` };
+    if (projects.length > MAX_ITEMS_PER_COLLECTION) return { ok: false, error: `Invalid data: projects exceeds limit (${MAX_ITEMS_PER_COLLECTION})` };
+    if (Array.isArray(sections) && sections.length > MAX_ITEMS_PER_COLLECTION) {
+        return { ok: false, error: `Invalid data: sections exceeds limit (${MAX_ITEMS_PER_COLLECTION})` };
+    }
+    if (Array.isArray(areas) && areas.length > MAX_ITEMS_PER_COLLECTION) {
+        return { ok: false, error: `Invalid data: areas exceeds limit (${MAX_ITEMS_PER_COLLECTION})` };
+    }
 
     for (const task of tasks) {
         if (!isRecord(task) || typeof task.id !== 'string' || typeof task.title !== 'string') {
             return { ok: false, error: 'Invalid data: each task must be an object with string id and title' };
+        }
+        if (task.id.trim().length === 0 || task.title.trim().length === 0) {
+            return { ok: false, error: 'Invalid data: each task must include non-empty id and title' };
+        }
+        if (typeof task.status !== 'string' || !['inbox', 'next', 'waiting', 'someday', 'reference', 'done', 'archived'].includes(task.status)) {
+            return { ok: false, error: 'Invalid data: task status must be a valid value' };
+        }
+        if (!isValidIsoTimestamp(task.createdAt) || !isValidIsoTimestamp(task.updatedAt)) {
+            return { ok: false, error: 'Invalid data: task createdAt/updatedAt must be valid ISO timestamps' };
+        }
+        if (task.deletedAt !== undefined && !isValidIsoTimestamp(task.deletedAt)) {
+            return { ok: false, error: 'Invalid data: task deletedAt must be a valid ISO timestamp when present' };
         }
     }
 
     for (const project of projects) {
         if (!isRecord(project) || typeof project.id !== 'string' || typeof project.title !== 'string') {
             return { ok: false, error: 'Invalid data: each project must be an object with string id and title' };
+        }
+        if (project.id.trim().length === 0 || project.title.trim().length === 0) {
+            return { ok: false, error: 'Invalid data: each project must include non-empty id and title' };
+        }
+        if (typeof project.status !== 'string' || !['active', 'someday', 'waiting', 'archived'].includes(project.status)) {
+            return { ok: false, error: 'Invalid data: project status must be a valid value' };
+        }
+        if (!isValidIsoTimestamp(project.createdAt) || !isValidIsoTimestamp(project.updatedAt)) {
+            return { ok: false, error: 'Invalid data: project createdAt/updatedAt must be valid ISO timestamps' };
+        }
+        if (project.deletedAt !== undefined && !isValidIsoTimestamp(project.deletedAt)) {
+            return { ok: false, error: 'Invalid data: project deletedAt must be a valid ISO timestamp when present' };
+        }
+    }
+
+    if (Array.isArray(sections)) {
+        for (const section of sections) {
+            if (!isRecord(section) || typeof section.id !== 'string' || typeof section.projectId !== 'string' || typeof section.title !== 'string') {
+                return { ok: false, error: 'Invalid data: each section must be an object with string id, projectId, and title' };
+            }
+            if (!isValidIsoTimestamp(section.createdAt) || !isValidIsoTimestamp(section.updatedAt)) {
+                return { ok: false, error: 'Invalid data: section createdAt/updatedAt must be valid ISO timestamps' };
+            }
+            if (section.deletedAt !== undefined && !isValidIsoTimestamp(section.deletedAt)) {
+                return { ok: false, error: 'Invalid data: section deletedAt must be a valid ISO timestamp when present' };
+            }
+        }
+    }
+
+    if (Array.isArray(areas)) {
+        for (const area of areas) {
+            if (!isRecord(area) || typeof area.id !== 'string' || typeof area.name !== 'string') {
+                return { ok: false, error: 'Invalid data: each area must be an object with string id and name' };
+            }
+            if (area.createdAt !== undefined && !isValidIsoTimestamp(area.createdAt)) {
+                return { ok: false, error: 'Invalid data: area createdAt must be a valid ISO timestamp when present' };
+            }
+            if (area.updatedAt !== undefined && !isValidIsoTimestamp(area.updatedAt)) {
+                return { ok: false, error: 'Invalid data: area updatedAt must be a valid ISO timestamp when present' };
+            }
+            if (area.deletedAt !== undefined && !isValidIsoTimestamp(area.deletedAt)) {
+                return { ok: false, error: 'Invalid data: area deletedAt must be a valid ISO timestamp when present' };
+            }
         }
     }
 
@@ -234,24 +378,52 @@ export const __cloudTestUtils = {
     parseArgs,
     getToken,
     tokenToKey,
+    parseAllowedAuthTokens,
+    resolveAllowedAuthTokensFromEnv,
+    isAuthorizedToken,
     toRateLimitRoute,
     validateAppData,
     asStatus,
     pickTaskList,
     readJsonBody,
+    normalizeAttachmentRelativePath,
+    isPathWithinRoot,
 };
 
-async function main() {
+type CloudServerOptions = {
+    port?: number;
+    host?: string;
+    dataDir?: string;
+    windowMs?: number;
+    maxPerWindow?: number;
+    maxAttachmentPerWindow?: number;
+    maxBodyBytes?: number;
+    maxAttachmentBytes?: number;
+    allowedAuthTokens?: Set<string> | null;
+};
+
+type CloudServerHandle = {
+    stop: () => void;
+    port: number;
+};
+
+export async function startCloudServer(options: CloudServerOptions = {}): Promise<CloudServerHandle> {
     const flags = parseArgs(process.argv.slice(2));
-    const port = Number(flags.port || process.env.PORT || 8787);
-    const host = String(flags.host || process.env.HOST || '0.0.0.0');
-    const dataDir = String(process.env.MINDWTR_CLOUD_DATA_DIR || join(process.cwd(), 'data'));
+    const port = Number(options.port ?? flags.port ?? process.env.PORT ?? 8787);
+    const host = String(options.host ?? flags.host ?? process.env.HOST ?? '0.0.0.0');
+    const dataDir = String(options.dataDir ?? process.env.MINDWTR_CLOUD_DATA_DIR ?? join(process.cwd(), 'data'));
 
     const rateLimits = new Map<string, RateLimitState>();
-    const windowMs = Number(process.env.MINDWTR_CLOUD_RATE_WINDOW_MS || 60_000);
-    const maxPerWindow = Number(process.env.MINDWTR_CLOUD_RATE_MAX || 120);
-    const maxBodyBytes = Number(process.env.MINDWTR_CLOUD_MAX_BODY_BYTES || 2_000_000);
-    const maxAttachmentBytes = Number(process.env.MINDWTR_CLOUD_MAX_ATTACHMENT_BYTES || 50_000_000);
+    const windowMs = Number(options.windowMs ?? process.env.MINDWTR_CLOUD_RATE_WINDOW_MS ?? 60_000);
+    const maxPerWindow = Number(options.maxPerWindow ?? process.env.MINDWTR_CLOUD_RATE_MAX ?? 120);
+    const maxAttachmentPerWindow = Number(
+        options.maxAttachmentPerWindow ?? process.env.MINDWTR_CLOUD_ATTACHMENT_RATE_MAX ?? maxPerWindow
+    );
+    const maxBodyBytes = Number(options.maxBodyBytes ?? process.env.MINDWTR_CLOUD_MAX_BODY_BYTES ?? 2_000_000);
+    const maxAttachmentBytes = Number(
+        options.maxAttachmentBytes ?? process.env.MINDWTR_CLOUD_MAX_ATTACHMENT_BYTES ?? 50_000_000
+    );
+    const allowedAuthTokens = options.allowedAuthTokens ?? resolveAllowedAuthTokensFromEnv(process.env);
     const encoder = new TextEncoder();
     const writeLocks = new Map<string, Promise<void>>();
     const withWriteLock = async <T>(key: string, fn: () => Promise<T>) => {
@@ -274,12 +446,25 @@ async function main() {
     }
 
     logInfo(`dataDir: ${dataDir}`);
+    const usingLegacyTokenVar = options.allowedAuthTokens === undefined
+        && !String(process.env.MINDWTR_CLOUD_AUTH_TOKENS || '').trim()
+        && String(process.env.MINDWTR_CLOUD_TOKEN || '').trim().length > 0;
+    if (usingLegacyTokenVar) {
+        logWarn('MINDWTR_CLOUD_TOKEN is deprecated; use MINDWTR_CLOUD_AUTH_TOKENS instead');
+    }
+    if (allowedAuthTokens) {
+        logInfo('token auth allowlist enabled', { allowedTokens: String(allowedAuthTokens.size) });
+    } else {
+        logInfo('token namespace mode enabled (no auth allowlist)', {
+            hint: 'set MINDWTR_CLOUD_AUTH_TOKENS to enforce bearer authentication (or legacy MINDWTR_CLOUD_TOKEN)',
+        });
+    }
     if (!ensureWritableDir(dataDir)) {
-        process.exit(1);
+        throw new Error(`Cloud data directory is not writable: ${dataDir}`);
     }
     logInfo(`listening on http://${host}:${port}`);
 
-    Bun.serve({
+    const server = Bun.serve({
         hostname: host,
         port,
         async fetch(req) {
@@ -301,6 +486,7 @@ async function main() {
             ) {
                 const token = getToken(req);
                 if (!token) return errorResponse('Unauthorized', 401);
+                if (!isAuthorizedToken(token, allowedAuthTokens)) return errorResponse('Unauthorized', 401);
                 const key = tokenToKey(token);
                 const routeKey = toRateLimitRoute(pathname);
                 const rateKey = `${key}:${req.method}:${routeKey}`;
@@ -497,6 +683,7 @@ async function main() {
             if (pathname === '/v1/data') {
                 const token = getToken(req);
                 if (!token) return errorResponse('Unauthorized', 401);
+                if (!isAuthorizedToken(token, allowedAuthTokens)) return errorResponse('Unauthorized', 401);
                 const key = tokenToKey(token);
                 const now = Date.now();
                 const state = rateLimits.get(key);
@@ -540,7 +727,10 @@ async function main() {
                     const validated = validateAppData(body);
                     if (!validated.ok) return errorResponse(validated.error, 400);
                     return await withWriteLock(key, async () => {
-                        writeData(filePath, validated.data);
+                        const existingData = loadAppData(filePath);
+                        const incomingData = validated.data as AppData;
+                        const mergedData = mergeAppData(existingData, incomingData);
+                        writeData(filePath, mergedData);
                         return jsonResponse({ ok: true });
                     });
                 }
@@ -549,12 +739,14 @@ async function main() {
             if (pathname.startsWith('/v1/attachments/')) {
                 const token = getToken(req);
                 if (!token) return errorResponse('Unauthorized', 401);
+                if (!isAuthorizedToken(token, allowedAuthTokens)) return errorResponse('Unauthorized', 401);
                 const key = tokenToKey(token);
                 const now = Date.now();
-                const state = rateLimits.get(key);
+                const attachmentRateKey = `${key}:${req.method}:${toRateLimitRoute(pathname)}`;
+                const state = rateLimits.get(attachmentRateKey);
                 if (state && now < state.resetAt) {
                     state.count += 1;
-                    if (state.count > maxPerWindow) {
+                    if (state.count > maxAttachmentPerWindow) {
                         const retryAfter = Math.ceil((state.resetAt - now) / 1000);
                         return jsonResponse(
                             { error: 'Rate limit exceeded', retryAfterSeconds: retryAfter },
@@ -562,23 +754,23 @@ async function main() {
                         );
                     }
                 } else {
-                    rateLimits.set(key, { count: 1, resetAt: now + windowMs });
+                    rateLimits.set(attachmentRateKey, { count: 1, resetAt: now + windowMs });
                 }
 
-                const relative = decodeURIComponent(pathname.slice('/v1/attachments/'.length));
-                if (!relative || relative.includes('..') || relative.includes('\\')) {
+                const resolvedAttachmentPath = resolveAttachmentPath(dataDir, key, pathname.slice('/v1/attachments/'.length));
+                if (!resolvedAttachmentPath) {
                     return errorResponse('Invalid attachment path', 400);
                 }
-                const rootDir = resolve(join(dataDir, key, 'attachments'));
-                const filePath = resolve(join(rootDir, relative));
-                if (!filePath.startsWith(rootDir)) {
-                    return errorResponse('Invalid attachment path', 400);
-                }
+                const { rootRealPath, filePath } = resolvedAttachmentPath;
 
                 if (req.method === 'GET') {
                     if (!existsSync(filePath)) return errorResponse('Not found', 404);
                     try {
-                        const file = readFileSync(filePath);
+                        const realFilePath = realpathSync(filePath);
+                        if (!isPathWithinRoot(realFilePath, rootRealPath)) {
+                            return errorResponse('Invalid attachment path', 400);
+                        }
+                        const file = readFileSync(realFilePath);
                         const headers = new Headers();
                         headers.set('Access-Control-Allow-Origin', corsOrigin);
                         headers.set('Content-Type', 'application/octet-stream');
@@ -598,6 +790,16 @@ async function main() {
                         return errorResponse('Payload too large', 413);
                     }
                     mkdirSync(dirname(filePath), { recursive: true });
+                    const parentRealPath = realpathSync(dirname(filePath));
+                    if (!isPathWithinRoot(parentRealPath, rootRealPath)) {
+                        return errorResponse('Invalid attachment path', 400);
+                    }
+                    if (existsSync(filePath)) {
+                        const realFilePath = realpathSync(filePath);
+                        if (!isPathWithinRoot(realFilePath, rootRealPath)) {
+                            return errorResponse('Invalid attachment path', 400);
+                        }
+                    }
                     writeFileSync(filePath, body);
                     return jsonResponse({ ok: true });
                 }
@@ -607,7 +809,11 @@ async function main() {
                         return jsonResponse({ ok: true });
                     }
                     try {
-                        unlinkSync(filePath);
+                        const realFilePath = realpathSync(filePath);
+                        if (!isPathWithinRoot(realFilePath, rootRealPath)) {
+                            return errorResponse('Invalid attachment path', 400);
+                        }
+                        unlinkSync(realFilePath);
                         return jsonResponse({ ok: true });
                     } catch {
                         return errorResponse('Failed to delete attachment', 500);
@@ -631,11 +837,23 @@ async function main() {
             }
         },
     });
+
+    return {
+        port: server.port,
+        stop: () => {
+            clearInterval(cleanupTimer);
+            try {
+                (server as { stop?: (closeIdleConnections?: boolean) => void }).stop?.(true);
+            } catch {
+                // Ignore stop errors during teardown.
+            }
+        },
+    };
 }
 
 const isMainModule = typeof Bun !== 'undefined' && (import.meta as ImportMeta & { main?: boolean }).main === true;
 if (isMainModule) {
-    main().catch((err) => {
+    startCloudServer().catch((err) => {
         logError('Failed to start server', err);
         process.exit(1);
     });

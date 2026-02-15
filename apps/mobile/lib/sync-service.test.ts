@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { formatSyncErrorMessage, getFileSyncBaseDir, isSyncFilePath, resolveBackend } from './sync-service-utils';
+import {
+  formatSyncErrorMessage,
+  getFileSyncBaseDir,
+  isLikelyOfflineSyncError,
+  isSyncFilePath,
+  resolveBackend,
+} from './sync-service-utils';
 
 describe('mobile sync-service test utils', () => {
   it('normalizes backend values', () => {
@@ -7,8 +13,8 @@ describe('mobile sync-service test utils', () => {
     expect(resolveBackend('webdav')).toBe('webdav');
     expect(resolveBackend('cloud')).toBe('cloud');
     expect(resolveBackend('off')).toBe('off');
-    expect(resolveBackend('invalid')).toBe('file');
-    expect(resolveBackend(null)).toBe('file');
+    expect(resolveBackend('invalid')).toBe('off');
+    expect(resolveBackend(null)).toBe('off');
   });
 
   it('formats WebDAV unauthorized errors with actionable text', () => {
@@ -23,5 +29,14 @@ describe('mobile sync-service test utils', () => {
     expect(isSyncFilePath('/storage/folder')).toBe(false);
     expect(getFileSyncBaseDir('/storage/folder/data.json')).toBe('/storage/folder');
     expect(getFileSyncBaseDir('/storage/folder/')).toBe('/storage/folder');
+  });
+
+  it('detects likely offline sync errors', () => {
+    expect(isLikelyOfflineSyncError('TypeError: Network request failed')).toBe(true);
+    expect(isLikelyOfflineSyncError('java.net.UnknownHostException: Unable to resolve host')).toBe(true);
+    expect(isLikelyOfflineSyncError('Software caused connection abort')).toBe(true);
+    expect(isLikelyOfflineSyncError('request failed: ECONNRESET')).toBe(true);
+    expect(isLikelyOfflineSyncError('AxiosError: connect ETIMEDOUT')).toBe(true);
+    expect(isLikelyOfflineSyncError('WebDAV unauthorized (401). Check folder URL')).toBe(false);
   });
 });

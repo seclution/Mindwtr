@@ -315,7 +315,7 @@ Configure notifications in Settings:
 | **Start Date**    | When to start working on it                         |
 | **Review Date**   | Tickler date for review                             |
 | **Time Estimate** | 5min, 10min, 15min, 30min, 1hr, 2hr, 3hr, 4hr, 4hr+ |
-| **Recurrence**    | daily, weekly, monthly, yearly                      |
+| **Recurrence**    | daily, weekly, monthly, yearly + strategy           |
 | **Checklist**     | Sub-items for multi-step tasks                      |
 | **Description**   | Markdown-formatted notes with preview               |
 | **Attachments**   | Files and links attached to the task                |
@@ -329,6 +329,13 @@ See [[Attachments]] for sync, cleanup, and audio notes.
 ### Recurring Tasks
 
 When you complete a recurring task, Mindwtr automatically creates the next instance with updated dates.
+
+- **Strict** (default): keeps a fixed schedule cadence.
+  Example: every 5 days remains anchored to the planned cycle.
+- **Repeat after completion**: shifts the next due date from completion time.
+  Example: complete now, next is due 5 days later.
+
+You can toggle this in the task editor recurrence field using **Repeat after completion**.
 
 
 ---

@@ -1,16 +1,14 @@
 import { useState, useMemo, useEffect, useCallback, type ReactNode } from 'react';
 import { ErrorBoundary } from '../ErrorBoundary';
-import { shallow, useTaskStore, Attachment, Task, type Project, type Section, generateUUID, parseQuickAdd, validateAttachmentForUpload } from '@mindwtr/core';
+import { useTaskStore, Attachment, Task, type Project, type Section, generateUUID, parseQuickAdd } from '@mindwtr/core';
 import { ChevronDown, ChevronRight, FileText, Folder, Pencil, Plus, Trash2 } from 'lucide-react';
-import { DndContext, PointerSensor, useDroppable, useSensor, useSensors, closestCenter, type DragEndEvent } from '@dnd-kit/core';
+import { DndContext, PointerSensor, useSensor, useSensors, closestCenter, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { useLanguage } from '../../contexts/language-context';
 import { PromptModal } from '../PromptModal';
 import { isTauriRuntime } from '../../lib/runtime';
 import { normalizeAttachmentInput } from '../../lib/attachment-utils';
 import { cn } from '../../lib/utils';
-import { invoke } from '@tauri-apps/api/core';
-import { size } from '@tauri-apps/plugin-fs';
 import { SortableProjectTaskRow } from './projects/SortableRows';
 import { ProjectsSidebar } from './projects/ProjectsSidebar';
 import { AreaManagerModal } from './projects/AreaManagerModal';
@@ -28,104 +26,52 @@ import {
 import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
 import { checkBudget } from '../../config/performanceBudgets';
 import { useUiStore } from '../../store/ui-store';
-import { logWarn } from '../../lib/app-log';
 import { AREA_FILTER_ALL, AREA_FILTER_NONE, projectMatchesAreaFilter } from '../../lib/area-filter';
+import { reportError } from '../../lib/report-error';
 import { useAreaSidebarState } from './projects/useAreaSidebarState';
-
-const SECTION_CONTAINER_PREFIX = 'section:';
-const NO_SECTION_CONTAINER = `${SECTION_CONTAINER_PREFIX}none`;
-const getSectionContainerId = (sectionId?: string | null) =>
-    sectionId ? `${SECTION_CONTAINER_PREFIX}${sectionId}` : NO_SECTION_CONTAINER;
-const getSectionIdFromContainer = (containerId: string) =>
-    containerId === NO_SECTION_CONTAINER ? null : containerId.replace(SECTION_CONTAINER_PREFIX, '');
-
-type SectionDropZoneProps = {
-    id: string;
-    className?: string;
-    children: ReactNode;
-};
-
-const SectionDropZone = ({ id, className, children }: SectionDropZoneProps) => {
-    const { setNodeRef, isOver } = useDroppable({ id });
-    return (
-        <div ref={setNodeRef} className={cn(className, isOver && 'ring-2 ring-primary/40')}>
-            {children}
-        </div>
-    );
-};
+import { useProjectAttachmentActions } from './projects/useProjectAttachmentActions';
+import { SectionDropZone, getSectionContainerId, getSectionIdFromContainer, NO_SECTION_CONTAINER } from './projects/section-dnd';
+import { useProjectSectionActions } from './projects/useProjectSectionActions';
 
 export function ProjectsView() {
     const perf = usePerformanceMonitor('ProjectsView');
-    const {
-        projects,
-        tasks,
-        sections,
-        areas,
-        addArea,
-        updateArea,
-        deleteArea,
-        reorderAreas,
-        reorderProjects,
-        reorderProjectTasks,
-        addProject,
-        updateProject,
-        deleteProject,
-        duplicateProject,
-        updateTask,
-        addSection,
-        updateSection,
-        deleteSection,
-        addTask,
-        toggleProjectFocus,
-        _allTasks,
-        highlightTaskId,
-        setHighlightTask,
-        settings,
-    } = useTaskStore(
-        (state) => ({
-            projects: state.projects,
-            tasks: state.tasks,
-            sections: state.sections,
-            areas: state.areas,
-            addArea: state.addArea,
-            updateArea: state.updateArea,
-            deleteArea: state.deleteArea,
-            reorderAreas: state.reorderAreas,
-            reorderProjects: state.reorderProjects,
-            reorderProjectTasks: state.reorderProjectTasks,
-            addProject: state.addProject,
-            updateProject: state.updateProject,
-            deleteProject: state.deleteProject,
-            duplicateProject: state.duplicateProject,
-            updateTask: state.updateTask,
-            addSection: state.addSection,
-            updateSection: state.updateSection,
-            deleteSection: state.deleteSection,
-            addTask: state.addTask,
-            toggleProjectFocus: state.toggleProjectFocus,
-            _allTasks: state._allTasks,
-            highlightTaskId: state.highlightTaskId,
-            setHighlightTask: state.setHighlightTask,
-            settings: state.settings,
-        }),
-        shallow
-    );
+    const projects = useTaskStore((state) => state.projects);
+    const tasks = useTaskStore((state) => state.tasks);
+    const sections = useTaskStore((state) => state.sections);
+    const areas = useTaskStore((state) => state.areas);
+    const addArea = useTaskStore((state) => state.addArea);
+    const updateArea = useTaskStore((state) => state.updateArea);
+    const deleteArea = useTaskStore((state) => state.deleteArea);
+    const reorderAreas = useTaskStore((state) => state.reorderAreas);
+    const reorderProjects = useTaskStore((state) => state.reorderProjects);
+    const reorderProjectTasks = useTaskStore((state) => state.reorderProjectTasks);
+    const addProject = useTaskStore((state) => state.addProject);
+    const updateProject = useTaskStore((state) => state.updateProject);
+    const deleteProject = useTaskStore((state) => state.deleteProject);
+    const duplicateProject = useTaskStore((state) => state.duplicateProject);
+    const updateTask = useTaskStore((state) => state.updateTask);
+    const addSection = useTaskStore((state) => state.addSection);
+    const updateSection = useTaskStore((state) => state.updateSection);
+    const deleteSection = useTaskStore((state) => state.deleteSection);
+    const addTask = useTaskStore((state) => state.addTask);
+    const toggleProjectFocus = useTaskStore((state) => state.toggleProjectFocus);
+    const allTasks = useTaskStore((state) => state._allTasks);
+    const highlightTaskId = useTaskStore((state) => state.highlightTaskId);
+    const setHighlightTask = useTaskStore((state) => state.setHighlightTask);
+    const settings = useTaskStore((state) => state.settings);
     const getDerivedState = useTaskStore((state) => state.getDerivedState);
     const { allContexts } = getDerivedState();
     const { t } = useLanguage();
-    const { selectedProjectId, setSelectedProjectId } = useUiStore(
-        (state) => ({
-            selectedProjectId: state.projectView.selectedProjectId,
-            setSelectedProjectId: (value: string | null) => state.setProjectView({ selectedProjectId: value }),
-        }),
-        shallow
+    const selectedProjectId = useUiStore((state) => state.projectView.selectedProjectId);
+    const setProjectView = useUiStore((state) => state.setProjectView);
+    const setSelectedProjectId = useCallback(
+        (value: string | null) => setProjectView({ selectedProjectId: value }),
+        [setProjectView]
     );
     const [isCreating, setIsCreating] = useState(false);
     const [newProjectTitle, setNewProjectTitle] = useState('');
     const [notesExpanded, setNotesExpanded] = useState(false);
     const [showNotesPreview, setShowNotesPreview] = useState(true);
-    const [attachmentError, setAttachmentError] = useState<string | null>(null);
-    const [showLinkPrompt, setShowLinkPrompt] = useState(false);
     const [showDeferredProjects, setShowDeferredProjects] = useState(false);
     const [collapsedAreas, setCollapsedAreas] = useState<Record<string, boolean>>({});
     const [showAreaManager, setShowAreaManager] = useState(false);
@@ -144,7 +90,6 @@ export function ProjectsView() {
     const [editProjectTitle, setEditProjectTitle] = useState('');
     const [projectTaskTitle, setProjectTaskTitle] = useState('');
     const [isCreatingProject, setIsCreatingProject] = useState(false);
-    const [isProjectAttachmentBusy, setIsProjectAttachmentBusy] = useState(false);
     const [isProjectDeleting, setIsProjectDeleting] = useState(false);
     const ALL_AREAS = AREA_FILTER_ALL;
     const NO_AREA = AREA_FILTER_NONE;
@@ -166,10 +111,6 @@ export function ProjectsView() {
         }, 0);
         return () => window.clearTimeout(timer);
     }, [perf.enabled]);
-
-    useEffect(() => {
-        setAttachmentError(null);
-    }, [selectedProjectId]);
 
     const {
         selectedArea,
@@ -196,47 +137,6 @@ export function ProjectsView() {
     );
 
     const getProjectColorForTask = (project: Project) => getProjectColor(project, areaById, DEFAULT_AREA_COLOR);
-
-    const handleAddSection = () => {
-        if (!selectedProject) return;
-        setEditingSectionId(null);
-        setSectionDraft('');
-        setShowSectionPrompt(true);
-    };
-
-    const handleRenameSection = (section: Section) => {
-        setEditingSectionId(section.id);
-        setSectionDraft(section.title);
-        setShowSectionPrompt(true);
-    };
-
-    const handleDeleteSection = async (section: Section) => {
-        const confirmed = isTauriRuntime()
-            ? await import('@tauri-apps/plugin-dialog').then(({ confirm }) =>
-                confirm(t('projects.deleteSectionConfirm'), {
-                    title: t('projects.sectionsLabel'),
-                    kind: 'warning',
-                }),
-            )
-            : window.confirm(t('projects.deleteSectionConfirm'));
-        if (confirmed) {
-            deleteSection(section.id);
-        }
-    };
-
-    const handleToggleSection = (section: Section) => {
-        updateSection(section.id, { isCollapsed: !section.isCollapsed });
-    };
-
-    const handleToggleSectionNotes = (sectionId: string) => {
-        setSectionNotesOpen((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
-    };
-
-    const handleOpenSectionTaskPrompt = (sectionId: string) => {
-        setSectionTaskTargetId(sectionId);
-        setSectionTaskDraft('');
-        setShowSectionTaskPrompt(true);
-    };
 
     const sortAreasByName = () => reorderAreas(sortAreasByNameIds(sortedAreas));
     const sortAreasByColor = () => reorderAreas(sortAreasByColorIds(sortedAreas));
@@ -345,6 +245,27 @@ export function ProjectsView() {
 
     const selectedProject = projects.find(p => p.id === selectedProjectId);
 
+    const {
+        handleAddSection,
+        handleRenameSection,
+        handleDeleteSection,
+        handleToggleSection,
+        handleToggleSectionNotes,
+        handleOpenSectionTaskPrompt,
+    } = useProjectSectionActions({
+        t,
+        selectedProject,
+        setEditingSectionId,
+        setSectionDraft,
+        setShowSectionPrompt,
+        deleteSection,
+        updateSection,
+        setSectionNotesOpen,
+        setSectionTaskTargetId,
+        setSectionTaskDraft,
+        setShowSectionTaskPrompt,
+    });
+
     useEffect(() => {
         if (!selectedProjectId || !selectedProject) return;
         if (!projectMatchesAreaFilter(selectedProject, selectedArea, areaById)) {
@@ -357,8 +278,8 @@ export function ProjectsView() {
     }, [selectedProject?.id, selectedProject?.title]);
     const projectAllTasks = useMemo(() => {
         if (!selectedProjectId) return [];
-        return _allTasks.filter((task) => !task.deletedAt && task.projectId === selectedProjectId);
-    }, [selectedProjectId, _allTasks]);
+        return allTasks.filter((task) => !task.deletedAt && task.projectId === selectedProjectId);
+    }, [allTasks, selectedProjectId]);
     const projectTasks = useMemo(() => (
         projectAllTasks.filter((task) => task.status !== 'done' && task.status !== 'reference' && task.status !== 'archived')
     ), [projectAllTasks]);
@@ -726,6 +647,22 @@ export function ProjectsView() {
         return t('attachments.fileNotSupported');
     };
 
+    const {
+        attachmentError,
+        showLinkPrompt,
+        setShowLinkPrompt,
+        isProjectAttachmentBusy,
+        openAttachment,
+        addProjectFileAttachment,
+        addProjectLinkAttachment,
+        removeProjectAttachment,
+    } = useProjectAttachmentActions({
+        t,
+        selectedProject,
+        updateProject,
+        resolveValidationMessage,
+    });
+
     useEffect(() => {
         if (!selectedProject) {
             setTagDraft('');
@@ -767,94 +704,6 @@ export function ProjectsView() {
         },
         [addProject, addTask, projects, selectedProject]
     );
-
-    const openAttachment = async (attachment: Attachment) => {
-        const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(attachment.uri);
-        const normalized = hasScheme ? attachment.uri : `file://${attachment.uri}`;
-        if (isTauriRuntime()) {
-            try {
-                await invoke('open_path', { path: attachment.uri });
-                return;
-            } catch (error) {
-                void logWarn('Failed to open attachment', {
-                    scope: 'attachment',
-                    extra: { error: error instanceof Error ? error.message : String(error) },
-                });
-            }
-        }
-        window.open(normalized, '_blank');
-    };
-
-    const addProjectFileAttachment = async () => {
-        if (!selectedProject) return;
-        if (isProjectAttachmentBusy) return;
-        if (!isTauriRuntime()) {
-            setAttachmentError(t('attachments.fileNotSupported'));
-            return;
-        }
-        setIsProjectAttachmentBusy(true);
-        setAttachmentError(null);
-        try {
-            const { open } = await import('@tauri-apps/plugin-dialog');
-            const selected = await open({
-                multiple: false,
-                directory: false,
-                title: t('attachments.addFile'),
-            });
-            if (!selected || typeof selected !== 'string') return;
-            try {
-                const fileSize = await size(selected);
-                const validation = await validateAttachmentForUpload(
-                    {
-                        id: 'pending',
-                        kind: 'file',
-                        title: selected.split(/[/\\]/).pop() || selected,
-                        uri: selected,
-                        createdAt: new Date().toISOString(),
-                        updatedAt: new Date().toISOString(),
-                    },
-                    fileSize
-                );
-                if (!validation.valid) {
-                    setAttachmentError(resolveValidationMessage(validation.error));
-                    return;
-                }
-            } catch (error) {
-                void logWarn('Failed to validate attachment size', {
-                    scope: 'attachment',
-                    extra: { error: error instanceof Error ? error.message : String(error) },
-                });
-            }
-            const now = new Date().toISOString();
-            const title = selected.split(/[/\\]/).pop() || selected;
-            const attachment: Attachment = {
-                id: generateUUID(),
-                kind: 'file',
-                title,
-                uri: selected,
-                createdAt: now,
-                updatedAt: now,
-            };
-            updateProject(selectedProject.id, { attachments: [...(selectedProject.attachments || []), attachment] });
-        } finally {
-            setIsProjectAttachmentBusy(false);
-        }
-    };
-
-    const addProjectLinkAttachment = () => {
-        if (!selectedProject) return;
-        setAttachmentError(null);
-        setShowLinkPrompt(true);
-    };
-
-    const removeProjectAttachment = (id: string) => {
-        if (!selectedProject) return;
-        const now = new Date().toISOString();
-        const next = (selectedProject.attachments || []).map((a) =>
-            a.id === id ? { ...a, deletedAt: now, updatedAt: now } : a
-        );
-        updateProject(selectedProject.id, { attachments: next });
-    };
 
     return (
         <ErrorBoundary>
@@ -1021,11 +870,15 @@ export function ProjectsView() {
                         onChangeNewAreaColor={(event) => setNewAreaColor(event.target.value)}
                         newAreaName={newAreaName}
                         onChangeNewAreaName={(event) => setNewAreaName(event.target.value)}
-                        onCreateArea={() => {
+                        onCreateArea={async () => {
                             const name = newAreaName.trim();
                             if (!name) return;
-                            addArea(name, { color: newAreaColor });
-                            setNewAreaName('');
+                            try {
+                                await addArea(name, { color: newAreaColor });
+                                setNewAreaName('');
+                            } catch (error) {
+                                reportError('Failed to create area', error);
+                            }
                         }}
                         onSortByName={sortAreasByName}
                         onSortByColor={sortAreasByColor}

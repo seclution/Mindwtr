@@ -25,16 +25,29 @@ const filterUndefined = <T extends Record<string, unknown>>(obj: T): Partial<T> 
   return result;
 };
 
-const withDb = async <T>(
-  options: DbOptions,
-  fn: (db: Awaited<ReturnType<typeof openMindwtrDb>>['db']) => T,
-): Promise<T> => {
-  const { db } = await openMindwtrDb(options);
-  try {
+const createDbAccessor = (options: DbOptions) => {
+  let dbHandlePromise: Promise<Awaited<ReturnType<typeof openMindwtrDb>>> | null = null;
+  const getDbHandle = async () => {
+    if (!dbHandlePromise) {
+      dbHandlePromise = openMindwtrDb(options);
+    }
+    return await dbHandlePromise;
+  };
+  const withDb = async <T>(
+    fn: (db: Awaited<ReturnType<typeof openMindwtrDb>>['db']) => T | Promise<T>,
+  ): Promise<T> => {
+    const { db } = await getDbHandle();
     return await fn(db);
-  } finally {
-    closeDb(db);
-  }
+  };
+  const close = async (): Promise<void> => {
+    if (!dbHandlePromise) return;
+    const handle = await dbHandlePromise.catch(() => null);
+    dbHandlePromise = null;
+    if (handle) {
+      closeDb(handle.db);
+    }
+  };
+  return { withDb, close };
 };
 
 const buildTaskUpdates = (input: UpdateTaskInput): Partial<Task> => {
@@ -63,55 +76,60 @@ export type MindwtrService = {
   completeTask: (id: string) => Promise<Task>;
   deleteTask: (id: string) => Promise<Task>;
   restoreTask: (id: string) => Promise<Task>;
+  close: () => Promise<void>;
 };
 
-export const createService = (options: DbOptions): MindwtrService => ({
-  listTasks: async (input) => withDb(options, (db) => listTasks(db, input)),
-  listProjects: async () => withDb(options, (db) => listProjects(db)),
-  getTask: async (input) => withDb(options, (db) => getTask(db, input)),
-  addTask: async (input) =>
-    runCoreService(options, async (core) => {
-      if (input.quickAdd) {
-        const projects = await withDb(options, (db) => listProjects(db));
-        const quick = parseQuickAdd(input.quickAdd, projects as CoreProject[]);
-        const title = input.title ?? quick.title ?? input.quickAdd;
-        const props = filterUndefined({
-          ...quick.props,
-          status: (input.status as any) ?? quick.props.status,
-          projectId: input.projectId ?? quick.props.projectId,
-          dueDate: input.dueDate ?? quick.props.dueDate,
-          startTime: input.startTime ?? quick.props.startTime,
-          contexts: input.contexts ?? quick.props.contexts,
-          tags: input.tags ?? quick.props.tags,
-          description: input.description ?? quick.props.description,
-          priority: input.priority ?? quick.props.priority,
-          timeEstimate: input.timeEstimate ?? quick.props.timeEstimate,
+export const createService = (options: DbOptions): MindwtrService => {
+  const { withDb, close } = createDbAccessor(options);
+  return {
+    listTasks: async (input) => withDb((db) => listTasks(db, input)),
+    listProjects: async () => withDb((db) => listProjects(db)),
+    getTask: async (input) => withDb((db) => getTask(db, input)),
+    addTask: async (input) =>
+      runCoreService(options, async (core) => {
+        if (input.quickAdd) {
+          const projects = await withDb((db) => listProjects(db));
+          const quick = parseQuickAdd(input.quickAdd, projects as CoreProject[]);
+          const title = input.title ?? quick.title ?? input.quickAdd;
+          const props = filterUndefined({
+            ...quick.props,
+            status: (input.status as any) ?? quick.props.status,
+            projectId: input.projectId ?? quick.props.projectId,
+            dueDate: input.dueDate ?? quick.props.dueDate,
+            startTime: input.startTime ?? quick.props.startTime,
+            contexts: input.contexts ?? quick.props.contexts,
+            tags: input.tags ?? quick.props.tags,
+            description: input.description ?? quick.props.description,
+            priority: input.priority ?? quick.props.priority,
+            timeEstimate: input.timeEstimate ?? quick.props.timeEstimate,
+          });
+          return core.addTask({ title, props });
+        }
+        return core.addTask({
+          title: input.title ?? '',
+          props: filterUndefined({
+            status: input.status as any,
+            projectId: input.projectId,
+            dueDate: input.dueDate,
+            startTime: input.startTime,
+            contexts: input.contexts,
+            tags: input.tags,
+            description: input.description,
+            priority: input.priority,
+            timeEstimate: input.timeEstimate,
+          }),
         });
-        return core.addTask({ title, props });
-      }
-      return core.addTask({
-        title: input.title ?? '',
-        props: filterUndefined({
-          status: input.status as any,
-          projectId: input.projectId,
-          dueDate: input.dueDate,
-          startTime: input.startTime,
-          contexts: input.contexts,
-          tags: input.tags,
-          description: input.description,
-          priority: input.priority,
-          timeEstimate: input.timeEstimate,
-        }),
-      });
-    }),
-  updateTask: async (input) =>
-    runCoreService(options, async (core) => {
-      return core.updateTask({
-        id: input.id,
-        updates: buildTaskUpdates(input),
-      });
-    }),
-  completeTask: async (id) => runCoreService(options, (core) => core.completeTask(id)),
-  deleteTask: async (id) => runCoreService(options, (core) => core.deleteTask(id)),
-  restoreTask: async (id) => runCoreService(options, (core) => core.restoreTask(id)),
-});
+      }),
+    updateTask: async (input) =>
+      runCoreService(options, async (core) => {
+        return core.updateTask({
+          id: input.id,
+          updates: buildTaskUpdates(input),
+        });
+      }),
+    completeTask: async (id) => runCoreService(options, (core) => core.completeTask(id)),
+    deleteTask: async (id) => runCoreService(options, (core) => core.deleteTask(id)),
+    restoreTask: async (id) => runCoreService(options, (core) => core.restoreTask(id)),
+    close,
+  };
+};

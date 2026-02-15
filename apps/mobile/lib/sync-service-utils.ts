@@ -1,3 +1,5 @@
+import { getFileSyncDir, isSyncFilePath as isCoreSyncFilePath, normalizeSyncBackend, type SyncBackend } from '@mindwtr/core';
+
 const SYNC_FILE_NAME = 'data.json';
 const LEGACY_SYNC_FILE_NAME = 'mindwtr-sync.json';
 const AI_KEY_PATTERNS = [
@@ -8,6 +10,25 @@ const AI_KEY_PATTERNS = [
 ];
 const TOKEN_PATTERN = /(password|pass|token|access_token|api_key|apikey|authorization|username|user|secret|session|cookie)=([^\s&]+)/gi;
 const AUTH_HEADER_PATTERN = /(Authorization:\s*)(Basic|Bearer)\s+[A-Za-z0-9+\/=._-]+/gi;
+const OFFLINE_ERROR_PATTERNS = [
+  /network request failed/i,
+  /internet connection appears to be offline/i,
+  /airplane mode/i,
+  /unable to resolve host/i,
+  /failed host lookup/i,
+  /name or service not known/i,
+  /nodename nor servname provided/i,
+  /unknownhostexception/i,
+  /eai_again/i,
+  /enotfound/i,
+  /network is unreachable/i,
+  /no route to host/i,
+  /software caused connection abort/i,
+  /econnreset/i,
+  /econnaborted/i,
+  /etimedout/i,
+  /failed to connect to/i,
+];
 
 const sanitizeMessage = (value: string): string => {
   let result = value;
@@ -18,8 +39,6 @@ const sanitizeMessage = (value: string): string => {
   }
   return result;
 };
-
-export type SyncBackend = 'file' | 'webdav' | 'cloud' | 'off';
 
 export const formatSyncErrorMessage = (error: unknown, backend: SyncBackend): string => {
   const raw = sanitizeMessage(String(error));
@@ -38,25 +57,17 @@ export const formatSyncErrorMessage = (error: unknown, backend: SyncBackend): st
   return raw;
 };
 
-export const isSyncFilePath = (path: string) =>
-  path.endsWith(`/${SYNC_FILE_NAME}`) || path.endsWith(`/${LEGACY_SYNC_FILE_NAME}`);
+export const isLikelyOfflineSyncError = (errorOrMessage: unknown): boolean => {
+  const message = String(errorOrMessage || '');
+  return OFFLINE_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+};
+
+export const isSyncFilePath = (path: string) => isCoreSyncFilePath(path, SYNC_FILE_NAME, LEGACY_SYNC_FILE_NAME);
 
 export const getFileSyncBaseDir = (syncPath: string) => {
-  const trimmed = syncPath.replace(/\/+$/, '');
-  if (isSyncFilePath(trimmed)) {
-    return trimmed.replace(/\/[^/]+$/, '');
-  }
-  return trimmed;
+  return getFileSyncDir(syncPath, SYNC_FILE_NAME, LEGACY_SYNC_FILE_NAME);
 };
 
-export const resolveBackend = (value: string | null): SyncBackend => {
-  switch (value) {
-    case 'webdav':
-    case 'cloud':
-    case 'off':
-    case 'file':
-      return value;
-    default:
-      return 'file';
-  }
-};
+export const resolveBackend = (value: string | null): SyncBackend => normalizeSyncBackend(value);
+
+export type { SyncBackend };

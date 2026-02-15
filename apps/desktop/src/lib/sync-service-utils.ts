@@ -1,4 +1,11 @@
-import type { AppData, Attachment } from '@mindwtr/core';
+import {
+    getFileSyncDir,
+    isSyncFilePath,
+    normalizePath,
+    normalizeSyncBackend,
+    type Attachment,
+    type SyncBackend,
+} from '@mindwtr/core';
 
 export const ATTACHMENTS_DIR_NAME = 'attachments';
 
@@ -50,55 +57,13 @@ export const hashString = async (value: string): Promise<string> => {
 
 export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-export const getErrorStatus = (error: unknown): number | null => {
-    if (!error || typeof error !== 'object') return null;
-    const anyError = error as { status?: unknown; statusCode?: unknown; response?: { status?: unknown } };
-    const status = anyError.status ?? anyError.statusCode ?? anyError.response?.status;
-    return typeof status === 'number' ? status : null;
+export {
+    getFileSyncDir,
+    isSyncFilePath,
+    normalizePath,
+    normalizeSyncBackend,
+    type SyncBackend,
 };
-
-export const isWebdavRateLimitedError = (error: unknown): boolean => {
-    const status = getErrorStatus(error);
-    if (status === 429 || status === 503) return true;
-    const message = error instanceof Error ? error.message : String(error || '');
-    const normalized = message.toLowerCase();
-    return (
-        normalized.includes('blockedtemporarily') ||
-        normalized.includes('too many requests') ||
-        normalized.includes('rate limit') ||
-        normalized.includes('rate limited')
-    );
-};
-
-export const normalizePath = (input: string) => input.replace(/\\/g, '/').toLowerCase();
-
-export const isSyncFilePath = (path: string, syncFileName: string, legacySyncFileName: string) => {
-    const normalized = normalizePath(path);
-    return normalized.endsWith(`/${syncFileName}`) || normalized.endsWith(`/${legacySyncFileName}`);
-};
-
-export type SyncBackend = 'off' | 'file' | 'webdav' | 'cloud';
-
-export const normalizeSyncBackend = (raw: string | null): SyncBackend => {
-    if (raw === 'off' || raw === 'file' || raw === 'webdav' || raw === 'cloud') return raw;
-    return 'off';
-};
-
-export const getFileSyncDir = (
-    syncPath: string,
-    syncFileName: string,
-    legacySyncFileName: string
-): string => {
-    if (!syncPath) return '';
-    const trimmed = syncPath.replace(/[\\/]+$/, '');
-    if (isSyncFilePath(trimmed, syncFileName, legacySyncFileName)) {
-        const lastSlash = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
-        return lastSlash > -1 ? trimmed.slice(0, lastSlash) : '';
-    }
-    return trimmed;
-};
-
-export const cloneAppData = (data: AppData): AppData => JSON.parse(JSON.stringify(data)) as AppData;
 
 export const stripFileScheme = (uri: string): string => {
     if (!/^file:\/\//i.test(uri)) return uri;

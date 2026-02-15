@@ -1,15 +1,11 @@
-import { useMemo, useState, memo, useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { useState, memo, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import {
-    shallow,
     useTaskStore,
     Task,
     TaskEditorFieldId,
     type Recurrence,
     parseRRuleString,
     Project,
-    Section,
-    PRESET_CONTEXTS,
-    PRESET_TAGS,
     generateUUID,
     parseQuickAdd,
     extractChecklistFromMarkdown,
@@ -25,8 +21,6 @@ import { TaskItemRecurrenceModal } from './Task/TaskItemRecurrenceModal';
 import { AttachmentModals } from './Task/AttachmentModals';
 import { WEEKDAY_FULL_LABELS, WEEKDAY_ORDER } from './Task/recurrence-constants';
 import {
-    DEFAULT_TASK_EDITOR_HIDDEN,
-    DEFAULT_TASK_EDITOR_ORDER,
     getRecurrenceRuleValue,
     getRecurrenceRRuleValue,
     getRecurrenceStrategyValue,
@@ -36,8 +30,10 @@ import { useTaskItemAttachments } from './Task/useTaskItemAttachments';
 import { useTaskItemRecurrence } from './Task/useTaskItemRecurrence';
 import { useTaskItemAi } from './Task/useTaskItemAi';
 import { useTaskItemEditState } from './Task/useTaskItemEditState';
+import { useTaskItemProjectContext } from './Task/useTaskItemProjectContext';
+import { useTaskItemFieldLayout } from './Task/useTaskItemFieldLayout';
 import { useUiStore } from '../store/ui-store';
-import { logError } from '../lib/app-log';
+import { reportError } from '../lib/report-error';
 import { mergeMarkdownChecklist } from './Task/task-item-checklist';
 
 interface TaskItemProps {
@@ -64,6 +60,7 @@ interface TaskItemProps {
     compactMetaEnabled?: boolean;
     enableDoubleClickEdit?: boolean;
     showHoverHint?: boolean;
+    editorPresentation?: 'inline' | 'modal';
 }
 
 export const TaskItem = memo(function TaskItem({
@@ -84,54 +81,33 @@ export const TaskItem = memo(function TaskItem({
     compactMetaEnabled = true,
     enableDoubleClickEdit = false,
     showHoverHint = true,
+    editorPresentation = 'inline',
 }: TaskItemProps) {
-    const {
-        updateTask,
-        deleteTask,
-        moveTask,
-        projects,
-        sections,
-        areas,
-        settings,
-        duplicateTask,
-        resetTaskChecklist,
-        highlightTaskId,
-        setHighlightTask,
-        addProject,
-        addArea,
-        addSection,
-        lockEditing,
-        unlockEditing,
-    } = useTaskStore(
-        (state) => ({
-            updateTask: state.updateTask,
-            deleteTask: state.deleteTask,
-            moveTask: state.moveTask,
-            projects: state.projects,
-            sections: state.sections,
-            areas: state.areas,
-            settings: state.settings,
-            duplicateTask: state.duplicateTask,
-            resetTaskChecklist: state.resetTaskChecklist,
-            highlightTaskId: state.highlightTaskId,
-            setHighlightTask: state.setHighlightTask,
-            addProject: state.addProject,
-            addArea: state.addArea,
-            addSection: state.addSection,
-            lockEditing: state.lockEditing,
-            unlockEditing: state.unlockEditing,
-        }),
-        shallow
+    const updateTask = useTaskStore((state) => state.updateTask);
+    const deleteTask = useTaskStore((state) => state.deleteTask);
+    const moveTask = useTaskStore((state) => state.moveTask);
+    const projects = useTaskStore((state) => state.projects);
+    const sections = useTaskStore((state) => state.sections);
+    const areas = useTaskStore((state) => state.areas);
+    const settings = useTaskStore((state) => state.settings);
+    const duplicateTask = useTaskStore((state) => state.duplicateTask);
+    const resetTaskChecklist = useTaskStore((state) => state.resetTaskChecklist);
+    const restoreTask = useTaskStore((state) => state.restoreTask);
+    const highlightTaskId = useTaskStore((state) => state.highlightTaskId);
+    const setHighlightTask = useTaskStore((state) => state.setHighlightTask);
+    const addProject = useTaskStore((state) => state.addProject);
+    const addArea = useTaskStore((state) => state.addArea);
+    const addSection = useTaskStore((state) => state.addSection);
+    const lockEditing = useTaskStore((state) => state.lockEditing);
+    const unlockEditing = useTaskStore((state) => state.unlockEditing);
+    const setProjectView = useUiStore((state) => state.setProjectView);
+    const setSelectedProjectId = useCallback(
+        (value: string | null) => setProjectView({ selectedProjectId: value }),
+        [setProjectView]
     );
-    const {
-        setSelectedProjectId,
-        editingTaskId,
-        setEditingTaskId,
-    } = useUiStore((state) => ({
-        setSelectedProjectId: (value: string | null) => state.setProjectView({ selectedProjectId: value }),
-        editingTaskId: state.editingTaskId,
-        setEditingTaskId: state.setEditingTaskId,
-    }));
+    const editingTaskId = useUiStore((state) => state.editingTaskId);
+    const setEditingTaskId = useUiStore((state) => state.setEditingTaskId);
+    const showToast = useUiStore((state) => state.showToast);
     const { t } = useLanguage();
     const [isEditing, setIsEditing] = useState(false);
     const [autoFocusTitle, setAutoFocusTitle] = useState(false);
@@ -214,6 +190,7 @@ export const TaskItem = memo(function TaskItem({
     }, [editTextDirection]);
     const [isViewOpen, setIsViewOpen] = useState(false);
     const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const prioritiesEnabled = settings?.features?.priorities === true;
     const timeEstimatesEnabled = settings?.features?.timeEstimates === true;
     const isCompact = settings?.appearance?.density === 'compact';
@@ -270,73 +247,24 @@ export const TaskItem = memo(function TaskItem({
         return () => clearTimeout(timer);
     }, [isHighlighted, setHighlightTask]);
 
-    const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
-    const sectionsByProject = useMemo(() => {
-        const map = new Map<string, Section[]>();
-        sections.forEach((section) => {
-            if (section.deletedAt) return;
-            const list = map.get(section.projectId) ?? [];
-            list.push(section);
-            map.set(section.projectId, list);
-        });
-        map.forEach((list, key) => {
-            list.sort((a, b) => {
-                const aOrder = Number.isFinite(a.order) ? a.order : 0;
-                const bOrder = Number.isFinite(b.order) ? b.order : 0;
-                if (aOrder !== bOrder) return aOrder - bOrder;
-                return a.title.localeCompare(b.title);
-            });
-            map.set(key, list);
-        });
-        return map;
-    }, [sections]);
-    const areaById = useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
-
-    const [projectContext, setProjectContext] = useState<{ projectTitle: string; projectTasks: string[] } | null>(null);
-    const [tagOptions, setTagOptions] = useState<string[]>(Array.from(PRESET_TAGS));
-    const [popularTagOptions, setPopularTagOptions] = useState<string[]>(Array.from(PRESET_TAGS).slice(0, 8));
-    const [allContexts, setAllContexts] = useState<string[]>(Array.from(PRESET_CONTEXTS).sort());
-
-    useEffect(() => {
-        if (!isEditing) return;
-        if (editProjectId) {
-            setEditAreaId('');
-        }
-        const { tasks: storeTasks, projects: storeProjects } = useTaskStore.getState();
-        const projectId = editProjectId || task.projectId;
-        const project = propProject || (projectId ? storeProjects.find((item) => item.id === projectId) : undefined);
-        if (projectId) {
-            const projectTasks = storeTasks
-                .filter((t) => t.projectId === projectId && t.id !== task.id && !t.deletedAt)
-                .map((t) => `${t.title}${t.status ? ` (${t.status})` : ''}`)
-                .filter(Boolean)
-                .slice(0, 20);
-            setProjectContext({
-                projectTitle: project?.title || '',
-                projectTasks,
-            });
-        } else {
-            setProjectContext(null);
-        }
-
-        const tagCounts = new Map<string, number>();
-        const tags = new Set<string>(PRESET_TAGS);
-        const contexts = new Set<string>(PRESET_CONTEXTS);
-        storeTasks.forEach((t) => {
-            t.tags?.forEach((tag) => {
-                tags.add(tag);
-                tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
-            });
-            t.contexts?.forEach((ctx) => contexts.add(ctx));
-        });
-        setTagOptions(Array.from(tags).filter(Boolean));
-
-        const sortedTags = Array.from(tagCounts.entries())
-            .sort((a, b) => b[1] - a[1])
-            .map(([tag]) => tag);
-        setPopularTagOptions(Array.from(new Set([...sortedTags, ...PRESET_TAGS])).slice(0, 8));
-        setAllContexts(Array.from(contexts).sort());
-    }, [editProjectId, isEditing, propProject, setEditAreaId, task.id, task.projectId]);
+    const {
+        projectById,
+        sectionsByProject,
+        areaById,
+        projectContext,
+        tagOptions,
+        popularTagOptions,
+        allContexts,
+    } = useTaskItemProjectContext({
+        task,
+        propProject,
+        projects,
+        sections,
+        areas,
+        isEditing,
+        editProjectId,
+        setEditAreaId,
+    });
 
     useEffect(() => {
         const projectId = editProjectId || task.projectId || '';
@@ -431,149 +359,38 @@ export const TaskItem = memo(function TaskItem({
     const visibleEditAttachments = editAttachments.filter((a) => !a.deletedAt);
     const wasEditingRef = useRef(false);
 
-    const savedOrder = settings?.gtd?.taskEditor?.order ?? [];
-    const savedHidden = settings?.gtd?.taskEditor?.hidden ?? DEFAULT_TASK_EDITOR_HIDDEN;
-    const disabledFields = useMemo(() => {
-        const disabled = new Set<TaskEditorFieldId>();
-        if (!prioritiesEnabled) disabled.add('priority');
-        if (!timeEstimatesEnabled) disabled.add('timeEstimate');
-        return disabled;
-    }, [prioritiesEnabled, timeEstimatesEnabled]);
-
-    const taskEditorOrder = useMemo(() => {
-        const known = new Set(DEFAULT_TASK_EDITOR_ORDER);
-        const normalized = savedOrder.filter((id) => known.has(id));
-        const missing = DEFAULT_TASK_EDITOR_ORDER.filter((id) => !normalized.includes(id));
-        return [...normalized, ...missing].filter((id) => !disabledFields.has(id));
-    }, [savedOrder, disabledFields]);
-    const hiddenSet = useMemo(() => {
-        const known = new Set(taskEditorOrder);
-        const next = new Set(savedHidden.filter((id) => known.has(id)));
-        if (settings?.features?.priorities === false) next.add('priority');
-        if (settings?.features?.timeEstimates === false) next.add('timeEstimate');
-        return next;
-    }, [savedHidden, settings?.features?.priorities, settings?.features?.timeEstimates, taskEditorOrder]);
-    const isReference = editStatus === 'reference';
-    const referenceHiddenFields = useMemo(() => new Set<TaskEditorFieldId>([
-        'startTime',
-        'dueDate',
-        'reviewAt',
-        'recurrence',
-        'priority',
-        'timeEstimate',
-        'checklist',
-    ]), []);
-
-    const hasValue = useCallback((fieldId: TaskEditorFieldId) => {
-        switch (fieldId) {
-            case 'status':
-                return task.status !== 'inbox';
-            case 'project':
-                return Boolean(editProjectId || task.projectId);
-            case 'section':
-                return Boolean(editSectionId || task.sectionId);
-            case 'area':
-                return Boolean(editAreaId || task.areaId);
-            case 'priority':
-                if (!prioritiesEnabled) return false;
-                return Boolean(editPriority);
-            case 'contexts':
-                return Boolean(editContexts.trim());
-            case 'description':
-                return Boolean(editDescription.trim());
-            case 'textDirection':
-                return editTextDirection !== undefined && editTextDirection !== 'auto';
-            case 'tags':
-                return Boolean(editTags.trim());
-            case 'timeEstimate':
-                if (!timeEstimatesEnabled) return false;
-                return Boolean(editTimeEstimate);
-            case 'recurrence':
-                return Boolean(editRecurrence);
-            case 'startTime':
-                return Boolean(editStartTime);
-            case 'dueDate':
-                return Boolean(editDueDate);
-            case 'reviewAt':
-                return Boolean(editReviewAt);
-            case 'attachments':
-                return visibleEditAttachments.length > 0;
-            case 'checklist':
-                return (task.checklist || []).length > 0;
-            default:
-                return false;
-        }
-    }, [
+    const {
+        showProjectField,
+        showAreaField,
+        showSectionField,
+        showDueDate,
+        alwaysFields,
+        schedulingFields,
+        organizationFields,
+        detailsFields,
+        sectionCounts,
+    } = useTaskItemFieldLayout({
+        settings,
+        task,
+        editProjectId,
+        editSectionId,
+        editAreaId,
+        editPriority,
         editContexts,
         editDescription,
         editTextDirection,
         editDueDate,
-        editPriority,
         editRecurrence,
         editReviewAt,
-        editSectionId,
         editStartTime,
         editTags,
         editTimeEstimate,
         prioritiesEnabled,
-        task.checklist,
-        task.status,
-        task.sectionId,
         timeEstimatesEnabled,
-        visibleEditAttachments.length,
-        editAreaId,
-        task.areaId,
-    ]);
-
-    const isFieldVisible = useCallback(
-        (fieldId: TaskEditorFieldId) => {
-            if (isReference && referenceHiddenFields.has(fieldId)) return false;
-            return !hiddenSet.has(fieldId) || hasValue(fieldId);
-        },
-        [hasValue, hiddenSet, isReference, referenceHiddenFields]
-    );
-    const showProjectField = isFieldVisible('project');
-    const showAreaField = isFieldVisible('area') && !editProjectId;
-    const showSectionField = isFieldVisible('section') && !!editProjectId;
-    const showDueDate = isFieldVisible('dueDate');
+        visibleEditAttachmentsLength: visibleEditAttachments.length,
+    });
     const activeProjectId = editProjectId || task.projectId || '';
     const projectSections = activeProjectId ? (sectionsByProject.get(activeProjectId) ?? []) : [];
-    const orderFields = useCallback(
-        (fields: TaskEditorFieldId[]) => {
-            const ordered = taskEditorOrder.filter((id) => fields.includes(id));
-            const missing = fields.filter((id) => !ordered.includes(id));
-            return [...ordered, ...missing];
-        },
-        [taskEditorOrder]
-    );
-    const filterVisibleFields = useCallback(
-        (fields: TaskEditorFieldId[]) => fields.filter((fieldId) => !hiddenSet.has(fieldId) || hasValue(fieldId)),
-        [hiddenSet, hasValue]
-    );
-    const alwaysFields = useMemo(
-        () => orderFields(['status']).filter(isFieldVisible),
-        [orderFields, isFieldVisible]
-    );
-    const schedulingFields = useMemo(
-        () => filterVisibleFields(orderFields(['startTime', 'recurrence', 'reviewAt'])),
-        [filterVisibleFields, orderFields]
-    );
-    const organizationFields = useMemo(
-        () => filterVisibleFields(orderFields(['contexts', 'tags', 'priority', 'timeEstimate'])),
-        [filterVisibleFields, orderFields]
-    );
-    const detailsFields = useMemo(
-        () => filterVisibleFields(orderFields(['description', 'textDirection', 'attachments', 'checklist'])),
-        [filterVisibleFields, orderFields]
-    );
-    const sectionCounts = useMemo(
-        () => ({
-            scheduling: schedulingFields.filter((fieldId) => hasValue(fieldId)).length,
-            organization: organizationFields.filter((fieldId) => hasValue(fieldId)).length,
-            details: detailsFields.filter((fieldId) => hasValue(fieldId)).length,
-        }),
-        [detailsFields, hasValue, organizationFields, schedulingFields]
-    );
 
     const renderField = (fieldId: TaskEditorFieldId) => (
         <TaskItemFieldRenderer
@@ -701,7 +518,7 @@ export const TaskItem = memo(function TaskItem({
                 const created = await addProject(projectTitle, DEFAULT_PROJECT_COLOR);
                 resolvedProjectId = created?.id;
             } catch (error) {
-                void logError(error, { scope: 'task', step: 'quickAddProject' });
+                reportError('Failed to create project from quick add', error);
             }
         }
         if (!resolvedProjectId) {
@@ -814,11 +631,98 @@ export const TaskItem = memo(function TaskItem({
         editReviewAt,
         task,
     ]);
+    const isModalEditor = editorPresentation === 'modal';
+    const handleEditorCancel = useCallback(() => {
+        if (hasPendingEdits()) {
+            setShowDiscardConfirm(true);
+            return;
+        }
+        handleDiscardChanges();
+    }, [handleDiscardChanges, hasPendingEdits]);
+    const renderEditor = () => (
+        <TaskItemEditor
+            t={t}
+            editTitle={editTitle}
+            setEditTitle={setEditTitle}
+            autoFocusTitle={autoFocusTitle}
+            resetCopilotDraft={resetCopilotDraft}
+            aiEnabled={aiEnabled}
+            isAIWorking={isAIWorking}
+            handleAIClarify={handleAIClarify}
+            handleAIBreakdown={handleAIBreakdown}
+            copilotSuggestion={copilotSuggestion}
+            copilotApplied={copilotApplied}
+            applyCopilotSuggestion={applyCopilotSuggestion}
+            copilotContext={copilotContext}
+            copilotEstimate={copilotEstimate}
+            copilotTags={copilotSuggestion?.tags ?? []}
+            timeEstimatesEnabled={timeEstimatesEnabled}
+            aiError={aiError}
+            aiBreakdownSteps={aiBreakdownSteps}
+            onAddBreakdownSteps={() => {
+                if (!aiBreakdownSteps?.length) return;
+                const newItems = aiBreakdownSteps.map((step) => ({
+                    id: generateUUID(),
+                    title: step,
+                    isCompleted: false,
+                }));
+                updateTask(task.id, { checklist: [...(task.checklist || []), ...newItems] });
+                clearAiBreakdown();
+            }}
+            onDismissBreakdown={clearAiBreakdown}
+            aiClarifyResponse={aiClarifyResponse}
+            onSelectClarifyOption={(action) => {
+                setEditTitle(action);
+                clearAiClarify();
+            }}
+            onApplyAISuggestion={() => {
+                if (aiClarifyResponse?.suggestedAction) {
+                    applyAISuggestion(aiClarifyResponse.suggestedAction);
+                }
+            }}
+            onDismissClarify={clearAiClarify}
+            projects={projects}
+            areas={areas}
+            editProjectId={editProjectId}
+            setEditProjectId={setEditProjectId}
+            sections={projectSections}
+            editSectionId={editSectionId}
+            setEditSectionId={setEditSectionId}
+            editAreaId={editAreaId}
+            setEditAreaId={setEditAreaId}
+            onCreateProject={handleCreateProject}
+            onCreateArea={handleCreateArea}
+            onCreateSection={handleCreateSection}
+            showProjectField={showProjectField}
+            showAreaField={showAreaField}
+            showSectionField={showSectionField}
+            showDueDate={showDueDate}
+            editDueDate={editDueDate}
+            setEditDueDate={setEditDueDate}
+            alwaysFields={alwaysFields}
+            schedulingFields={schedulingFields}
+            organizationFields={organizationFields}
+            detailsFields={detailsFields}
+            sectionCounts={sectionCounts}
+            renderField={renderField}
+            editLocation={editLocation}
+            setEditLocation={setEditLocation}
+            editTextDirection={editTextDirection}
+            inputContexts={allContexts}
+            onDuplicateTask={() => duplicateTask(task.id, false)}
+            onCancel={handleEditorCancel}
+            onSubmit={handleSubmit}
+        />
+    );
 
     const selectAriaLabel = (() => {
         const label = t('task.select');
         return label === 'task.select' ? 'Select task' : label;
     })();
+    const resolveText = useCallback((key: string, fallback: string) => {
+        const value = t(key);
+        return value === key ? fallback : value;
+    }, [t]);
 
     return (
         <>
@@ -851,87 +755,9 @@ export const TaskItem = memo(function TaskItem({
                         />
                     )}
 
-                    {isEditing ? (
+                    {isEditing && !isModalEditor ? (
                         <div className="flex-1 min-w-0">
-                            <TaskItemEditor
-                                t={t}
-                                editTitle={editTitle}
-                                setEditTitle={setEditTitle}
-                                autoFocusTitle={autoFocusTitle}
-                                resetCopilotDraft={resetCopilotDraft}
-                                aiEnabled={aiEnabled}
-                                isAIWorking={isAIWorking}
-                                handleAIClarify={handleAIClarify}
-                                handleAIBreakdown={handleAIBreakdown}
-                                copilotSuggestion={copilotSuggestion}
-                                copilotApplied={copilotApplied}
-                                applyCopilotSuggestion={applyCopilotSuggestion}
-                                copilotContext={copilotContext}
-                                copilotEstimate={copilotEstimate}
-                                copilotTags={copilotSuggestion?.tags ?? []}
-                                timeEstimatesEnabled={timeEstimatesEnabled}
-                                aiError={aiError}
-                                aiBreakdownSteps={aiBreakdownSteps}
-                                onAddBreakdownSteps={() => {
-                                    if (!aiBreakdownSteps?.length) return;
-                                    const newItems = aiBreakdownSteps.map((step) => ({
-                                        id: generateUUID(),
-                                        title: step,
-                                        isCompleted: false,
-                                    }));
-                                    updateTask(task.id, { checklist: [...(task.checklist || []), ...newItems] });
-                                    clearAiBreakdown();
-                                }}
-                                onDismissBreakdown={clearAiBreakdown}
-                                aiClarifyResponse={aiClarifyResponse}
-                                onSelectClarifyOption={(action) => {
-                                    setEditTitle(action);
-                                    clearAiClarify();
-                                }}
-                                onApplyAISuggestion={() => {
-                                    if (aiClarifyResponse?.suggestedAction) {
-                                        applyAISuggestion(aiClarifyResponse.suggestedAction);
-                                    }
-                                }}
-                                onDismissClarify={clearAiClarify}
-                                projects={projects}
-                                areas={areas}
-                                editProjectId={editProjectId}
-                                setEditProjectId={setEditProjectId}
-                                sections={projectSections}
-                                editSectionId={editSectionId}
-                                setEditSectionId={setEditSectionId}
-                                editAreaId={editAreaId}
-                                setEditAreaId={setEditAreaId}
-                                onCreateProject={handleCreateProject}
-                                onCreateArea={handleCreateArea}
-                                onCreateSection={handleCreateSection}
-                                showProjectField={showProjectField}
-                                showAreaField={showAreaField}
-                                showSectionField={showSectionField}
-                                showDueDate={showDueDate}
-                                editDueDate={editDueDate}
-                                setEditDueDate={setEditDueDate}
-                                alwaysFields={alwaysFields}
-                                schedulingFields={schedulingFields}
-                                organizationFields={organizationFields}
-                                detailsFields={detailsFields}
-                                sectionCounts={sectionCounts}
-                                renderField={renderField}
-                                editLocation={editLocation}
-                                setEditLocation={setEditLocation}
-                                editTextDirection={editTextDirection}
-                                inputContexts={allContexts}
-                                onDuplicateTask={() => duplicateTask(task.id, false)}
-                                onCancel={() => {
-                                    if (hasPendingEdits()) {
-                                        setShowDiscardConfirm(true);
-                                        return;
-                                    }
-                                    handleDiscardChanges();
-                                }}
-                                onSubmit={handleSubmit}
-                            />
+                            {renderEditor()}
                         </div>
                     ) : (
                         <TaskItemDisplay
@@ -945,7 +771,7 @@ export const TaskItem = memo(function TaskItem({
                                 onToggleSelect,
                                 onToggleView: () => setIsViewOpen((prev) => !prev),
                                 onEdit: startEditing,
-                                onDelete: () => deleteTask(task.id),
+                                onDelete: () => setShowDeleteConfirm(true),
                                 onDuplicate: () => duplicateTask(task.id, false),
                                 onStatusChange: (status) => moveTask(task.id, status),
                                 onOpenProject: project ? handleOpenProject : undefined,
@@ -973,6 +799,26 @@ export const TaskItem = memo(function TaskItem({
                     )}
                 </div>
             </div>
+            {isEditing && isModalEditor && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={t('taskEdit.editTask') || 'Edit task'}
+                    onMouseDown={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        handleEditorCancel();
+                    }}
+                >
+                    <div
+                        className="w-[min(1100px,92vw)] max-h-[90vh] rounded-xl border border-border bg-card p-4 shadow-2xl"
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        {renderEditor()}
+                    </div>
+                </div>
+            )}
             {showCustomRecurrence && (
                 <TaskItemRecurrenceModal
                     t={t}
@@ -1012,16 +858,39 @@ export const TaskItem = memo(function TaskItem({
                     }}
                 />
             )}
+            {showDeleteConfirm && (
+                <ConfirmModal
+                    isOpen={showDeleteConfirm}
+                    title={resolveText('common.delete', 'Delete task')}
+                    description={resolveText('list.confirmBatchDelete', 'Delete selected tasks?')}
+                    confirmLabel={resolveText('common.delete', 'Delete')}
+                    cancelLabel={t('common.cancel')}
+                    onCancel={() => setShowDeleteConfirm(false)}
+                    onConfirm={() => {
+                        setShowDeleteConfirm(false);
+                        void deleteTask(task.id);
+                        const restoreLabel = resolveText('trash.restoreToInbox', 'Restore');
+                        const deletedMessage = resolveText('task.aria.delete', 'Task deleted');
+                        showToast(
+                            deletedMessage,
+                            'info',
+                            5000,
+                            {
+                                label: restoreLabel,
+                                onClick: () => {
+                                    void restoreTask(task.id);
+                                },
+                            }
+                        );
+                    }}
+                />
+            )}
             {showDiscardConfirm && (
                 <ConfirmModal
                     isOpen={showDiscardConfirm}
-                    title={t('taskEdit.discardChanges') === 'taskEdit.discardChanges'
-                        ? 'Discard unsaved changes?'
-                        : t('taskEdit.discardChanges')}
-                    description={t('taskEdit.discardChangesDesc') === 'taskEdit.discardChangesDesc'
-                        ? 'Your changes will be lost if you leave now.'
-                        : t('taskEdit.discardChangesDesc')}
-                    confirmLabel={t('common.discard') === 'common.discard' ? 'Discard' : t('common.discard')}
+                    title={resolveText('taskEdit.discardChanges', 'Discard unsaved changes?')}
+                    description={resolveText('taskEdit.discardChangesDesc', 'Your changes will be lost if you leave now.')}
+                    confirmLabel={resolveText('common.discard', 'Discard')}
                     cancelLabel={t('common.cancel')}
                     onCancel={() => setShowDiscardConfirm(false)}
                     onConfirm={() => {

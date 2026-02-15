@@ -66,6 +66,23 @@ const allowWrite = Boolean(flags.write || flags.allowWrite || flags.allowWrites)
 const readonly = Boolean(flags.readonly) || !allowWrite;
 const keepAlive = !(flags.nowait || flags.noWait);
 const service = createService({ dbPath, readonly });
+const closeService = () => {
+  void service.close().catch((error) => {
+    logError('Failed to close database connection', error);
+  });
+};
+
+process.on('exit', () => {
+  closeService();
+});
+process.on('SIGINT', () => {
+  closeService();
+  process.exit(0);
+});
+process.on('SIGTERM', () => {
+  closeService();
+  process.exit(0);
+});
 
 const server = new McpServer({
   name: 'mindwtr-mcp-server',

@@ -104,20 +104,21 @@ export function SwipeableTaskItem({
     const [showChecklist, setShowChecklist] = useState(false);
     const [localChecklist, setLocalChecklist] = useState(task.checklist || []);
     const checklistUpdateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const pendingChecklist = useRef<Task['checklist'] | null>(null);
+    const pendingChecklist = useRef<{ taskId: string; checklist: Task['checklist'] } | null>(null);
     const checklistTaskIdRef = useRef(task.id);
 
     const flushPendingChecklist = useCallback(() => {
-        const taskId = checklistTaskIdRef.current;
         const pending = pendingChecklist.current;
         if (!pending) return;
+        const { taskId } = pending;
+        const checklist = pending.checklist ?? [];
         const latestTask = useTaskStore.getState().tasks.find((t) => t.id === taskId);
         if (!latestTask || latestTask.deletedAt) {
             pendingChecklist.current = null;
             return;
         }
         const isListMode = latestTask.taskMode === 'list';
-        const allComplete = pending.length > 0 && pending.every((entry) => entry.isCompleted);
+        const allComplete = checklist.length > 0 && checklist.every((entry) => entry.isCompleted);
         const nextStatus = isListMode
             ? allComplete
                 ? 'done'
@@ -125,7 +126,7 @@ export function SwipeableTaskItem({
                     ? 'next'
                     : undefined
             : undefined;
-        updateTask(taskId, { checklist: pending, ...(nextStatus ? { status: nextStatus } : {}) });
+        updateTask(taskId, { checklist, ...(nextStatus ? { status: nextStatus } : {}) });
         pendingChecklist.current = null;
     }, [updateTask]);
 
@@ -137,7 +138,6 @@ export function SwipeableTaskItem({
         if (checklistTaskIdRef.current !== task.id) {
             flushPendingChecklist();
             checklistTaskIdRef.current = task.id;
-            pendingChecklist.current = null;
             if (checklistUpdateTimer.current) {
                 clearTimeout(checklistUpdateTimer.current);
                 checklistUpdateTimer.current = null;
@@ -359,6 +359,7 @@ export function SwipeableTaskItem({
                                         event.stopPropagation();
                                         toggleFocus();
                                     }}
+                                    hitSlop={8}
                                     style={[
                                         styles.focusButton,
                                         { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(15, 23, 42, 0.08)' }
@@ -421,12 +422,13 @@ export function SwipeableTaskItem({
                                                 i === index ? { ...it, isCompleted: !it.isCompleted } : it
                                             );
                                             setLocalChecklist(newList);
-                                            pendingChecklist.current = newList;
+                                            pendingChecklist.current = { taskId, checklist: newList };
                                             if (checklistUpdateTimer.current) {
                                                 clearTimeout(checklistUpdateTimer.current);
                                             }
                                             checklistUpdateTimer.current = setTimeout(() => {
-                                                if (checklistTaskIdRef.current !== taskId) return;
+                                                const pending = pendingChecklist.current;
+                                                if (!pending || pending.taskId !== taskId) return;
                                                 flushPendingChecklist();
                                                 checklistUpdateTimer.current = null;
                                             }, 200);
@@ -461,6 +463,7 @@ export function SwipeableTaskItem({
                                 e.stopPropagation();
                                 setShowStatusMenu(true);
                             }}
+                            hitSlop={8}
                             style={[
                                 styles.statusBadge,
                                 { backgroundColor: statusColors.bg, borderColor: statusColors.border }
@@ -576,9 +579,13 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     focusButton: {
-        paddingHorizontal: 6,
-        paddingVertical: 2,
+        minWidth: 44,
+        minHeight: 44,
+        paddingHorizontal: 8,
+        paddingVertical: 8,
         borderRadius: 10,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     focusButtonText: {
         fontSize: 16,
@@ -722,11 +729,13 @@ const styles = StyleSheet.create({
         opacity: 0.6,
     },
     statusBadge: {
-        paddingHorizontal: 10,
-        paddingVertical: 4,
+        minHeight: 44,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
         borderRadius: 8,
         marginLeft: 12,
         alignItems: 'center',
+        justifyContent: 'center',
     },
     statusText: {
         fontSize: 10,

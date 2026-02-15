@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { createWithEqualityFn } from 'zustand/traditional';
 export { shallow } from 'zustand/shallow';
 
 import type { AppData } from './types';
@@ -26,10 +26,14 @@ export const setStorageAdapter = (adapter: StorageAdapter) => {
 export const getStorageAdapter = () => storage;
 
 // Save queue helper - coalesces writes while ensuring the latest snapshot is persisted quickly.
-let pendingData: AppData | null = null;
-let pendingOnError: Array<(msg: string) => void> = [];
+type PendingSave = {
+    version: number;
+    data: AppData;
+    onErrorCallbacks: Array<(msg: string) => void>;
+};
+
+let pendingSaves: PendingSave[] = [];
 let pendingVersion = 0;
-let pendingDataVersion = 0;
 let savedVersion = 0;
 let saveInFlight: Promise<void> | null = null;
 
@@ -41,9 +45,11 @@ let saveInFlight: Promise<void> | null = null;
  */
 const debouncedSave = (data: AppData, onError?: (msg: string) => void) => {
     pendingVersion += 1;
-    pendingData = sanitizeAppDataForStorage(data);
-    pendingDataVersion = pendingVersion;
-    if (onError) pendingOnError.push(onError);
+    pendingSaves.push({
+        version: pendingVersion,
+        data: sanitizeAppDataForStorage(data),
+        onErrorCallbacks: onError ? [onError] : [],
+    });
     void flushPendingSave().catch((error) => {
         logError('Failed to flush pending save', { scope: 'store', category: 'storage', error });
         try {
@@ -64,16 +70,29 @@ export const flushPendingSave = async (): Promise<void> => {
             await saveInFlight;
             continue;
         }
-        if (!pendingData) return;
-        if (pendingDataVersion === savedVersion) return;
-        const targetVersion = pendingDataVersion;
-        const dataToSave = pendingData;
-        const onErrorCallbacks = pendingOnError;
-        pendingOnError = [];
+        const currentQueue = Array.isArray(pendingSaves) ? pendingSaves : [];
+        if (currentQueue.length === 0) return;
+        pendingSaves = [];
+        const queuedSaves = currentQueue.filter((item): item is PendingSave =>
+            !!item &&
+            typeof item.version === 'number' &&
+            !!item.data &&
+            Array.isArray(item.onErrorCallbacks)
+        );
+        if (queuedSaves.length === 0) continue;
+        const latestSave = queuedSaves[queuedSaves.length - 1];
+        if (!latestSave || latestSave.version <= savedVersion) continue;
+        const targetVersion = latestSave.version;
+        const dataToSave = latestSave.data;
+        const onErrorCallbacks = queuedSaves
+            .flatMap((item) => item.onErrorCallbacks)
+            .filter((callback): callback is (msg: string) => void => typeof callback === 'function');
+        let saveSucceeded = false;
         saveInFlight = Promise.resolve()
             .then(() => storage.saveData(dataToSave))
             .then(() => {
                 savedVersion = targetVersion;
+                saveSucceeded = true;
             })
             .catch((e) => {
                 logError('Failed to flush pending save', { scope: 'store', category: 'storage', error: e });
@@ -88,12 +107,23 @@ export const flushPendingSave = async (): Promise<void> => {
             })
             .finally(() => {
                 saveInFlight = null;
+                if (!saveSucceeded) {
+                    const hasNewerQueuedSave = pendingSaves.some((item) => item.version > targetVersion);
+                    if (!hasNewerQueuedSave) {
+                        pendingSaves.unshift({
+                            version: targetVersion,
+                            data: dataToSave,
+                            onErrorCallbacks: [],
+                        });
+                    }
+                }
             });
         await saveInFlight;
+        if (!saveSucceeded) return;
     }
 };
 
-export const useTaskStore = create<TaskStore>((set, get) => ({
+export const useTaskStore = createWithEqualityFn<TaskStore>()((set, get) => ({
     tasks: [],
     projects: [],
     sections: [],
