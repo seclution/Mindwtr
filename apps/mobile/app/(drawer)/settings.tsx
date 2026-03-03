@@ -1536,6 +1536,16 @@ export default function SettingsPage() {
                 );
                 return;
             }
+            if (/temporary Inbox location|re-select a folder in Settings -> Data & Sync/i.test(message)) {
+                Alert.alert(
+                    localize('Sync folder access expired', '同步目录访问已失效'),
+                    localize(
+                        'The selected iOS sync file is in a temporary read-only location. Please go to Settings → Data & Sync → Select Folder and pick a writable cloud file again.',
+                        '当前 iOS 同步文件位于临时只读目录。请前往「设置 → 数据与同步 → 选择文件夹」，重新选择可写的云端文件。'
+                    )
+                );
+                return;
+            }
             if (/read-only|read only|not writable|isn't writable|permission denied|EACCES/i.test(message)) {
                 Alert.alert(
                     localize('Sync folder is read-only', '同步文件夹不可写'),

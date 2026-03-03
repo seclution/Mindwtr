@@ -14,7 +14,9 @@
       "bundleIdentifier": "tech.dongdongbh.mindwtr",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Mindwtr uses the microphone to capture voice notes.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "UIFileSharingEnabled": true
       },
       "buildNumber": "4"
     },

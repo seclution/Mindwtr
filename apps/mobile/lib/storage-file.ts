@@ -16,6 +16,7 @@ interface PickResult extends AppData {
 const SYNC_FILE_NAME = 'data.json';
 const LEGACY_SYNC_FILE_NAME = 'mindwtr-sync.json';
 const READONLY_FOLDER_MESSAGE = 'Selected folder is read-only. Please choose a writable folder or make it available offline.';
+const IOS_TEMP_INBOX_PATTERN = /\/tmp\/[^/\s]*-Inbox\//i;
 const syncUriResolutionCache = new Map<string, string>();
 
 const isReadOnlyError = (error: unknown): boolean => {
@@ -116,13 +117,7 @@ const buildTreeDocumentUri = (context: SafContext, documentId: string): string =
     return `${context.prefix}/tree/${context.treeIdEncoded}/document/${documentIdEncoded}`;
 };
 
-const getParentDirectoryUri = (fileUri: string): string | null => {
-    const withoutQuery = fileUri.split('?')[0]?.split('#')[0] ?? fileUri;
-    const normalized = withoutQuery.replace(/\/+$/, '');
-    const lastSlash = normalized.lastIndexOf('/');
-    if (lastSlash <= 0) return null;
-    return normalized.slice(0, lastSlash);
-};
+const isIosTemporaryInboxUri = (uri: string): boolean => IOS_TEMP_INBOX_PATTERN.test(uri);
 
 const listDirectoryForSyncFile = async (directoryUri: string): Promise<string | null> => {
     if (!StorageAccessFramework?.readDirectoryAsync) return null;
@@ -377,23 +372,15 @@ const pickAndParseIosSyncFolder = async (): Promise<PickResult | null> => {
         if (result.canceled) return null;
         const pickedFileUri = result.assets[0]?.uri;
         if (!pickedFileUri) return null;
-        const directoryUri = getParentDirectoryUri(pickedFileUri);
-        if (!directoryUri) {
-            throw new Error('Unable to determine folder from selected file');
+
+        if (isIosTemporaryInboxUri(pickedFileUri)) {
+            throw new Error('Selected iOS sync file is in a temporary Inbox location and is read-only. Re-select a folder in Settings -> Data & Sync.');
         }
 
-        let shouldUsePickedFileAsSyncTarget = false;
-        try {
-            await assertIosDirectoryWritable(directoryUri);
-        } catch (error) {
-            if (!isReadOnlyError(error)) throw error;
-            await assertIosFileWritable(pickedFileUri);
-            shouldUsePickedFileAsSyncTarget = true;
-        }
+        await assertIosFileWritable(pickedFileUri);
 
-        if (shouldUsePickedFileAsSyncTarget) {
-            const pickedContent = await readFileText(pickedFileUri);
-            if (!pickedContent) return emptyPickResult(pickedFileUri);
+        const pickedContent = await readFileText(pickedFileUri);
+        if (pickedContent) {
             try {
                 const data = parseAppData(pickedContent);
                 return { ...data, __fileUri: pickedFileUri };
@@ -402,37 +389,7 @@ const pickAndParseIosSyncFolder = async (): Promise<PickResult | null> => {
             }
         }
 
-        const primaryFileUri = buildSyncFileUri(directoryUri, SYNC_FILE_NAME);
-        const legacyFileUri = buildSyncFileUri(directoryUri, LEGACY_SYNC_FILE_NAME);
-        let fileUri = primaryFileUri;
-        let fileContent = await readFileText(primaryFileUri);
-        if (fileContent === null) {
-            const legacyContent = await readFileText(legacyFileUri);
-            if (legacyContent !== null) {
-                fileUri = legacyFileUri;
-                fileContent = legacyContent;
-            }
-        }
-
-        if (fileContent) {
-            const data = parseAppData(fileContent);
-            return { ...data, __fileUri: fileUri };
-        }
-
-        const pickedContent = await readFileText(pickedFileUri);
-        if (pickedContent) {
-            try {
-                const data = parseAppData(pickedContent);
-                return { ...data, __fileUri: primaryFileUri };
-            } catch {
-                void logWarn('Selected file is not a Mindwtr sync JSON; initializing empty sync file', {
-                    scope: 'sync',
-                    extra: { operation: 'import' },
-                });
-            }
-        }
-
-        return emptyPickResult(primaryFileUri);
+        return emptyPickResult(pickedFileUri);
     };
 
     try {
