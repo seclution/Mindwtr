@@ -5,7 +5,7 @@ import type { Task, Project } from '@mindwtr/core';
 import { useLanguage } from '../../contexts/language-context';
 import { cn } from '../../lib/utils';
 import { useUiStore } from '../../store/ui-store';
-import { Clock, Star, Calendar, AlertCircle, ArrowRight, Filter, Folder, List, type LucideIcon } from 'lucide-react';
+import { Clock, Star, Calendar, ArrowRight, Filter, Folder, List, type LucideIcon } from 'lucide-react';
 import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
 import { checkBudget } from '../../config/performanceBudgets';
 import { TaskItem } from '../TaskItem';
@@ -214,7 +214,6 @@ export function AgendaView() {
     // Categorize tasks
     const sections = useMemo(() => {
         const now = new Date();
-        const todayStr = now.toDateString();
         const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
         const isDeferred = (task: Task) => {
             const start = safeParseDate(task.startTime);
@@ -241,7 +240,7 @@ export function AgendaView() {
         };
         const tasksByProject = new Map<string, Task[]>();
         for (const task of filteredActiveTasks) {
-            if (task.deletedAt || task.status !== 'next' || !task.projectId) continue;
+            if (task.deletedAt || !task.projectId) continue;
             if (!sequentialProjectIds.has(task.projectId)) continue;
             const list = tasksByProject.get(task.projectId) ?? [];
             list.push(task);
@@ -268,48 +267,47 @@ export function AgendaView() {
             });
             if (firstTaskId) sequentialFirstTasks.add(firstTaskId);
         });
-
-        const overdue = filteredActiveTasks.filter(t => {
-            if (!t.dueDate) return false;
-            const dueDate = safeParseDueDate(t.dueDate);
-            return dueDate && dueDate < now && !t.isFocusedToday && !isDeferred(t);
-        });
-        const dueToday = filteredActiveTasks.filter(t => {
-            if (!t.dueDate) return false;
-            const dueDate = safeParseDueDate(t.dueDate);
-            return dueDate && dueDate.toDateString() === todayStr &&
-                !t.isFocusedToday && !isDeferred(t);
-        });
-        const nextActions = filteredActiveTasks.filter(t => {
-            if (t.status !== 'next' || t.isFocusedToday) return false;
-            if (isDeferred(t)) return false;
-            if (t.projectId && sequentialProjectIds.has(t.projectId)) {
-                return sequentialFirstTasks.has(t.id);
-            }
-            return true;
-        });
-        const starting = filteredActiveTasks.filter((task) => {
+        const isSequentialBlocked = (task: Task) => {
+            if (!task.projectId) return false;
+            if (!sequentialProjectIds.has(task.projectId)) return false;
+            return !sequentialFirstTasks.has(task.id);
+        };
+        const schedule = filteredActiveTasks.filter((task) => {
             if (task.isFocusedToday) return false;
-            if (task.status === 'next') return false;
-            if (task.dueDate) return false;
+            if (isSequentialBlocked(task)) return false;
+            const dueDate = safeParseDueDate(task.dueDate);
             const startDate = safeParseDate(task.startTime);
-            return Boolean(startDate && startDate <= endOfToday);
+            const startReady = !startDate || startDate <= endOfToday;
+            return Boolean(startReady && dueDate && dueDate <= endOfToday)
+                || Boolean(startReady && startDate && startDate <= endOfToday);
         });
-
+        const scheduleIds = new Set(schedule.map((task) => task.id));
+        const nextActions = filteredActiveTasks.filter((task) => {
+            if (task.status !== 'next' || task.isFocusedToday) return false;
+            if (isDeferred(task)) return false;
+            if (isSequentialBlocked(task)) return false;
+            return !scheduleIds.has(task.id);
+        });
         const reviewDue = reviewDueCandidates.filter(t => !t.isFocusedToday);
+        const scheduleSortTime = (task: Task) => {
+            const due = safeParseDueDate(task.dueDate)?.getTime();
+            const start = safeParseDate(task.startTime)?.getTime();
+            if (typeof due === 'number' && typeof start === 'number') return Math.min(due, start);
+            if (typeof due === 'number') return due;
+            if (typeof start === 'number') return start;
+            return Number.POSITIVE_INFINITY;
+        };
 
         return {
-            overdue: sortWith(overdue, (task) => safeParseDueDate(task.dueDate)?.getTime() ?? Number.POSITIVE_INFINITY),
-            dueToday: sortWith(dueToday, (task) => safeParseDueDate(task.dueDate)?.getTime() ?? Number.POSITIVE_INFINITY),
-            starting: sortWith(starting, (task) => safeParseDate(task.startTime)?.getTime() ?? Number.POSITIVE_INFINITY),
+            schedule: sortWith(schedule, scheduleSortTime),
             nextActions: sortByProjectOrder(nextActions),
             reviewDue: sortWith(reviewDue, (task) => safeParseDate(task.reviewAt)?.getTime() ?? Number.POSITIVE_INFINITY),
         };
-    }, [filteredActiveTasks, reviewDueCandidates, projects, prioritiesEnabled, sortByProjectOrder]);
+    }, [filteredActiveTasks, reviewDueCandidates, prioritiesEnabled, sortByProjectOrder, sequentialProjectIds]);
     const focusedCount = focusedTasks.length;
     const { top3Tasks, remainingCount } = useMemo(() => {
         const byId = new Map<string, Task>();
-        [...sections.overdue, ...sections.dueToday, ...sections.starting, ...sections.nextActions, ...sections.reviewDue].forEach((task) => {
+        [...sections.schedule, ...sections.nextActions, ...sections.reviewDue].forEach((task) => {
             byId.set(task.id, task);
         });
         const candidates = Array.from(byId.values());
@@ -446,9 +444,8 @@ export function AgendaView() {
     const pomodoroTasks = useMemo(() => {
         const ordered = [
             ...focusedTasks,
+            ...sections.schedule,
             ...sections.nextActions,
-            ...sections.dueToday,
-            ...sections.overdue,
             ...sections.reviewDue,
         ];
         const byId = new Map<string, Task>();
@@ -672,24 +669,10 @@ export function AgendaView() {
                     {/* Other Sections */}
                     <div className="space-y-6">
                         <Section
-                            title={t('agenda.overdue')}
-                            icon={AlertCircle}
-                            tasks={sections.overdue}
-                            color="text-red-600"
-                        />
-
-                        <Section
-                            title={t('agenda.dueToday')}
+                            title={t('focus.schedule') || t('agenda.dueToday')}
                             icon={Calendar}
-                            tasks={sections.dueToday}
+                            tasks={sections.schedule}
                             color="text-yellow-600"
-                        />
-
-                        <Section
-                            title={t('agenda.starting')}
-                            icon={Clock}
-                            tasks={sections.starting}
-                            color="text-teal-600"
                         />
 
                         <Section

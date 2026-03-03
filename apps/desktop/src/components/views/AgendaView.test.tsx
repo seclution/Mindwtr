@@ -52,7 +52,7 @@ describe('AgendaView', () => {
         expect(getByText('Checklist item')).toBeInTheDocument();
     });
 
-    it('shows non-next tasks with start time today in Starting / Available', () => {
+    it('shows non-next tasks with start time today in Today section', () => {
         const now = new Date();
         const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0, 0).toISOString();
         const startTodayTask: Task = {
@@ -79,7 +79,39 @@ describe('AgendaView', () => {
 
         const { getByRole, getByText } = renderAgenda();
 
-        expect(getByRole('heading', { name: /starting \/ available/i })).toBeInTheDocument();
+        expect(getByRole('heading', { name: /today/i })).toBeInTheDocument();
         expect(getByText('Start today inbox task')).toBeInTheDocument();
+    });
+
+    it('shows next tasks with start time today in Today section (not Next Actions)', () => {
+        const now = new Date();
+        const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0, 0).toISOString();
+        const startTodayNextTask: Task = {
+            id: 'start-today-next-task',
+            title: 'Start today next task',
+            status: 'next',
+            startTime: startToday,
+            tags: [],
+            contexts: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+
+        useTaskStore.setState({
+            tasks: [startTodayNextTask],
+            _allTasks: [startTodayNextTask],
+            projects: [],
+            _allProjects: [],
+            areas: [],
+            _allAreas: [],
+            settings: {},
+            highlightTaskId: null,
+        });
+
+        const { getByRole, getByText, queryByRole } = renderAgenda();
+
+        expect(getByRole('heading', { name: /today/i })).toBeInTheDocument();
+        expect(getByText('Start today next task')).toBeInTheDocument();
+        expect(queryByRole('heading', { name: /next actions/i })).not.toBeInTheDocument();
     });
 });
