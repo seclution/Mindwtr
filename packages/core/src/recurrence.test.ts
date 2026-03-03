@@ -273,4 +273,42 @@ describe('recurrence', () => {
         const next = createNextRecurringTask(task, '2024-11-02T10:00:00.000Z', 'done');
         expect(next?.dueDate).toBe('2024-11-03T09:30');
     });
+
+    it('keeps section assignment for recurring project tasks', () => {
+        const task: Task = {
+            id: 't11',
+            title: 'Section recurring',
+            status: 'done',
+            tags: [],
+            contexts: [],
+            dueDate: '2025-01-01T09:00:00.000Z',
+            recurrence: 'daily',
+            projectId: 'project-1',
+            sectionId: 'section-1',
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+        };
+
+        const next = createNextRecurringTask(task, '2025-01-01T10:00:00.000Z', 'done');
+        expect(next?.projectId).toBe('project-1');
+        expect(next?.sectionId).toBe('section-1');
+    });
+
+    it('keeps area assignment for recurring area tasks', () => {
+        const task: Task = {
+            id: 't12',
+            title: 'Area recurring',
+            status: 'done',
+            tags: [],
+            contexts: [],
+            dueDate: '2025-01-01T09:00:00.000Z',
+            recurrence: 'daily',
+            areaId: 'area-1',
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+        };
+
+        const next = createNextRecurringTask(task, '2025-01-01T10:00:00.000Z', 'done');
+        expect(next?.areaId).toBe('area-1');
+    });
 });

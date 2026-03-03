@@ -440,6 +440,8 @@ export function createNextRecurringTask(
         attachments: duplicatedAttachments.length > 0 ? duplicatedAttachments : undefined,
         location: task.location,
         projectId: task.projectId,
+        sectionId: task.sectionId,
+        areaId: task.areaId,
         isFocusedToday: false,
         timeEstimate: task.timeEstimate,
         reviewAt: nextReviewAt,
