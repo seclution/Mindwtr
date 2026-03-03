@@ -834,7 +834,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
 
                     return await withWriteLock(key, async () => {
                         const data = loadAppData(filePath);
-                        const idx = data.tasks.findIndex((t) => t.id === taskId);
+                        const idx = data.tasks.findIndex((t) => t.id === taskId && !t.deletedAt);
                         if (idx < 0) return errorResponse('Task not found', 404);
 
                         const nowIso = new Date().toISOString();
@@ -853,7 +853,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
 
                     if (req.method === 'GET') {
                         const data = loadAppData(filePath);
-                        const task = data.tasks.find((t) => t.id === taskId);
+                        const task = data.tasks.find((t) => t.id === taskId && !t.deletedAt);
                         if (!task) return errorResponse('Task not found', 404);
                         return jsonResponse({ task });
                     }
@@ -871,7 +871,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
 
                         return await withWriteLock(key, async () => {
                             const data = loadAppData(filePath);
-                            const idx = data.tasks.findIndex((t) => t.id === taskId);
+                            const idx = data.tasks.findIndex((t) => t.id === taskId && !t.deletedAt);
                             if (idx < 0) return errorResponse('Task not found', 404);
 
                             const nowIso = new Date().toISOString();
@@ -889,7 +889,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                     if (req.method === 'DELETE') {
                         return await withWriteLock(key, async () => {
                             const data = loadAppData(filePath);
-                            const idx = data.tasks.findIndex((t) => t.id === taskId);
+                            const idx = data.tasks.findIndex((t) => t.id === taskId && !t.deletedAt);
                             if (idx < 0) return errorResponse('Task not found', 404);
 
                             const nowIso = new Date().toISOString();

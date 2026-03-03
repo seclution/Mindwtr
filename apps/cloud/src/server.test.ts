@@ -321,6 +321,33 @@ describe('cloud server api', () => {
         const deletedJson = await listDeleted.json();
         const deletedTask = (deletedJson.tasks as Array<{ id: string; deletedAt?: string }>).find((task) => task.id === taskId);
         expect(deletedTask?.deletedAt).toBeTruthy();
+
+        const getDeleted = await fetch(`${baseUrl}/v1/tasks/${encodeURIComponent(taskId)}`, {
+            headers: authHeaders,
+        });
+        expect(getDeleted.status).toBe(404);
+
+        const patchDeleted = await fetch(`${baseUrl}/v1/tasks/${encodeURIComponent(taskId)}`, {
+            method: 'PATCH',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({ title: 'Should fail' }),
+        });
+        expect(patchDeleted.status).toBe(404);
+
+        const completeDeleted = await fetch(`${baseUrl}/v1/tasks/${encodeURIComponent(taskId)}/complete`, {
+            method: 'POST',
+            headers: authHeaders,
+        });
+        expect(completeDeleted.status).toBe(404);
+
+        const archiveDeleted = await fetch(`${baseUrl}/v1/tasks/${encodeURIComponent(taskId)}/archive`, {
+            method: 'POST',
+            headers: authHeaders,
+        });
+        expect(archiveDeleted.status).toBe(404);
     });
 
     test('supports attachment upload/download/delete endpoints', async () => {
