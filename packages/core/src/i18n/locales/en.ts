@@ -201,6 +201,8 @@ export const en: Record<string, string> = {
         'taskEdit.noAreaOption': 'No Area',
         'taskEdit.moreOptions': 'More options',
         'taskEdit.hideOptions': 'Hide options',
+        'taskEdit.discardChanges': 'Discard unsaved changes?',
+        'taskEdit.discardChangesDesc': 'Your changes will be lost if you leave now.',
         'taskEdit.startDateLabel': 'Start Date',
         'taskEdit.dueDateLabel': 'Due Date',
         'taskEdit.reviewDateLabel': 'Review Date',
@@ -832,6 +834,7 @@ export const en: Record<string, string> = {
         // Common
         'common.tasks': 'tasks',
         'common.cancel': 'Cancel',
+        'common.discard': 'Discard',
         'common.save': 'Save',
         'common.delete': 'Delete',
         'common.edit': 'Edit',
