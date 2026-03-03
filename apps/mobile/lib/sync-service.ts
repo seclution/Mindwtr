@@ -266,6 +266,7 @@ const mobileSyncOrchestrator = createSyncOrchestrator<string | undefined, Mobile
     let localSnapshotChangeAt = useTaskStore.getState().lastDataChangeAt;
     let networkWentOffline = false;
     let networkSubscription: { remove?: () => void } | null = null;
+    let preSyncedLocalData: AppData | null = null;
     const requestAbortController = new AbortController();
     const fetchWithAbort: typeof fetch = (input, init) => {
       const baseSignal = requestAbortController.signal;
@@ -333,7 +334,6 @@ const mobileSyncOrchestrator = createSyncOrchestrator<string | undefined, Mobile
       let dropboxClientId = '';
       let dropboxLastRev: string | null = null;
       let fileSyncPath: string | null = null;
-      let preSyncedLocalData: AppData | null = null;
       let remoteDataForCompare: AppData | null = null;
       let webdavRemoteCorrupted = false;
       step = 'flush';
@@ -433,9 +433,9 @@ const mobileSyncOrchestrator = createSyncOrchestrator<string | undefined, Mobile
           preMutated = await syncFileAttachments(localData, fileSyncPath);
         }
         if (preMutated) {
-          ensureLocalSnapshotFresh();
-          // Keep pre-sync attachment mutations in memory until the main merge/write succeeds.
+          // Capture pre-sync attachment mutations before stale-snapshot checks so we can persist them on abort.
           preSyncedLocalData = localData;
+          ensureLocalSnapshotFresh();
         }
       } catch (error) {
         if (error instanceof LocalSyncAbort) {
@@ -786,6 +786,12 @@ const mobileSyncOrchestrator = createSyncOrchestrator<string | undefined, Mobile
       return { success: true, stats: syncResult.stats };
     } catch (error) {
       if (error instanceof LocalSyncAbort) {
+        if (preSyncedLocalData && !wroteLocal) {
+          const inMemorySnapshot = getInMemoryAppDataSnapshot();
+          const reconciledData = mergeAppData(preSyncedLocalData, inMemorySnapshot);
+          await mobileStorage.saveData(reconciledData);
+          wroteLocal = true;
+        }
         return { success: true };
       }
       const now = new Date().toISOString();
