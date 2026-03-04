@@ -155,7 +155,13 @@ export function ProjectsView() {
             return acc;
         }, {} as Record<string, Task[]>);
         tasks.forEach(task => {
-            if (task.projectId && !task.deletedAt && task.status !== 'done' && task.status !== 'reference') {
+            if (
+                task.projectId
+                && !task.deletedAt
+                && task.status !== 'done'
+                && task.status !== 'reference'
+                && task.status !== 'archived'
+            ) {
                 if (map[task.projectId]) {
                     map[task.projectId].push(task);
                 }
@@ -629,9 +635,10 @@ export function ProjectsView() {
     const projectProgress = useMemo(() => {
         if (!selectedProjectId) return null;
         const doneCount = projectAllTasks.filter((task) => task.status === 'done').length;
-        const remainingCount = projectAllTasks.length - doneCount;
-        return { doneCount, remainingCount, total: projectAllTasks.length };
-    }, [projectAllTasks, selectedProjectId]);
+        const remainingCount = projectTasks.length;
+        const total = doneCount + remainingCount;
+        return { doneCount, remainingCount, total };
+    }, [projectAllTasks, projectTasks, selectedProjectId]);
 
     const handleCommitProjectTitle = () => {
         if (!selectedProject) return;
