@@ -889,12 +889,32 @@ jobs:
             "",
           ])
 
-          pattern = re.compile(r"(?m)^(\\s*cd apps/desktop/src-tauri\\s*)$")
-          if not pattern.search(text):
-            raise SystemExit("Could not find insertion point for tauri config compatibility patch in PKGBUILD")
+          lines = text.splitlines(keepends=True)
 
-          updated = pattern.sub(lambda m: compat_block + m.group(1), text, count=1)
-          path.write_text(updated, encoding="utf-8")
+          prepare_start = next((i for i, line in enumerate(lines) if re.match(r"^\s*prepare\(\)\s*\{\s*$", line)), None)
+          if prepare_start is None:
+            raise SystemExit("Could not find prepare() function in PKGBUILD")
+
+          prepare_end = next((i for i in range(prepare_start + 1, len(lines)) if re.match(r"^\s*\}\s*$", lines[i])), None)
+          if prepare_end is None:
+            raise SystemExit("Could not find end of prepare() function in PKGBUILD")
+
+          insert_at = None
+          for i in range(prepare_start + 1, prepare_end):
+            if "nvm install" in lines[i]:
+              insert_at = i + 1
+              break
+          if insert_at is None:
+            for i in range(prepare_start + 1, prepare_end):
+              if re.match(r"^\s*cd\s+Mindwtr\s*$", lines[i]):
+                insert_at = i + 1
+                break
+          if insert_at is None:
+            insert_at = prepare_start + 1
+
+          block_lines = [line + "\n" for line in compat_block.split("\n")]
+          lines[insert_at:insert_at] = block_lines
+          path.write_text("".join(lines), encoding="utf-8")
           print("Inserted tauri config compatibility patch into PKGBUILD.")
           PY
 
