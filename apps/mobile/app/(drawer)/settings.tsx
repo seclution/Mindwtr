@@ -76,6 +76,7 @@ import {
     performMobileSync,
     subscribeMobileSyncActivityState,
 } from '../../lib/sync-service';
+import { MOBILE_SYNC_BADGE_COLORS, resolveMobileSyncBadgeState } from '../../lib/sync-badge';
 import { requestNotificationPermission, startMobileNotifications } from '../../lib/notification-service';
 import { authorizeDropbox, getDropboxRedirectUri } from '../../lib/dropbox-oauth';
 import {
@@ -599,23 +600,25 @@ export default function SettingsPage() {
         settings.lastSyncAt,
     ]);
 
-    const syncBadgeColor = useMemo(() => {
-        if (!syncConfigured) return undefined;
-        if (syncActivityState === 'syncing' || Boolean(settings.pendingRemoteWriteAt)) return '#F59E0B';
-        if (settings.lastSyncStatus === 'success') return '#22C55E';
-        return '#EF4444';
-    }, [settings.lastSyncStatus, settings.pendingRemoteWriteAt, syncActivityState, syncConfigured]);
+    const syncBadgeState = useMemo(() => resolveMobileSyncBadgeState({
+        configured: syncConfigured,
+        activityState: syncActivityState,
+        pendingRemoteWriteAt: settings.pendingRemoteWriteAt,
+        lastSyncStatus: settings.lastSyncStatus,
+        lastSyncAt: settings.lastSyncAt,
+    }), [settings.lastSyncAt, settings.lastSyncStatus, settings.pendingRemoteWriteAt, syncActivityState, syncConfigured]);
+    const syncBadgeColor = syncBadgeState === 'hidden' ? undefined : MOBILE_SYNC_BADGE_COLORS[syncBadgeState];
 
     const syncBadgeAccessibilityLabel = useMemo(() => {
-        if (!syncConfigured) return undefined;
-        if (syncActivityState === 'syncing' || Boolean(settings.pendingRemoteWriteAt)) {
+        if (syncBadgeState === 'hidden') return undefined;
+        if (syncBadgeState === 'syncing') {
             return localize('Sync in progress', '同步进行中');
         }
-        if (settings.lastSyncStatus === 'success') {
+        if (syncBadgeState === 'healthy') {
             return localize('Sync healthy', '同步正常');
         }
         return localize('Sync needs attention', '同步需要关注');
-    }, [localize, settings.lastSyncStatus, settings.pendingRemoteWriteAt, syncActivityState, syncConfigured]);
+    }, [localize, syncBadgeState]);
 
     useEffect(() => {
         void loadSystemCalendarState();
