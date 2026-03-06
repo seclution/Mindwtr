@@ -1,3 +1,4 @@
-- Se mejoro la seguridad de conflictos de sync y la integridad de datos entre dispositivos.
-- Se simplifico el procesamiento de bandeja en iOS con un flujo de pagina unica mas rapido.
-- Se mejoraron los encabezados en edicion de tareas y Daily Review en iOS con mejor safe-area y objetivos tactiles mas grandes.
+- Reducimos avisos falsos de conflictos y mejoramos la fiabilidad general del sync.
+- Mejoramos el fallback de sync en iOS cuando el proveedor no permite elegir carpetas.
+- Anadimos cobertura de traduccion para etiquetas de repeticion "repetir en".
+- Reforzamos el manejo de errores de cloud/sync para un uso diario mas estable.

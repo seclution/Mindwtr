@@ -1,5 +1,6 @@
 import { Link2, Paperclip } from 'lucide-react';
 import type { Attachment } from '@mindwtr/core';
+import { getAttachmentDisplayTitle } from '../../../lib/attachment-utils';
 
 type AttachmentsFieldProps = {
     t: (key: string) => string;
@@ -50,29 +51,33 @@ export function AttachmentsField({
                 <p className="text-xs text-muted-foreground">{t('common.none')}</p>
             ) : (
                 <div className="space-y-1">
-                    {visibleEditAttachments.map((attachment) => (
-                        <div key={attachment.id} className="flex items-center justify-between gap-2 text-xs">
-                            <button
-                                type="button"
-                                onClick={(event) => {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    openAttachment(attachment);
-                                }}
-                                className="truncate text-primary hover:underline"
-                                title={attachment.title}
-                            >
-                                {attachment.title}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => removeAttachment(attachment.id)}
-                                className="text-muted-foreground hover:text-foreground"
-                            >
-                                {t('attachments.remove')}
-                            </button>
-                        </div>
-                    ))}
+                    {visibleEditAttachments.map((attachment) => {
+                        const displayTitle = getAttachmentDisplayTitle(attachment);
+                        const fullTitle = attachment.kind === 'link' ? attachment.uri : attachment.title;
+                        return (
+                            <div key={attachment.id} className="flex items-center justify-between gap-2 text-xs">
+                                <button
+                                    type="button"
+                                    onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        openAttachment(attachment);
+                                    }}
+                                    className="truncate text-primary hover:underline"
+                                    title={fullTitle || displayTitle}
+                                >
+                                    {displayTitle}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => removeAttachment(attachment.id)}
+                                    className="text-muted-foreground hover:text-foreground"
+                                >
+                                    {t('attachments.remove')}
+                                </button>
+                            </div>
+                        );
+                    })}
                 </div>
             )}
         </div>

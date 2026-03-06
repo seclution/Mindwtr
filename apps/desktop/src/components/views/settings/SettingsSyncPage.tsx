@@ -4,6 +4,7 @@ import { safeFormatDate } from '@mindwtr/core';
 import { Info, RefreshCw, Trash2 } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
+import { ConfirmModal } from '../../ConfirmModal';
 
 type Labels = {
     diagnostics: string;
@@ -39,6 +40,20 @@ type Labels = {
     cloudHint: string;
     cloudToken: string;
     cloudSave: string;
+    cloudProvider: string;
+    cloudProviderSelfHosted: string;
+    cloudProviderDropbox: string;
+    dropboxAppKey: string;
+    dropboxAppKeyHint: string;
+    dropboxRedirectUri: string;
+    dropboxStatus: string;
+    dropboxConnected: string;
+    dropboxNotConnected: string;
+    dropboxConnect: string;
+    dropboxDisconnect: string;
+    dropboxTest: string;
+    dropboxTestReachable: string;
+    dropboxTestFailed: string;
     syncNow: string;
     syncing: string;
     syncQueued: string;
@@ -51,6 +66,14 @@ type Labels = {
     lastSyncAdjusted: string;
     lastSyncConflictIds: string;
     syncHistory: string;
+    recoverySnapshots: string;
+    recoverySnapshotsDesc: string;
+    recoverySnapshotsLoading: string;
+    recoverySnapshotsEmpty: string;
+    recoverySnapshotsRestore: string;
+    recoverySnapshotsConfirm: string;
+    recoverySnapshotsConfirmTitle: string;
+    recoverySnapshotsConfirmCancel: string;
     attachmentsCleanup: string;
     attachmentsCleanupDesc: string;
     attachmentsCleanupLastRun: string;
@@ -60,6 +83,8 @@ type Labels = {
 };
 
 type SyncBackend = 'off' | 'file' | 'webdav' | 'cloud';
+type CloudProvider = 'selfhosted' | 'dropbox';
+type DropboxTestState = 'idle' | 'success' | 'error';
 
 type SettingsSyncPageProps = {
     t: Labels;
@@ -87,9 +112,20 @@ type SettingsSyncPageProps = {
     onSaveWebDav: () => Promise<void> | void;
     cloudUrl: string;
     cloudToken: string;
+    cloudProvider: CloudProvider;
+    dropboxAppKey: string;
+    dropboxConfigured: boolean;
+    dropboxConnected: boolean;
+    dropboxBusy: boolean;
+    dropboxRedirectUri: string;
+    dropboxTestState: DropboxTestState;
     onCloudUrlChange: (value: string) => void;
     onCloudTokenChange: (value: string) => void;
+    onCloudProviderChange: (provider: CloudProvider) => void;
     onSaveCloud: () => Promise<void> | void;
+    onConnectDropbox: () => Promise<void> | void;
+    onDisconnectDropbox: () => Promise<void> | void;
+    onTestDropboxConnection: () => Promise<void> | void;
     onSyncNow: () => Promise<void> | void;
     isSyncing: boolean;
     syncQueued: boolean;
@@ -105,6 +141,10 @@ type SettingsSyncPageProps = {
     attachmentsLastCleanupDisplay: string;
     onRunAttachmentsCleanup: () => Promise<void> | void;
     isCleaningAttachments: boolean;
+    snapshots: string[];
+    isLoadingSnapshots: boolean;
+    isRestoringSnapshot: boolean;
+    onRestoreSnapshot: (snapshotFileName: string) => Promise<boolean | void> | boolean | void;
 };
 
 const isValidHttpUrl = (value: string): boolean => {
@@ -152,9 +192,20 @@ export function SettingsSyncPage({
     onSaveWebDav,
     cloudUrl,
     cloudToken,
+    cloudProvider,
+    dropboxAppKey,
+    dropboxConfigured,
+    dropboxConnected,
+    dropboxBusy,
+    dropboxRedirectUri,
+    dropboxTestState,
     onCloudUrlChange,
     onCloudTokenChange,
+    onCloudProviderChange,
     onSaveCloud,
+    onConnectDropbox,
+    onDisconnectDropbox,
+    onTestDropboxConnection,
     onSyncNow,
     isSyncing,
     syncQueued,
@@ -170,6 +221,10 @@ export function SettingsSyncPage({
     attachmentsLastCleanupDisplay,
     onRunAttachmentsCleanup,
     isCleaningAttachments,
+    snapshots,
+    isLoadingSnapshots,
+    isRestoringSnapshot,
+    onRestoreSnapshot,
 }: SettingsSyncPageProps) {
     const webdavUrlError = webdavUrl.trim() ? !isValidHttpUrl(webdavUrl.trim()) : false;
     const cloudUrlError = cloudUrl.trim() ? !isValidHttpUrl(cloudUrl.trim()) : false;
@@ -179,7 +234,9 @@ export function SettingsSyncPage({
             : syncBackend === 'webdav'
                 ? !!webdavUrl.trim() && !webdavUrlError
                 : syncBackend === 'cloud'
-                    ? !!cloudUrl.trim() && !cloudUrlError
+                    ? (cloudProvider === 'selfhosted'
+                        ? !!cloudUrl.trim() && !cloudUrlError
+                        : dropboxConfigured && !!dropboxAppKey.trim() && dropboxConnected)
                     : false;
     const maxClockSkewMs = Math.max(lastSyncStats?.tasks.maxClockSkewMs ?? 0, lastSyncStats?.projects.maxClockSkewMs ?? 0);
     const timestampAdjustments = (lastSyncStats?.tasks.timestampAdjustments ?? 0) + (lastSyncStats?.projects.timestampAdjustments ?? 0);
@@ -211,6 +268,21 @@ export function SettingsSyncPage({
     };
     const [syncOptionsOpen, setSyncOptionsOpen] = useState(false);
     const [syncHistoryOpen, setSyncHistoryOpen] = useState(false);
+    const [snapshotsOpen, setSnapshotsOpen] = useState(false);
+    const [snapshotToRestore, setSnapshotToRestore] = useState<string | null>(null);
+    const formatSnapshotLabel = (fileName: string) => {
+        const match = fileName.match(/^data\.(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})\.snapshot\.json$/);
+        if (!match) return fileName;
+        const [, day, hh, mm, ss] = match;
+        const [year, month, date] = day.split('-').map((part) => Number.parseInt(part, 10));
+        const hour = Number.parseInt(hh, 10);
+        const minute = Number.parseInt(mm, 10);
+        const second = Number.parseInt(ss, 10);
+        if (![year, month, date, hour, minute, second].every(Number.isFinite)) return fileName;
+        const utc = new Date(Date.UTC(year, month - 1, date, hour, minute, second));
+        if (Number.isNaN(utc.getTime())) return fileName;
+        return utc.toLocaleString();
+    };
 
     const renderSyncToggle = (
         key: keyof NonNullable<AppData['settings']['syncPreferences']>,
@@ -315,19 +387,19 @@ export function SettingsSyncPage({
                                     value={syncPath}
                                     onChange={(e) => onSyncPathChange(e.target.value)}
                                     placeholder="/path/to/your/sync/folder"
-                                    className="flex-1 bg-muted p-2 rounded text-sm font-mono border border-border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    className="flex-1 bg-muted p-2 rounded text-sm font-mono border border-border focus:outline-none focus:ring-2 focus:ring-primary"
                                 />
                                 <button
                                     onClick={onSaveSyncPath}
                                     disabled={!syncPath.trim() || !isTauri}
-                                    className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:bg-gray-400 whitespace-nowrap"
+                                    className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed whitespace-nowrap"
                                 >
                                     {t.savePath}
                                 </button>
                                 <button
                                     onClick={onBrowseSyncPath}
                                     disabled={!isTauri}
-                                    className="px-4 py-2 bg-secondary text-secondary-foreground rounded-md text-sm font-medium hover:bg-secondary/90 whitespace-nowrap disabled:opacity-50"
+                                    className="px-4 py-2 bg-secondary text-secondary-foreground rounded-md text-sm font-medium hover:bg-secondary/90 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     {t.browse}
                                 </button>
@@ -346,7 +418,7 @@ export function SettingsSyncPage({
                                     onChange={(e) => onWebdavUrlChange(e.target.value)}
                                     placeholder="https://example.com/remote.php/dav/files/user/data.json"
                                     className={cn(
-                                        "bg-muted p-2 rounded text-sm font-mono border focus:outline-none focus:ring-2 focus:ring-blue-500",
+                                        "bg-muted p-2 rounded text-sm font-mono border focus:outline-none focus:ring-2 focus:ring-primary",
                                         webdavUrlError ? "border-destructive" : "border-border",
                                     )}
                                 />
@@ -363,7 +435,7 @@ export function SettingsSyncPage({
                                         type="text"
                                         value={webdavUsername}
                                         onChange={(e) => onWebdavUsernameChange(e.target.value)}
-                                        className="bg-muted p-2 rounded text-sm border border-border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        className="bg-muted p-2 rounded text-sm border border-border focus:outline-none focus:ring-2 focus:ring-primary"
                                     />
                                 </div>
                                 <div className="flex flex-col gap-2">
@@ -373,7 +445,7 @@ export function SettingsSyncPage({
                                         value={webdavPassword}
                                         onChange={(e) => onWebdavPasswordChange(e.target.value)}
                                         placeholder={webdavHasPassword && !webdavPassword ? '••••••••' : ''}
-                                        className="bg-muted p-2 rounded text-sm border border-border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        className="bg-muted p-2 rounded text-sm border border-border focus:outline-none focus:ring-2 focus:ring-primary"
                                     />
                                 </div>
                             </div>
@@ -388,7 +460,7 @@ export function SettingsSyncPage({
                                     onClick={onSaveWebDav}
                                     disabled={webdavUrlError || isSavingWebDav}
                                     aria-busy={isSavingWebDav}
-                                    className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 whitespace-nowrap disabled:bg-gray-400"
+                                    className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 whitespace-nowrap disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed"
                                 >
                                     {t.webdavSave}
                                 </button>
@@ -397,44 +469,125 @@ export function SettingsSyncPage({
                     )}
 
                     {syncBackend === 'cloud' && (
-                        <div className="space-y-3">
-                            <div className="flex flex-col gap-2">
-                                <label className="text-sm font-medium">{t.cloudUrl}</label>
-                                <input
-                                    type="text"
-                                    value={cloudUrl}
-                                    onChange={(e) => onCloudUrlChange(e.target.value)}
-                                    placeholder="https://example.com/v1/data"
-                                    className={cn(
-                                        "bg-muted p-2 rounded text-sm font-mono border focus:outline-none focus:ring-2 focus:ring-blue-500",
-                                        cloudUrlError ? "border-destructive" : "border-border",
-                                    )}
-                                />
-                                <p className="text-xs text-muted-foreground">{t.cloudHint}</p>
-                                {cloudUrlError && (
-                                    <p className="text-xs text-destructive">Enter a valid http(s) URL.</p>
-                                )}
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between gap-4">
+                                <span className="text-sm font-medium">{t.cloudProvider}</span>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => onCloudProviderChange('selfhosted')}
+                                        className={cn(
+                                            "px-3 py-1.5 rounded-md text-sm font-medium transition-colors border",
+                                            cloudProvider === 'selfhosted'
+                                                ? "bg-primary/10 text-primary border-primary ring-1 ring-primary"
+                                                : "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground",
+                                        )}
+                                    >
+                                        {t.cloudProviderSelfHosted}
+                                    </button>
+                                    <button
+                                        onClick={() => onCloudProviderChange('dropbox')}
+                                        className={cn(
+                                            "px-3 py-1.5 rounded-md text-sm font-medium transition-colors border",
+                                            cloudProvider === 'dropbox'
+                                                ? "bg-primary/10 text-primary border-primary ring-1 ring-primary"
+                                                : "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground",
+                                        )}
+                                    >
+                                        {t.cloudProviderDropbox}
+                                    </button>
+                                </div>
                             </div>
 
-                            <div className="flex flex-col gap-2">
-                                <label className="text-sm font-medium">{t.cloudToken}</label>
-                                <input
-                                    type="password"
-                                    value={cloudToken}
-                                    onChange={(e) => onCloudTokenChange(e.target.value)}
-                                    className="bg-muted p-2 rounded text-sm border border-border focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                />
-                            </div>
+                            {cloudProvider === 'selfhosted' && (
+                                <div className="space-y-3">
+                                    <div className="flex flex-col gap-2">
+                                        <label className="text-sm font-medium">{t.cloudUrl}</label>
+                                        <input
+                                            type="text"
+                                            value={cloudUrl}
+                                            onChange={(e) => onCloudUrlChange(e.target.value)}
+                                            placeholder="https://example.com/v1/data"
+                                            className={cn(
+                                                "bg-muted p-2 rounded text-sm font-mono border focus:outline-none focus:ring-2 focus:ring-primary",
+                                                cloudUrlError ? "border-destructive" : "border-border",
+                                            )}
+                                        />
+                                        <p className="text-xs text-muted-foreground">{t.cloudHint}</p>
+                                        {cloudUrlError && (
+                                            <p className="text-xs text-destructive">Enter a valid http(s) URL.</p>
+                                        )}
+                                    </div>
 
-                            <div className="flex justify-end">
-                                <button
-                                    onClick={onSaveCloud}
-                                    disabled={cloudUrlError}
-                                    className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 whitespace-nowrap"
-                                >
-                                    {t.cloudSave}
-                                </button>
-                            </div>
+                                    <div className="flex flex-col gap-2">
+                                        <label className="text-sm font-medium">{t.cloudToken}</label>
+                                        <input
+                                            type="password"
+                                            value={cloudToken}
+                                            onChange={(e) => onCloudTokenChange(e.target.value)}
+                                            className="bg-muted p-2 rounded text-sm border border-border focus:outline-none focus:ring-2 focus:ring-primary"
+                                        />
+                                    </div>
+
+                                    <div className="flex justify-end">
+                                        <button
+                                            onClick={onSaveCloud}
+                                            disabled={cloudUrlError}
+                                            className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 whitespace-nowrap disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed"
+                                        >
+                                            {t.cloudSave}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {cloudProvider === 'dropbox' && (
+                                <div className="space-y-3">
+                                    <div className="flex flex-col gap-2">
+                                        <label className="text-sm font-medium">{t.dropboxAppKey}</label>
+                                        <p className="text-xs text-muted-foreground">{t.dropboxAppKeyHint}</p>
+                                        <p className="text-xs text-muted-foreground">
+                                            {t.dropboxRedirectUri}: <span className="font-mono break-all">{dropboxRedirectUri}</span>
+                                        </p>
+                                        {!dropboxConfigured && (
+                                            <p className="text-xs text-destructive">
+                                                Dropbox app key is not configured in this build.
+                                            </p>
+                                        )}
+                                        <p className="text-xs text-muted-foreground">
+                                            {t.dropboxStatus}: {dropboxConnected ? t.dropboxConnected : t.dropboxNotConnected}
+                                        </p>
+                                    </div>
+
+                                    <div className="flex flex-wrap justify-end gap-2">
+                                        <button
+                                            onClick={dropboxConnected ? onDisconnectDropbox : onConnectDropbox}
+                                            disabled={dropboxBusy || !dropboxConfigured}
+                                            className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 whitespace-nowrap disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed"
+                                        >
+                                            {dropboxConnected ? t.dropboxDisconnect : t.dropboxConnect}
+                                        </button>
+                                        <button
+                                            onClick={onTestDropboxConnection}
+                                            disabled={dropboxBusy || !dropboxConfigured}
+                                            className="px-4 py-2 bg-secondary text-secondary-foreground rounded-md text-sm font-medium hover:bg-secondary/90 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {dropboxBusy ? t.syncing : t.dropboxTest}
+                                        </button>
+                                        {dropboxTestState !== 'idle' && (
+                                            <span
+                                                className={cn(
+                                                    "inline-flex items-center rounded-md border px-2 py-1 text-xs",
+                                                    dropboxTestState === 'success'
+                                                        ? "border-emerald-600/40 text-emerald-500"
+                                                        : "border-destructive/40 text-destructive"
+                                                )}
+                                            >
+                                                {dropboxTestState === 'success' ? `✓ ${t.dropboxTestReachable}` : `! ${t.dropboxTestFailed}`}
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -466,8 +619,8 @@ export function SettingsSyncPage({
                                 onClick={onSyncNow}
                                 disabled={isSyncing}
                                 className={cn(
-                                    "flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-white transition-colors",
-                                    isSyncing ? "bg-blue-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700",
+                                    "flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-primary-foreground transition-colors",
+                                    isSyncing ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-primary hover:bg-primary/90",
                                 )}
                             >
                                 <RefreshCw className={cn("w-4 h-4", isSyncing && "animate-spin")} />
@@ -532,9 +685,12 @@ export function SettingsSyncPage({
                                             const timestamp = safeFormatDate(entry.at, 'PPpp', entry.at);
                                             const statusLabel = formatHistoryStatus(entry.status);
                                             const parts = [
+                                                entry.backend ? `Backend: ${entry.backend}` : null,
+                                                entry.type ? `Type: ${entry.type}` : null,
                                                 entry.conflicts ? `${t.lastSyncConflicts}: ${entry.conflicts}` : null,
                                                 entry.maxClockSkewMs > 0 ? `${t.lastSyncSkew}: ${formatClockSkew(entry.maxClockSkewMs)}` : null,
                                                 entry.timestampAdjustments > 0 ? `${t.lastSyncAdjusted}: ${entry.timestampAdjustments}` : null,
+                                                entry.details ? `Details: ${entry.details}` : null,
                                             ].filter(Boolean);
                                             return (
                                                 <div key={`${entry.at}-${entry.status}`} className="text-xs text-muted-foreground">
@@ -548,9 +704,61 @@ export function SettingsSyncPage({
                                 )}
                             </div>
                         )}
+                        <div className="pt-3 space-y-1">
+                            <button
+                                type="button"
+                                onClick={() => setSnapshotsOpen((prev) => !prev)}
+                                className="w-full flex items-center justify-between text-left"
+                                aria-expanded={snapshotsOpen}
+                            >
+                                <span className="text-xs font-medium text-muted-foreground">{t.recoverySnapshots}</span>
+                                <span className="text-muted-foreground">{snapshotsOpen ? '▾' : '▸'}</span>
+                            </button>
+                            <div className="text-xs text-muted-foreground">
+                                {t.recoverySnapshotsDesc}
+                            </div>
+                            {snapshotsOpen && (
+                                <div className="mt-2 space-y-1">
+                                    {isLoadingSnapshots && (
+                                        <div className="text-xs text-muted-foreground">{t.recoverySnapshotsLoading}</div>
+                                    )}
+                                    {!isLoadingSnapshots && snapshots.length === 0 && (
+                                        <div className="text-xs text-muted-foreground">{t.recoverySnapshotsEmpty}</div>
+                                    )}
+                                    {!isLoadingSnapshots && snapshots.slice(0, 5).map((snapshot) => (
+                                        <div key={snapshot} className="flex items-center justify-between gap-2 text-xs">
+                                            <span className="text-muted-foreground font-mono truncate">{formatSnapshotLabel(snapshot)}</span>
+                                            <button
+                                                type="button"
+                                                disabled={isRestoringSnapshot}
+                                                onClick={() => setSnapshotToRestore(snapshot)}
+                                                className="px-2 py-1 rounded border border-border text-foreground hover:bg-muted/70 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                {t.recoverySnapshotsRestore}
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             </section>
+
+            <ConfirmModal
+                isOpen={snapshotToRestore !== null}
+                title={t.recoverySnapshotsConfirmTitle}
+                description={snapshotToRestore ? t.recoverySnapshotsConfirm.replace('{snapshot}', snapshotToRestore) : undefined}
+                confirmLabel={t.recoverySnapshotsRestore}
+                cancelLabel={t.recoverySnapshotsConfirmCancel}
+                onCancel={() => setSnapshotToRestore(null)}
+                onConfirm={() => {
+                    if (!snapshotToRestore) return;
+                    const nextSnapshot = snapshotToRestore;
+                    setSnapshotToRestore(null);
+                    void onRestoreSnapshot(nextSnapshot);
+                }}
+            />
 
             <section className="space-y-3">
                 <h2 className="text-lg font-semibold flex items-center gap-2">

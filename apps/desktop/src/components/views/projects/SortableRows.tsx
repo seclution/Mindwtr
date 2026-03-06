@@ -1,4 +1,4 @@
-import type { Area, Project, Task } from '@mindwtr/core';
+import { DEFAULT_AREA_COLOR, type Area, type Project, type Task } from '@mindwtr/core';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, Trash2 } from 'lucide-react';
@@ -7,8 +7,8 @@ import { TaskItem } from '../../TaskItem';
 type AreaRowProps = {
     area: Area;
     onDelete: (areaId: string) => void;
-    onUpdateName: (areaId: string, name: string) => void;
-    onUpdateColor: (areaId: string, color: string) => void;
+    onUpdateName: (areaId: string, name: string) => Promise<void> | void;
+    onUpdateColor: (areaId: string, color: string) => Promise<void> | void;
     t: (key: string) => string;
 };
 
@@ -25,6 +25,15 @@ export function SortableAreaRow({
         transition,
         opacity: isDragging ? 0.6 : 1,
     };
+    const commitAreaName = (rawName: string) => {
+        const name = rawName.trim();
+        if (!name || name === area.name) return;
+        void Promise.resolve(onUpdateName(area.id, name));
+    };
+    const commitAreaColor = (nextColor: string) => {
+        if (!nextColor || nextColor === area.color) return;
+        void Promise.resolve(onUpdateColor(area.id, nextColor));
+    };
 
     return (
         <div ref={setNodeRef} style={style} className="flex items-center gap-2">
@@ -39,8 +48,9 @@ export function SortableAreaRow({
             </button>
             <input
                 type="color"
-                value={area.color || '#94a3b8'}
-                onChange={(e) => onUpdateColor(area.id, e.target.value)}
+                value={area.color || DEFAULT_AREA_COLOR}
+                onInput={(e) => commitAreaColor(e.currentTarget.value)}
+                onChange={(e) => commitAreaColor(e.currentTarget.value)}
                 className="w-8 h-8 rounded cursor-pointer border-0 p-0"
                 title={t('projects.color')}
             />
@@ -48,18 +58,12 @@ export function SortableAreaRow({
                 key={`${area.id}-${area.updatedAt}`}
                 defaultValue={area.name}
                 onBlur={(e) => {
-                    const name = e.target.value.trim();
-                    if (name && name !== area.name) {
-                        onUpdateName(area.id, name);
-                    }
+                    commitAreaName(e.target.value);
                 }}
                 onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                         e.preventDefault();
-                        const name = e.currentTarget.value.trim();
-                        if (name && name !== area.name) {
-                            onUpdateName(area.id, name);
-                        }
+                        commitAreaName(e.currentTarget.value);
                         e.currentTarget.blur();
                     }
                 }}

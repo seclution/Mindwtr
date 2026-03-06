@@ -1,6 +1,7 @@
 import { AppData, StorageAdapter, TaskQueryOptions } from '@mindwtr/core';
 import { invoke } from '@tauri-apps/api/core';
 import { reportError } from './report-error';
+import { markLocalWrite } from './local-data-watcher';
 
 const invokeWithError = async <T>(
     action: string,
@@ -11,7 +12,8 @@ const invokeWithError = async <T>(
         return await invoke<T>(command as any, args as any);
     } catch (error) {
         reportError(`Failed to ${action}`, error);
-        throw new Error(`Failed to ${action}.`);
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to ${action}: ${detail}`);
     }
 };
 
@@ -20,6 +22,7 @@ export const tauriStorage: StorageAdapter = {
         return invokeWithError<AppData>('load data', 'get_data');
     },
     saveData: async (data: AppData): Promise<void> => {
+        markLocalWrite();
         await invokeWithError<void>('save data', 'save_data', { data });
     },
     queryTasks: async (options: TaskQueryOptions) => {

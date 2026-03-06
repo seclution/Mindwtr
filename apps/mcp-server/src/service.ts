@@ -1,4 +1,4 @@
-import { parseQuickAdd, type Project as CoreProject } from '@mindwtr/core';
+import { parseQuickAdd, normalizeTaskStatus, TASK_STATUS_SET, type Project as CoreProject } from '@mindwtr/core';
 
 import { closeDb, openMindwtrDb, type DbOptions } from './db.js';
 import {
@@ -25,11 +25,31 @@ const filterUndefined = <T extends Record<string, unknown>>(obj: T): Partial<T> 
   return result;
 };
 
-const createDbAccessor = (options: DbOptions) => {
+type ServiceDeps = {
+  openMindwtrDb: typeof openMindwtrDb;
+  closeDb: typeof closeDb;
+  listTasks: typeof listTasks;
+  listProjects: typeof listProjects;
+  getTask: typeof getTask;
+  parseQuickAdd: typeof parseQuickAdd;
+  runCoreService: typeof runCoreService;
+};
+
+const defaultServiceDeps: ServiceDeps = {
+  openMindwtrDb,
+  closeDb,
+  listTasks,
+  listProjects,
+  getTask,
+  parseQuickAdd,
+  runCoreService,
+};
+
+const createDbAccessor = (options: DbOptions, deps: ServiceDeps) => {
   let dbHandlePromise: Promise<Awaited<ReturnType<typeof openMindwtrDb>>> | null = null;
   const getDbHandle = async () => {
     if (!dbHandlePromise) {
-      dbHandlePromise = openMindwtrDb(options);
+      dbHandlePromise = deps.openMindwtrDb(options);
     }
     return await dbHandlePromise;
   };
@@ -44,16 +64,41 @@ const createDbAccessor = (options: DbOptions) => {
     const handle = await dbHandlePromise.catch(() => null);
     dbHandlePromise = null;
     if (handle) {
-      closeDb(handle.db);
+      deps.closeDb(handle.db);
     }
   };
   return { withDb, close };
 };
 
+const parseInputStatus = (value: string | undefined): Task['status'] | undefined => {
+  if (value === undefined) return undefined;
+  const normalized = normalizeTaskStatus(value);
+  if (!TASK_STATUS_SET.has(normalized)) {
+    throw new Error(`Invalid task status: ${value}`);
+  }
+  return normalized;
+};
+
+const MAX_TASK_TITLE_LENGTH = 500;
+
+const validateAddTaskInput = (input: AddTaskInput): void => {
+  const hasTitle = typeof input.title === 'string' && input.title.trim().length > 0;
+  const hasQuickAdd = typeof input.quickAdd === 'string' && input.quickAdd.trim().length > 0;
+  if (!hasTitle && !hasQuickAdd) {
+    throw new Error('Either title or quickAdd is required');
+  }
+  if (hasTitle && hasQuickAdd) {
+    throw new Error('Provide either title or quickAdd, not both');
+  }
+  if (hasTitle && input.title!.trim().length > MAX_TASK_TITLE_LENGTH) {
+    throw new Error(`Task title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`);
+  }
+};
+
 const buildTaskUpdates = (input: UpdateTaskInput): Partial<Task> => {
   const updates: Partial<Task> = {};
   if (input.title !== undefined) updates.title = input.title;
-  if (input.status !== undefined) updates.status = input.status as any;
+  if (input.status !== undefined) updates.status = parseInputStatus(input.status);
   if (input.projectId !== undefined) updates.projectId = input.projectId ?? undefined;
   if (input.dueDate !== undefined) updates.dueDate = input.dueDate ?? undefined;
   if (input.startTime !== undefined) updates.startTime = input.startTime ?? undefined;
@@ -79,21 +124,23 @@ export type MindwtrService = {
   close: () => Promise<void>;
 };
 
-export const createService = (options: DbOptions): MindwtrService => {
-  const { withDb, close } = createDbAccessor(options);
+export const createService = (options: DbOptions, deps: ServiceDeps = defaultServiceDeps): MindwtrService => {
+  const { withDb, close } = createDbAccessor(options, deps);
   return {
-    listTasks: async (input) => withDb((db) => listTasks(db, input)),
-    listProjects: async () => withDb((db) => listProjects(db)),
-    getTask: async (input) => withDb((db) => getTask(db, input)),
-    addTask: async (input) =>
-      runCoreService(options, async (core) => {
+    listTasks: async (input) => withDb((db) => deps.listTasks(db, input)),
+    listProjects: async () => withDb((db) => deps.listProjects(db)),
+    getTask: async (input) => withDb((db) => deps.getTask(db, input)),
+    addTask: async (input) => {
+      validateAddTaskInput(input);
+      return await deps.runCoreService(options, async (core) => {
         if (input.quickAdd) {
-          const projects = await withDb((db) => listProjects(db));
-          const quick = parseQuickAdd(input.quickAdd, projects as CoreProject[]);
+          const projects = await withDb((db) => deps.listProjects(db));
+          const quick = deps.parseQuickAdd(input.quickAdd, projects as CoreProject[]);
           const title = input.title ?? quick.title ?? input.quickAdd;
+          const status = parseInputStatus(input.status);
           const props = filterUndefined({
             ...quick.props,
-            status: (input.status as any) ?? quick.props.status,
+            status: status ?? quick.props.status,
             projectId: input.projectId ?? quick.props.projectId,
             dueDate: input.dueDate ?? quick.props.dueDate,
             startTime: input.startTime ?? quick.props.startTime,
@@ -105,10 +152,11 @@ export const createService = (options: DbOptions): MindwtrService => {
           });
           return core.addTask({ title, props });
         }
+        const status = parseInputStatus(input.status);
         return core.addTask({
           title: input.title ?? '',
           props: filterUndefined({
-            status: input.status as any,
+            status,
             projectId: input.projectId,
             dueDate: input.dueDate,
             startTime: input.startTime,
@@ -119,17 +167,18 @@ export const createService = (options: DbOptions): MindwtrService => {
             timeEstimate: input.timeEstimate,
           }),
         });
-      }),
+      });
+    },
     updateTask: async (input) =>
-      runCoreService(options, async (core) => {
+      deps.runCoreService(options, async (core) => {
         return core.updateTask({
           id: input.id,
           updates: buildTaskUpdates(input),
         });
       }),
-    completeTask: async (id) => runCoreService(options, (core) => core.completeTask(id)),
-    deleteTask: async (id) => runCoreService(options, (core) => core.deleteTask(id)),
-    restoreTask: async (id) => runCoreService(options, (core) => core.restoreTask(id)),
+    completeTask: async (id) => deps.runCoreService(options, (core) => core.completeTask(id)),
+    deleteTask: async (id) => deps.runCoreService(options, (core) => core.deleteTask(id)),
+    restoreTask: async (id) => deps.runCoreService(options, (core) => core.restoreTask(id)),
     close,
   };
 };

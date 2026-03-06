@@ -16,7 +16,7 @@ Change presets in **Settings → Keyboard Shortcuts**.
 | `?` | Show keyboard shortcuts help |
 | `Ctrl+\\` / `Cmd+\\` | Toggle Focus Mode |
 | `Ctrl+B` / `Cmd+B` | Toggle Sidebar |
-| `Ctrl+Shift+A / Cmd+Shift+A` | Open Quick Add |
+| `Ctrl+Alt+M` | Open Quick Add |
 | `Ctrl+Shift+D / Cmd+Shift+D` | Toggle list details |
 | `Ctrl+Shift+C / Cmd+Shift+C` | Toggle list density |
 
@@ -66,7 +66,7 @@ When a task list is visible:
 | `Ctrl-h` | Show keyboard shortcuts help |
 | `Ctrl+\\` / `Cmd+\\` | Toggle Focus Mode |
 | `Ctrl+B` / `Cmd+B` | Toggle Sidebar |
-| `Ctrl+Shift+A / Cmd+Shift+A` | Open Quick Add |
+| `Ctrl+Alt+M` | Open Quick Add |
 | `Ctrl+Shift+D / Cmd+Shift+D` | Toggle list details |
 | `Ctrl+Shift+C / Cmd+Shift+C` | Toggle list density |
 
@@ -112,7 +112,12 @@ When a task list is visible:
 
 ## Customization
 
-Currently, keyboard shortcuts cannot be customized beyond selecting Vim or Emacs preset. Custom keybindings may be added in a future release.
+- You can choose Vim or Emacs preset in **Settings → General → Input**.
+- The global **Quick Add** shortcut can be changed or disabled in **Settings → General → Input → Global quick add shortcut**.
+- Quick Add follows platform-safe defaults:
+  - macOS: `Ctrl+Option+M` (default), `Ctrl+Option+N`, `Ctrl+Option+Q`, or legacy `Cmd+Shift+A`
+  - Windows/Linux: `Ctrl+Alt+M` (default), `Ctrl+Alt+N`, `Ctrl+Alt+Q`, or legacy `Ctrl+Shift+A`
+- You can also set it to **Disabled** if you do not want a system-wide shortcut.
 
 ---
 

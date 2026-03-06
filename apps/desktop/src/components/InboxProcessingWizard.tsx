@@ -1,10 +1,10 @@
 import { ArrowRight, BookOpen, CheckCircle, ChevronLeft, Clock, Trash2, User, X } from 'lucide-react';
-import type { Area, Project, Task } from '@mindwtr/core';
+import { DEFAULT_PROJECT_COLOR, type Area, type Project, type Task } from '@mindwtr/core';
 
 import { cn } from '../lib/utils';
 import { ProjectSelector } from './ui/ProjectSelector';
 
-export type ProcessingStep = 'refine' | 'actionable' | 'twomin' | 'decide' | 'context' | 'project' | 'delegate';
+export type ProcessingStep = 'refine' | 'actionable' | 'projectcheck' | 'twomin' | 'decide' | 'context' | 'project' | 'delegate';
 
 type InboxProcessingWizardProps = {
     t: (key: string) => string;
@@ -22,6 +22,8 @@ type InboxProcessingWizardProps = {
     handleSkip: () => void;
     handleNotActionable: (destination: 'trash' | 'someday' | 'reference') => void;
     handleActionable: () => void;
+    handleProjectCheckNo: () => void;
+    handleProjectCheckYes: () => void;
     handleTwoMinDone: () => void;
     handleTwoMinNo: () => void;
     handleDefer: () => void;
@@ -52,6 +54,7 @@ type InboxProcessingWizardProps = {
     projectSearch: string;
     setProjectSearch: (value: string) => void;
     projects: Project[];
+    areas: Area[];
     filteredProjects: Project[];
     addProject: (title: string, color: string) => Promise<Project | null>;
     handleSetProject: (projectId: string | null) => void;
@@ -61,6 +64,8 @@ type InboxProcessingWizardProps = {
     showProjectInRefine: boolean;
     selectedProjectId: string | null;
     setSelectedProjectId: (value: string | null) => void;
+    selectedAreaId: string | null;
+    setSelectedAreaId: (value: string | null) => void;
     scheduleDate: string;
     scheduleTimeDraft: string;
     setScheduleDate: (value: string) => void;
@@ -85,6 +90,8 @@ export function InboxProcessingWizard({
     handleSkip,
     handleNotActionable,
     handleActionable,
+    handleProjectCheckNo,
+    handleProjectCheckYes,
     handleTwoMinDone,
     handleTwoMinNo,
     handleDefer,
@@ -115,6 +122,7 @@ export function InboxProcessingWizard({
     projectSearch,
     setProjectSearch,
     projects,
+    areas,
     filteredProjects,
     addProject,
     handleSetProject,
@@ -124,6 +132,8 @@ export function InboxProcessingWizard({
     showProjectInRefine,
     selectedProjectId,
     setSelectedProjectId,
+    selectedAreaId,
+    setSelectedAreaId,
     scheduleDate,
     scheduleTimeDraft,
     setScheduleDate,
@@ -140,6 +150,7 @@ export function InboxProcessingWizard({
     const stepLabel: Record<ProcessingStep, string> = {
         refine: t('process.refineTitle'),
         actionable: t('process.actionable'),
+        projectcheck: t('process.moreThanOneStep'),
         twomin: t('process.twoMin'),
         decide: t('process.nextStep'),
         context: t('process.context'),
@@ -227,14 +238,40 @@ export function InboxProcessingWizard({
                                 <ProjectSelector
                                     projects={projects}
                                     value={selectedProjectId ?? ''}
-                                    onChange={(value) => setSelectedProjectId(value || null)}
+                                    onChange={(value) => {
+                                        const nextProjectId = value || null;
+                                        setSelectedProjectId(nextProjectId);
+                                        if (nextProjectId) {
+                                            setSelectedAreaId(null);
+                                        }
+                                    }}
                                     onCreateProject={async (title) => {
-                                        const created = await addProject(title, '#94a3b8');
+                                        const created = await addProject(title, DEFAULT_PROJECT_COLOR);
                                         return created?.id ?? null;
                                     }}
                                     placeholder={t('process.project')}
                                     noProjectLabel={t('process.noProject')}
+                                    searchPlaceholder={t('projects.search')}
+                                    noMatchesLabel={t('common.noMatches')}
+                                    createProjectLabel={t('projects.create')}
                                 />
+                            </div>
+                        )}
+                        {showProjectInRefine && !selectedProjectId && (
+                            <div className="space-y-1">
+                                <label className="text-[11px] text-muted-foreground font-medium">{t('taskEdit.areaLabel')}</label>
+                                <select
+                                    value={selectedAreaId ?? ''}
+                                    onChange={(event) => setSelectedAreaId(event.target.value || null)}
+                                    className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/40 focus:outline-none"
+                                >
+                                    <option value="">{t('projects.noArea')}</option>
+                                    {areas.map((area) => (
+                                        <option key={area.id} value={area.id}>
+                                            {area.name}
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
                         )}
                     </div>
@@ -292,6 +329,28 @@ export function InboxProcessingWizard({
                     >
                         {t('process.yesActionable')} <CheckCircle className="w-4 h-4" />
                     </button>
+                </div>
+            )}
+
+            {processingStep === 'projectcheck' && (
+                <div className="space-y-4">
+                    <p className="text-center text-sm text-muted-foreground">
+                        {t('process.moreThanOneStepDesc')}
+                    </p>
+                    <div className="flex gap-3">
+                        <button
+                            onClick={handleProjectCheckYes}
+                            className="flex-1 bg-primary text-primary-foreground py-3 rounded-lg font-medium hover:bg-primary/90"
+                        >
+                            {t('process.moreThanOneStepYes')}
+                        </button>
+                        <button
+                            onClick={handleProjectCheckNo}
+                            className="flex-1 bg-muted py-3 rounded-lg font-medium hover:bg-muted/80"
+                        >
+                            {t('process.moreThanOneStepNo')}
+                        </button>
+                    </div>
                 </div>
             )}
 
@@ -450,7 +509,7 @@ export function InboxProcessingWizard({
                         <button
                             onClick={addCustomContext}
                             disabled={!customContext.trim()}
-                            className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg text-sm font-medium hover:bg-secondary/80 disabled:opacity-50"
+                            className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg text-sm font-medium hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             +
                         </button>
@@ -550,6 +609,21 @@ export function InboxProcessingWizard({
                         </div>
                     ) : (
                         <>
+                            <div className="space-y-1">
+                                <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.areaLabel')}</label>
+                                <select
+                                    value={selectedAreaId ?? ''}
+                                    onChange={(event) => setSelectedAreaId(event.target.value || null)}
+                                    className="w-full bg-card border border-border rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-primary focus:border-transparent"
+                                >
+                                    <option value="">{t('projects.noArea')}</option>
+                                    {areas.map((area) => (
+                                        <option key={area.id} value={area.id}>
+                                            {area.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
                             <div className="space-y-2">
                                 <input
                                     value={projectSearch}
@@ -564,7 +638,7 @@ export function InboxProcessingWizard({
                                             handleSetProject(existing.id);
                                             return;
                                         }
-                                        const created = await addProject(title, '#94a3b8');
+                                        const created = await addProject(title, DEFAULT_PROJECT_COLOR);
                                         if (!created) return;
                                         handleSetProject(created.id);
                                         setProjectSearch('');
@@ -578,7 +652,7 @@ export function InboxProcessingWizard({
                                         onClick={async () => {
                                             const title = projectSearch.trim();
                                             if (!title) return;
-                                            const created = await addProject(title, '#94a3b8');
+                                            const created = await addProject(title, DEFAULT_PROJECT_COLOR);
                                             if (!created) return;
                                             handleSetProject(created.id);
                                             setProjectSearch('');

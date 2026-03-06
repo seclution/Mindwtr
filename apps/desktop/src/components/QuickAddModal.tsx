@@ -3,10 +3,10 @@ import {
     shallow,
     useTaskStore,
     parseQuickAdd,
-    PRESET_CONTEXTS,
     safeFormatDate,
     safeParseDate,
     generateUUID,
+    DEFAULT_PROJECT_COLOR,
     type Attachment,
     type Task,
 } from '@mindwtr/core';
@@ -29,6 +29,7 @@ const AUDIO_CAPTURE_DIR = 'mindwtr/audio-captures';
 const TARGET_SAMPLE_RATE = 16_000;
 
 export function QuickAddModal() {
+    const getDerivedState = useTaskStore((state) => state.getDerivedState);
     const { addTask, addProject, projects, areas, settings } = useTaskStore(
         (state) => ({
             addTask: state.addTask,
@@ -38,6 +39,11 @@ export function QuickAddModal() {
             settings: state.settings,
         }),
         shallow
+    );
+    const { allContexts, allTags } = getDerivedState();
+    const suggestionTokens = useMemo(
+        () => Array.from(new Set([...allContexts, ...allTags])).sort(),
+        [allContexts, allTags]
     );
     const { t } = useLanguage();
     const [isOpen, setIsOpen] = useState(false);
@@ -242,7 +248,7 @@ export function QuickAddModal() {
                 if (match) {
                     updates.projectId = match.id;
                 } else {
-                    const created = await addProjectNow(trimmed, '#94a3b8');
+                    const created = await addProjectNow(trimmed, DEFAULT_PROJECT_COLOR);
                     if (!created) return;
                     updates.projectId = created.id;
                 }
@@ -400,7 +406,7 @@ export function QuickAddModal() {
             }
 
             const nowIso = now.toISOString();
-            const displayTitle = `${t('quickAdd.audioNoteTitle')} ${safeFormatDate(now, 'MMM d, HH:mm')}`;
+            const displayTitle = `${t('quickAdd.audioNoteTitle')} ${safeFormatDate(now, 'Pp')}`;
             const speech = settings.ai?.speechToText;
             const provider = speech?.provider ?? 'gemini';
             const model = speech?.model ?? (
@@ -556,7 +562,10 @@ export function QuickAddModal() {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!value.trim()) return;
-        const { title, props, projectTitle } = parseQuickAdd(value, projects, new Date(), areas);
+        const { title, props, projectTitle, invalidDateCommands } = parseQuickAdd(value, projects, new Date(), areas);
+        if (invalidDateCommands && invalidDateCommands.length > 0) {
+            return;
+        }
         const finalTitle = title || value;
         if (!finalTitle.trim()) return;
         const baseProps: Partial<Task> = { ...initialProps, ...props };
@@ -565,7 +574,7 @@ export function QuickAddModal() {
         }
         let projectId = baseProps.projectId;
         if (!projectId && projectTitle) {
-            const created = await addProject(projectTitle, '#94a3b8');
+            const created = await addProject(projectTitle, DEFAULT_PROJECT_COLOR);
             if (!created) return;
             projectId = created.id;
         }
@@ -577,7 +586,7 @@ export function QuickAddModal() {
     };
 
     const scheduledLabel = initialProps?.startTime
-        ? safeFormatDate(initialProps.startTime, "MMM d, HH:mm")
+        ? safeFormatDate(initialProps.startTime, 'Pp')
         : null;
 
     if (!isOpen) return null;
@@ -657,10 +666,10 @@ export function QuickAddModal() {
                             value={value}
                             autoFocus={captureMode === 'text'}
                             projects={projects}
-                            contexts={PRESET_CONTEXTS}
+                            contexts={suggestionTokens}
                             areas={areas}
                             onCreateProject={async (title) => {
-                                const created = await addProject(title, '#94a3b8');
+                                const created = await addProject(title, DEFAULT_PROJECT_COLOR);
                                 return created?.id ?? null;
                             }}
                             onChange={(next) => setValue(next)}
@@ -684,11 +693,19 @@ export function QuickAddModal() {
                                     onChange={setSelectedAreaId}
                                     placeholder={t('taskEdit.noAreaOption')}
                                     noAreaLabel={t('taskEdit.noAreaOption')}
+                                    searchPlaceholder={t('areas.search')}
+                                    noMatchesLabel={t('common.noMatches')}
+                                    createAreaLabel={t('areas.create')}
                                     className="w-full"
                                 />
                             </div>
                         )}
                         <p className="text-xs text-muted-foreground">{t('quickAdd.help')}</p>
+                        {parsedInput.invalidDateCommands && parsedInput.invalidDateCommands.length > 0 ? (
+                            <p className="text-xs text-destructive">
+                                Invalid date command: {parsedInput.invalidDateCommands.join(', ')}
+                            </p>
+                        ) : null}
                         {scheduledLabel && (
                             <p className="text-xs text-muted-foreground">
                                 {t('calendar.scheduleAction')}: {scheduledLabel}

@@ -6,6 +6,11 @@ import { isTauriRuntime } from '../lib/runtime';
 import { reportError } from '../lib/report-error';
 import { logWarn } from '../lib/app-log';
 import { useUiStore } from '../store/ui-store';
+import {
+    type GlobalQuickAddShortcutSetting,
+    matchesGlobalQuickAddShortcut,
+    normalizeGlobalQuickAddShortcut,
+} from '../lib/global-quick-add-shortcut';
 
 export type KeybindingStyle = 'vim' | 'emacs';
 
@@ -24,9 +29,16 @@ export interface TaskListScope {
 interface KeybindingContextType {
     style: KeybindingStyle;
     setStyle: (style: KeybindingStyle) => void;
+    quickAddShortcut: GlobalQuickAddShortcutSetting;
+    setQuickAddShortcut: (shortcut: GlobalQuickAddShortcutSetting) => void;
     registerTaskListScope: (scope: TaskListScope | null) => void;
     openHelp: () => void;
 }
+
+type GlobalQuickAddShortcutApplyResult = {
+    shortcut?: string | null;
+    warning?: string | null;
+};
 
 const KeybindingContext = createContext<KeybindingContextType | undefined>(undefined);
 
@@ -85,6 +97,11 @@ function triggerQuickAdd() {
     window.dispatchEvent(new Event('mindwtr:quick-add'));
 }
 
+function triggerTaskEditCancel(taskId: string) {
+    const CancelEvent = typeof window.CustomEvent === 'function' ? window.CustomEvent : CustomEvent;
+    window.dispatchEvent(new CancelEvent('mindwtr:cancel-task-edit', { detail: { taskId } }));
+}
+
 export function KeybindingProvider({
     children,
     currentView,
@@ -95,6 +112,7 @@ export function KeybindingProvider({
     onNavigate: (view: string) => void;
 }) {
     const isTest = import.meta.env.MODE === 'test' || import.meta.env.VITEST || process.env.NODE_ENV === 'test';
+    const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent);
     const { settings, updateSettings } = useTaskStore(
         (state) => ({
             settings: state.settings,
@@ -104,6 +122,7 @@ export function KeybindingProvider({
     );
     const { t } = useLanguage();
     const toggleFocusMode = useUiStore((state) => state.toggleFocusMode);
+    const showToast = useUiStore((state) => state.showToast);
     const listOptions = useUiStore((state) => state.listOptions);
     const setListOptions = useUiStore((state) => state.setListOptions);
     const editingTaskId = useUiStore((state) => state.editingTaskId);
@@ -115,6 +134,12 @@ export function KeybindingProvider({
             : 'vim';
     const [style, setStyleState] = useState<KeybindingStyle>(initialStyle);
     const [isHelpOpen, setIsHelpOpen] = useState(false);
+    const quickAddShortcut = useMemo(
+        () => normalizeGlobalQuickAddShortcut(settings.globalQuickAddShortcut, {
+            isWindows,
+        }),
+        [isWindows, settings.globalQuickAddShortcut]
+    );
 
     const isSidebarCollapsed = settings.sidebarCollapsed ?? false;
     const toggleSidebar = useCallback(() => {
@@ -131,6 +156,7 @@ export function KeybindingProvider({
 
     const scopeRef = useRef<TaskListScope | null>(null);
     const pendingRef = useRef<{ key: string | null; timestamp: number }>({ key: null, timestamp: 0 });
+    const fallbackSelectedTaskIdRef = useRef<string | null>(null);
 
     useEffect(() => {
         if (isTest) return;
@@ -148,10 +174,188 @@ export function KeybindingProvider({
         setStyleState(next);
         updateSettings({ keybindingStyle: next }).catch((error) => reportError('Failed to update settings', error));
     }, [updateSettings]);
+    const setQuickAddShortcut = useCallback((shortcut: GlobalQuickAddShortcutSetting) => {
+        updateSettings({ globalQuickAddShortcut: shortcut }).catch((error) => reportError('Failed to update settings', error));
+    }, [updateSettings]);
 
     const registerTaskListScope = useCallback((scope: TaskListScope | null) => {
         scopeRef.current = scope;
     }, []);
+
+    const focusFallbackFilterInput = useCallback(() => {
+        const root = document.querySelector<HTMLElement>('[data-main-content]') ?? document.body;
+        const input = Array.from(root.querySelectorAll<HTMLElement>('[data-view-filter-input]'))
+            .find((element) => {
+                const tagName = element.tagName.toLowerCase();
+                if (tagName !== 'input' && tagName !== 'textarea') return false;
+                if ('disabled' in element && Boolean((element as HTMLInputElement | HTMLTextAreaElement).disabled)) return false;
+                const rect = element.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) return false;
+                const style = window.getComputedStyle(element);
+                return style.display !== 'none' && style.visibility !== 'hidden';
+            });
+        input?.focus();
+    }, []);
+
+    const getFallbackTaskElements = useCallback((): HTMLElement[] => {
+        const root = document.querySelector<HTMLElement>('[data-main-content]') ?? document.body;
+        const items = Array.from(root.querySelectorAll<HTMLElement>('[data-task-id]'));
+        const seen = new Set<string>();
+        return items.filter((item) => {
+            const taskId = item.dataset.taskId;
+            if (!taskId || seen.has(taskId)) return false;
+            const rect = item.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return false;
+            const style = window.getComputedStyle(item);
+            if (style.display === 'none' || style.visibility === 'hidden') return false;
+            seen.add(taskId);
+            return true;
+        });
+    }, []);
+
+    const activateFallbackTaskElement = useCallback((taskElement: HTMLElement | null) => {
+        if (!taskElement) return;
+        const taskId = taskElement.dataset.taskId;
+        if (taskId) {
+            fallbackSelectedTaskIdRef.current = taskId;
+        }
+        if (typeof taskElement.scrollIntoView === 'function') {
+            taskElement.scrollIntoView({ block: 'nearest' });
+        }
+        taskElement.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        const focusTarget = taskElement.querySelector<HTMLElement>(
+            'button[aria-expanded], button[data-task-edit-trigger], button, [tabindex]:not([tabindex="-1"])'
+        );
+        focusTarget?.focus();
+    }, []);
+
+    const resolveFallbackSelectionIndex = useCallback((elements: HTMLElement[]): number => {
+        if (elements.length === 0) return -1;
+        const selectedTaskId = fallbackSelectedTaskIdRef.current;
+        if (selectedTaskId) {
+            const selectedIndex = elements.findIndex((item) => item.dataset.taskId === selectedTaskId);
+            if (selectedIndex >= 0) return selectedIndex;
+        }
+        const activeTaskElement = document.activeElement instanceof HTMLElement
+            ? document.activeElement.closest('[data-task-id]')
+            : null;
+        if (activeTaskElement instanceof HTMLElement) {
+            const activeIndex = elements.findIndex((item) => item === activeTaskElement);
+            if (activeIndex >= 0) return activeIndex;
+        }
+        return 0;
+    }, []);
+
+    const pickFallbackTaskElement = useCallback((): HTMLElement | null => {
+        const elements = getFallbackTaskElements();
+        if (elements.length === 0) return null;
+        const selectedIndex = resolveFallbackSelectionIndex(elements);
+        const safeIndex = selectedIndex >= 0 ? selectedIndex : 0;
+        const element = elements[safeIndex] ?? null;
+        activateFallbackTaskElement(element);
+        return element;
+    }, [activateFallbackTaskElement, getFallbackTaskElements, resolveFallbackSelectionIndex]);
+
+    const fallbackSelectNext = useCallback(() => {
+        const elements = getFallbackTaskElements();
+        if (elements.length === 0) return;
+        const selectedIndex = resolveFallbackSelectionIndex(elements);
+        const nextIndex = selectedIndex < 0
+            ? 0
+            : Math.min(selectedIndex + 1, elements.length - 1);
+        activateFallbackTaskElement(elements[nextIndex] ?? null);
+    }, [activateFallbackTaskElement, getFallbackTaskElements, resolveFallbackSelectionIndex]);
+
+    const fallbackSelectPrev = useCallback(() => {
+        const elements = getFallbackTaskElements();
+        if (elements.length === 0) return;
+        const selectedIndex = resolveFallbackSelectionIndex(elements);
+        const prevIndex = selectedIndex < 0
+            ? elements.length - 1
+            : Math.max(selectedIndex - 1, 0);
+        activateFallbackTaskElement(elements[prevIndex] ?? null);
+    }, [activateFallbackTaskElement, getFallbackTaskElements, resolveFallbackSelectionIndex]);
+
+    const fallbackSelectFirst = useCallback(() => {
+        const elements = getFallbackTaskElements();
+        activateFallbackTaskElement(elements[0] ?? null);
+    }, [activateFallbackTaskElement, getFallbackTaskElements]);
+
+    const fallbackSelectLast = useCallback(() => {
+        const elements = getFallbackTaskElements();
+        activateFallbackTaskElement(elements.length > 0 ? elements[elements.length - 1] : null);
+    }, [activateFallbackTaskElement, getFallbackTaskElements]);
+
+    const fallbackEditSelected = useCallback(() => {
+        const selectedElement = pickFallbackTaskElement();
+        if (!selectedElement) return;
+        const editTrigger = selectedElement.matches('[data-task-edit-trigger]')
+            ? selectedElement
+            : selectedElement.querySelector<HTMLElement>('[data-task-edit-trigger]');
+        if (!editTrigger) {
+            const openTrigger = selectedElement.querySelector<HTMLElement>('button, [role="button"], [tabindex]:not([tabindex="-1"])');
+            if (openTrigger) {
+                openTrigger.focus();
+                openTrigger.click();
+                return;
+            }
+            selectedElement.click();
+            return;
+        }
+        editTrigger.focus();
+        editTrigger.click();
+    }, [pickFallbackTaskElement]);
+
+    const fallbackToggleDoneSelected = useCallback(() => {
+        const selectedElement = pickFallbackTaskElement();
+        const selectedTaskId = selectedElement?.dataset.taskId;
+        if (!selectedTaskId) return;
+        const state = useTaskStore.getState();
+        const task = state.tasks.find((item) => item.id === selectedTaskId);
+        if (!task) return;
+        const nextStatus = task.status === 'done' ? 'inbox' : 'done';
+        void state.moveTask(task.id, nextStatus);
+    }, [pickFallbackTaskElement]);
+
+    const fallbackDeleteSelected = useCallback(() => {
+        const selectedElement = pickFallbackTaskElement();
+        const selectedTaskId = selectedElement?.dataset.taskId;
+        if (!selectedTaskId) return;
+        const state = useTaskStore.getState();
+        void state.deleteTask(selectedTaskId);
+        if (fallbackSelectedTaskIdRef.current === selectedTaskId) {
+            fallbackSelectedTaskIdRef.current = null;
+        }
+    }, [pickFallbackTaskElement]);
+
+    const fallbackTaskListScope = useMemo<TaskListScope>(() => ({
+        kind: 'taskList',
+        selectNext: fallbackSelectNext,
+        selectPrev: fallbackSelectPrev,
+        selectFirst: fallbackSelectFirst,
+        selectLast: fallbackSelectLast,
+        editSelected: fallbackEditSelected,
+        toggleDoneSelected: fallbackToggleDoneSelected,
+        deleteSelected: fallbackDeleteSelected,
+        focusAddInput: focusFallbackFilterInput,
+    }), [
+        fallbackDeleteSelected,
+        fallbackEditSelected,
+        fallbackSelectFirst,
+        fallbackSelectLast,
+        fallbackSelectNext,
+        fallbackSelectPrev,
+        fallbackToggleDoneSelected,
+        focusFallbackFilterInput,
+    ]);
+
+    const getActiveScope = useCallback((): TaskListScope => {
+        return scopeRef.current ?? fallbackTaskListScope;
+    }, [fallbackTaskListScope]);
+
+    useEffect(() => {
+        fallbackSelectedTaskIdRef.current = null;
+    }, [currentView]);
 
     const openHelp = useCallback(() => setIsHelpOpen(true), []);
     const toggleFullscreen = useCallback(async () => {
@@ -214,7 +418,7 @@ export function KeybindingProvider({
             if (editingTaskIdRef.current) return;
             if (isEditableTarget(e.target)) return;
 
-            const scope = scopeRef.current;
+            const scope = getActiveScope();
             const now = Date.now();
             if (pendingRef.current.key && now - pendingRef.current.timestamp > 700) {
                 pendingRef.current.key = null;
@@ -309,7 +513,7 @@ export function KeybindingProvider({
             }
             if (editingTaskIdRef.current) return;
             if (isEditableTarget(e.target)) return;
-            const scope = scopeRef.current;
+            const scope = getActiveScope();
 
             if (e.altKey && !e.ctrlKey && !e.metaKey) {
                 const view = emacsAltMap[e.key];
@@ -367,31 +571,48 @@ export function KeybindingProvider({
                 setIsHelpOpen(false);
                 return;
             }
-            if (editingTaskIdRef.current) return;
+            if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'Escape') {
+                const active = document.activeElement;
+                if (
+                    active instanceof HTMLElement
+                    && active.matches('[data-view-filter-input]')
+                ) {
+                    e.preventDefault();
+                    active.blur();
+                    focusMainContent();
+                    return;
+                }
+            }
+            if (editingTaskIdRef.current) {
+                if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'Escape') {
+                    e.preventDefault();
+                    triggerTaskEditCancel(editingTaskIdRef.current);
+                }
+                return;
+            }
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'Comma') {
+                e.preventDefault();
+                onNavigate('settings');
+                return;
+            }
             if (!e.metaKey && !e.ctrlKey && !e.altKey && !isEditableTarget(e.target)) {
                 if (e.key === 'ArrowDown') {
                     if (moveSidebarFocus(e.target, 'next')) {
                         e.preventDefault();
                         return;
                     }
-                    const scope = scopeRef.current;
-                    if (scope) {
-                        e.preventDefault();
-                        scope.selectNext();
-                        return;
-                    }
+                    e.preventDefault();
+                    getActiveScope().selectNext();
+                    return;
                 }
                 if (e.key === 'ArrowUp') {
                     if (moveSidebarFocus(e.target, 'prev')) {
                         e.preventDefault();
                         return;
                     }
-                    const scope = scopeRef.current;
-                    if (scope) {
-                        e.preventDefault();
-                        scope.selectPrev();
-                        return;
-                    }
+                    e.preventDefault();
+                    getActiveScope().selectPrev();
+                    return;
                 }
                 if (style === 'vim' && e.key === 'ArrowLeft') {
                     if (focusSidebarCurrentView(currentView)) {
@@ -406,12 +627,12 @@ export function KeybindingProvider({
                     }
                 }
             }
+            if (!isEditableTarget(e.target) && matchesGlobalQuickAddShortcut(e, quickAddShortcut)) {
+                e.preventDefault();
+                triggerQuickAdd();
+                return;
+            }
             if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && !isEditableTarget(e.target)) {
-                if (e.code === 'KeyA') {
-                    e.preventDefault();
-                    triggerQuickAdd();
-                    return;
-                }
                 if (e.code === 'Backslash') {
                     e.preventDefault();
                     toggleFocusMode();
@@ -447,14 +668,56 @@ export function KeybindingProvider({
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [style, vimGoMap, emacsAltMap, onNavigate, isHelpOpen, toggleSidebar, toggleFocusMode, toggleListDetails, toggleDensity, currentView]);
+    }, [
+        style,
+        quickAddShortcut,
+        vimGoMap,
+        emacsAltMap,
+        onNavigate,
+        isHelpOpen,
+        toggleSidebar,
+        toggleFocusMode,
+        toggleListDetails,
+        toggleDensity,
+        currentView,
+        getActiveScope,
+    ]);
+
+    useEffect(() => {
+        if (isTest || !isTauriRuntime()) return;
+        let cancelled = false;
+        import('@tauri-apps/api/core')
+            .then(({ invoke }) =>
+                invoke<GlobalQuickAddShortcutApplyResult>('set_global_quick_add_shortcut', { shortcut: quickAddShortcut })
+            )
+            .then((result) => {
+                if (cancelled) return;
+                const appliedShortcut = normalizeGlobalQuickAddShortcut(result?.shortcut, { isWindows });
+                if (result?.warning) {
+                    showToast(result.warning, 'info', 6000);
+                }
+                if (appliedShortcut !== quickAddShortcut) {
+                    updateSettings({ globalQuickAddShortcut: appliedShortcut })
+                        .catch((error) => reportError('Failed to persist quick add shortcut fallback', error));
+                }
+            })
+            .catch((error) => {
+                if (cancelled) return;
+                reportError('Failed to apply global quick add shortcut', error);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [isTest, isWindows, quickAddShortcut, showToast, updateSettings]);
 
     const contextValue = useMemo<KeybindingContextType>(() => ({
         style,
         setStyle,
+        quickAddShortcut,
+        setQuickAddShortcut,
         registerTaskListScope,
         openHelp,
-    }), [style, setStyle, registerTaskListScope, openHelp]);
+    }), [style, setStyle, quickAddShortcut, setQuickAddShortcut, registerTaskListScope, openHelp]);
 
     return (
         <KeybindingContext.Provider value={contextValue}>
@@ -464,6 +727,7 @@ export function KeybindingProvider({
                     style={style}
                     onClose={() => setIsHelpOpen(false)}
                     currentView={currentView}
+                    quickAddShortcut={quickAddShortcut}
                     t={t}
                 />
             )}

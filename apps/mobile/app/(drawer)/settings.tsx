@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Constants from 'expo-constants';
+import * as Application from 'expo-application';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -34,12 +35,18 @@ import {
     DEFAULT_REASONING_EFFORT,
     DEFAULT_ANTHROPIC_THINKING_BUDGET,
     DEFAULT_GEMINI_THINKING_BUDGET,
+    cloudGetJson,
     generateUUID,
     getDefaultAIConfig,
+    normalizeDateFormatSetting,
+    normalizeCloudUrl,
+    normalizeWebdavUrl,
     getDefaultCopilotModel,
     getCopilotModelOptions,
     getModelOptions,
+    resolveDateLocaleTag,
     translateText,
+    webdavGetJson,
     type AIProviderId,
     type AIReasoningEffort,
     type AppData,
@@ -49,11 +56,46 @@ import {
     useTaskStore,
 } from '@mindwtr/core';
 import { pickAndParseSyncFolder, exportData } from '../../lib/storage-file';
-import { fetchExternalCalendarEvents, getExternalCalendars, saveExternalCalendars } from '../../lib/external-calendar';
+import {
+    fetchExternalCalendarEvents,
+    getExternalCalendars,
+    getSystemCalendarPermissionStatus,
+    getSystemCalendars,
+    getSystemCalendarSettings,
+    requestSystemCalendarPermission,
+    saveExternalCalendars,
+    saveSystemCalendarSettings,
+    type SystemCalendarInfo,
+    type SystemCalendarPermissionStatus,
+} from '../../lib/external-calendar';
 import { loadAIKey, saveAIKey } from '../../lib/ai-config';
-import { clearLog, ensureLogFilePath, logError, logInfo, logWarn } from '../../lib/app-log';
-import { performMobileSync } from '../../lib/sync-service';
+import { clearLog, ensureLogFilePath, logInfo } from '../../lib/app-log';
+import {
+    getMobileSyncActivityState,
+    getMobileSyncConfigurationStatus,
+    performMobileSync,
+    subscribeMobileSyncActivityState,
+} from '../../lib/sync-service';
+import { MOBILE_SYNC_BADGE_COLORS, resolveMobileSyncBadgeState } from '../../lib/sync-badge';
 import { requestNotificationPermission, startMobileNotifications } from '../../lib/notification-service';
+import { authorizeDropbox, getDropboxRedirectUri } from '../../lib/dropbox-oauth';
+import {
+    disconnectDropbox,
+    forceRefreshDropboxAccessToken,
+    getValidDropboxAccessToken,
+    isDropboxClientConfigured,
+    isDropboxConnected,
+} from '../../lib/dropbox-auth';
+import { testDropboxAccess } from '../../lib/dropbox-sync';
+import {
+    compareVersions,
+    formatClockSkew,
+    formatError,
+    isDropboxUnauthorizedError,
+    logSettingsError,
+    logSettingsWarn,
+    maskCalendarUrl,
+} from './settings-utils';
 import {
     SYNC_PATH_KEY,
     SYNC_BACKEND_KEY,
@@ -62,6 +104,7 @@ import {
     WEBDAV_PASSWORD_KEY,
     CLOUD_URL_KEY,
     CLOUD_TOKEN_KEY,
+    CLOUD_PROVIDER_KEY,
 } from '../../lib/sync-constants';
 
 type SettingsScreen =
@@ -95,7 +138,8 @@ const SETTINGS_SCREEN_SET: Record<SettingsScreen, true> = {
 
 const LANGUAGES: { id: Language; native: string }[] = [
     { id: 'en', native: 'English' },
-    { id: 'zh', native: '中文' },
+    { id: 'zh', native: '中文（简体）' },
+    { id: 'zh-Hant', native: '中文（繁體）' },
     { id: 'es', native: 'Español' },
     { id: 'hi', native: 'हिन्दी' },
     { id: 'ar', native: 'العربية' },
@@ -104,6 +148,8 @@ const LANGUAGES: { id: Language; native: string }[] = [
     { id: 'ja', native: '日本語' },
     { id: 'fr', native: 'Français' },
     { id: 'pt', native: 'Português' },
+    { id: 'pl', native: 'Polski' },
+    { id: 'nl', native: 'Nederlands' },
     { id: 'ko', native: '한국어' },
     { id: 'it', native: 'Italiano' },
     { id: 'tr', native: 'Türkçe' },
@@ -121,70 +167,9 @@ const UPDATE_BADGE_AVAILABLE_KEY = 'mindwtr-update-available';
 const UPDATE_BADGE_LAST_CHECK_KEY = 'mindwtr-update-last-check';
 const UPDATE_BADGE_LATEST_KEY = 'mindwtr-update-latest';
 const UPDATE_BADGE_INTERVAL_MS = 1000 * 60 * 60 * 24;
-
-const formatError = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-const compareVersions = (v1: string, v2: string): number => {
-    const clean1 = v1.replace(/^v/, '');
-    const clean2 = v2.replace(/^v/, '');
-    const parts1 = clean1.split('.').map(Number);
-    const parts2 = clean2.split('.').map(Number);
-    for (let i = 0; i < Math.max(parts1.length, parts2.length); i += 1) {
-        const p1 = parts1[i] || 0;
-        const p2 = parts2[i] || 0;
-        if (p1 > p2) return 1;
-        if (p1 < p2) return -1;
-    }
-    return 0;
-};
-
-const buildSettingsExtra = (message?: string, error?: unknown): Record<string, string> | undefined => {
-    const extra: Record<string, string> = {};
-    if (message) extra.message = message;
-    if (error) extra.error = formatError(error);
-    return Object.keys(extra).length ? extra : undefined;
-};
-
-const logSettingsWarn = (messageOrError: unknown, error?: unknown) => {
-    if (typeof messageOrError === 'string') {
-        void logWarn(messageOrError, { scope: 'settings', extra: buildSettingsExtra(undefined, error) });
-        return;
-    }
-    void logWarn('Settings warning', { scope: 'settings', extra: buildSettingsExtra(undefined, messageOrError) });
-};
-
-const logSettingsError = (messageOrError: unknown, error?: unknown) => {
-    if (typeof messageOrError === 'string') {
-        const err = error instanceof Error ? error : new Error(messageOrError);
-        void logError(err, { scope: 'settings', extra: buildSettingsExtra(messageOrError, error) });
-        return;
-    }
-    void logError(messageOrError, { scope: 'settings', extra: buildSettingsExtra(undefined, messageOrError) });
-};
-
-const maskCalendarUrl = (url: string): string => {
-    const trimmed = url.trim();
-    if (!trimmed) return '';
-    const match = trimmed.match(/^(https?:\/\/)?([^/?#]+)([^?#]*)/i);
-    if (!match) {
-        return trimmed.length <= 8 ? '...' : `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
-    }
-    const protocol = match[1] ?? '';
-    const host = match[2] ?? '';
-    const path = match[3] ?? '';
-    const lastSegment = path.split('/').filter(Boolean).pop() ?? '';
-    const suffix = lastSegment ? `...${lastSegment.slice(-6)}` : '...';
-    return `${protocol}${host}/${suffix}`;
-};
-
-const formatClockSkew = (ms: number): string => {
-    if (!Number.isFinite(ms) || ms <= 0) return '0 ms';
-    if (ms < 1000) return `${Math.round(ms)} ms`;
-    const seconds = ms / 1000;
-    if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)} s`;
-    const minutes = seconds / 60;
-    return `${minutes.toFixed(1)} min`;
-};
+const AI_PROVIDER_CONSENT_KEY = 'mindwtr-ai-provider-consent-v1';
+const FOSS_LOCAL_LLM_MODEL_OPTIONS = ['llama3.2', 'qwen2.5', 'mistral', 'phi-4-mini'];
+const FOSS_LOCAL_LLM_COPILOT_OPTIONS = ['llama3.2', 'qwen2.5', 'mistral', 'phi-4-mini'];
 
 const isValidHttpUrl = (value: string): boolean => {
     if (!value.trim()) return false;
@@ -196,15 +181,29 @@ const isValidHttpUrl = (value: string): boolean => {
     }
 };
 
+type MobileExtraConfig = {
+    isFossBuild?: boolean | string;
+    dropboxAppKey?: string;
+};
+
+type CloudProvider = 'selfhosted' | 'dropbox';
+
 export default function SettingsPage() {
     const router = useRouter();
     const { settingsScreen } = useLocalSearchParams<{ settingsScreen?: string | string[] }>();
     const { themeMode, setThemeMode } = useTheme();
     const { language, setLanguage, t } = useLanguage();
+    const isChineseLanguage = language === 'zh' || language === 'zh-Hant';
     const localize = (enText: string, zhText?: string) =>
-        language === 'zh' && zhText ? zhText : translateText(enText, language);
+        isChineseLanguage && zhText ? zhText : translateText(enText, language);
     const { tasks, projects, sections, areas, settings, updateSettings } = useTaskStore();
+    const extraConfig = Constants.expoConfig?.extra as MobileExtraConfig | undefined;
+    const isFossBuild = extraConfig?.isFossBuild === true || extraConfig?.isFossBuild === 'true';
+    const dropboxAppKey = typeof extraConfig?.dropboxAppKey === 'string' ? extraConfig.dropboxAppKey.trim() : '';
+    const dropboxConfigured = !isFossBuild && isDropboxClientConfigured(dropboxAppKey);
     const [isSyncing, setIsSyncing] = useState(false);
+    const [syncConfigured, setSyncConfigured] = useState(false);
+    const [syncActivityState, setSyncActivityState] = useState(getMobileSyncActivityState());
     const currentScreen = useMemo<SettingsScreen>(() => {
         const rawScreen = Array.isArray(settingsScreen) ? settingsScreen[0] : settingsScreen;
         if (!rawScreen) return 'main';
@@ -219,11 +218,15 @@ export default function SettingsPage() {
     }, [router]);
     const [syncPath, setSyncPath] = useState<string | null>(null);
     const [syncBackend, setSyncBackend] = useState<'file' | 'webdav' | 'cloud' | 'off'>('off');
+    const [isTestingConnection, setIsTestingConnection] = useState(false);
     const [webdavUrl, setWebdavUrl] = useState('');
     const [webdavUsername, setWebdavUsername] = useState('');
     const [webdavPassword, setWebdavPassword] = useState('');
     const [cloudUrl, setCloudUrl] = useState('');
     const [cloudToken, setCloudToken] = useState('');
+    const [cloudProvider, setCloudProvider] = useState<CloudProvider>('selfhosted');
+    const [dropboxConnected, setDropboxConnected] = useState(false);
+    const [dropboxBusy, setDropboxBusy] = useState(false);
     const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
     const [hasUpdateBadge, setHasUpdateBadge] = useState(false);
     const [digestTimePicker, setDigestTimePicker] = useState<'morning' | 'evening' | null>(null);
@@ -231,14 +234,22 @@ export default function SettingsPage() {
     const [weeklyReviewTimePicker, setWeeklyReviewTimePicker] = useState(false);
     const [weeklyReviewTimeDraft, setWeeklyReviewTimeDraft] = useState<Date | null>(null);
     const [weeklyReviewDayPickerOpen, setWeeklyReviewDayPickerOpen] = useState(false);
+    const [gtdInboxProcessingExpanded, setGtdInboxProcessingExpanded] = useState(false);
     const [modelPicker, setModelPicker] = useState<null | 'model' | 'copilot' | 'speech'>(null);
     const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
     const [weekStartPickerOpen, setWeekStartPickerOpen] = useState(false);
+    const [dateFormatPickerOpen, setDateFormatPickerOpen] = useState(false);
     const [syncOptionsOpen, setSyncOptionsOpen] = useState(false);
     const [syncHistoryExpanded, setSyncHistoryExpanded] = useState(false);
     const [externalCalendars, setExternalCalendars] = useState<ExternalCalendarSubscription[]>([]);
     const [newCalendarName, setNewCalendarName] = useState('');
     const [newCalendarUrl, setNewCalendarUrl] = useState('');
+    const [systemCalendarEnabled, setSystemCalendarEnabled] = useState(false);
+    const [systemCalendarSelectAll, setSystemCalendarSelectAll] = useState(true);
+    const [systemCalendarSelectedIds, setSystemCalendarSelectedIds] = useState<string[]>([]);
+    const [systemCalendarPermission, setSystemCalendarPermission] = useState<SystemCalendarPermissionStatus>('undetermined');
+    const [systemCalendars, setSystemCalendars] = useState<SystemCalendarInfo[]>([]);
+    const [isSystemCalendarLoading, setIsSystemCalendarLoading] = useState(false);
     const [aiApiKey, setAiApiKey] = useState('');
     const [speechApiKey, setSpeechApiKey] = useState('');
     const [whisperDownloadState, setWhisperDownloadState] = useState<'idle' | 'downloading' | 'success' | 'error'>('idle');
@@ -249,8 +260,9 @@ export default function SettingsPage() {
     const tc = useThemeColors();
     const insets = useSafeAreaInsets();
     const isExpoGo = Constants.appOwnership === 'expo';
-    const extraConfig = Constants.expoConfig?.extra as { isFossBuild?: boolean | string } | undefined;
-    const isFossBuild = extraConfig?.isFossBuild === true || extraConfig?.isFossBuild === 'true';
+    const [androidInstallerSource, setAndroidInstallerSource] = useState<'play-store' | 'sideload' | 'unknown'>(
+        Platform.OS === 'android' ? 'unknown' : 'play-store'
+    );
     const currentVersion = Constants.expoConfig?.version || '0.0.0';
     const notificationsEnabled = settings.notificationsEnabled !== false;
     const dailyDigestMorningEnabled = settings.dailyDigestMorningEnabled === true;
@@ -261,6 +273,7 @@ export default function SettingsPage() {
     const weeklyReviewTime = settings.weeklyReviewTime || '18:00';
     const weeklyReviewDay = Number.isFinite(settings.weeklyReviewDay) ? settings.weeklyReviewDay as number : 0;
     const weekStart = settings.weekStart === 'monday' ? 'monday' : 'sunday';
+    const dateFormat = normalizeDateFormatSetting(settings.dateFormat);
     const loggingEnabled = settings.diagnostics?.loggingEnabled === true;
     const lastSyncStats = settings.lastSyncStats ?? null;
     const syncConflictCount = (lastSyncStats?.tasks.conflicts || 0) + (lastSyncStats?.projects.conflicts || 0);
@@ -279,18 +292,19 @@ export default function SettingsPage() {
     const syncHistoryEntries = syncHistory.slice(0, 5);
     const webdavUrlError = webdavUrl.trim() ? !isValidHttpUrl(webdavUrl.trim()) : false;
     const cloudUrlError = cloudUrl.trim() ? !isValidHttpUrl(cloudUrl.trim()) : false;
-    const aiProvider = (settings.ai?.provider ?? 'openai') as AIProviderId;
+    const aiProvider = (isFossBuild ? 'openai' : (settings.ai?.provider ?? 'openai')) as AIProviderId;
     const aiEnabled = settings.ai?.enabled === true;
-    const aiModel = settings.ai?.model ?? getDefaultAIConfig(aiProvider).model;
+    const aiModelOptions = isFossBuild ? FOSS_LOCAL_LLM_MODEL_OPTIONS : getModelOptions(aiProvider);
+    const aiModel = settings.ai?.model ?? (isFossBuild ? FOSS_LOCAL_LLM_MODEL_OPTIONS[0] : getDefaultAIConfig(aiProvider).model);
+    const aiBaseUrl = settings.ai?.baseUrl ?? '';
     const aiReasoningEffort = (settings.ai?.reasoningEffort ?? DEFAULT_REASONING_EFFORT) as AIReasoningEffort;
     const aiThinkingBudget = settings.ai?.thinkingBudget ?? getDefaultAIConfig(aiProvider).thinkingBudget ?? 0;
-    const aiModelOptions = getModelOptions(aiProvider);
-    const aiCopilotModel = settings.ai?.copilotModel ?? getDefaultCopilotModel(aiProvider);
-    const aiCopilotOptions = getCopilotModelOptions(aiProvider);
+    const aiCopilotOptions = isFossBuild ? FOSS_LOCAL_LLM_COPILOT_OPTIONS : getCopilotModelOptions(aiProvider);
+    const aiCopilotModel = settings.ai?.copilotModel ?? (isFossBuild ? FOSS_LOCAL_LLM_COPILOT_OPTIONS[0] : getDefaultCopilotModel(aiProvider));
     const anthropicThinkingEnabled = aiProvider === 'anthropic' && aiThinkingBudget > 0;
     const speechSettings = settings.ai?.speechToText ?? {};
     const speechEnabled = speechSettings.enabled === true;
-    const speechProvider = (speechSettings.provider ?? 'gemini') as 'openai' | 'gemini' | 'whisper';
+    const speechProvider = (isFossBuild ? 'whisper' : (speechSettings.provider ?? 'gemini')) as 'openai' | 'gemini' | 'whisper';
     const speechModel = speechSettings.model ?? (
         speechProvider === 'openai'
             ? 'gpt-4o-transcribe'
@@ -301,7 +315,9 @@ export default function SettingsPage() {
     const speechLanguage = speechSettings.language ?? 'auto';
     const speechMode = speechSettings.mode ?? 'smart_parse';
     const speechFieldStrategy = speechSettings.fieldStrategy ?? 'smart';
-    const speechModelOptions = speechProvider === 'openai'
+    const speechModelOptions = isFossBuild
+        ? WHISPER_MODELS.map((model) => model.id)
+        : speechProvider === 'openai'
         ? ['gpt-4o-mini-transcribe', 'gpt-4o-transcribe', 'whisper-1']
         : speechProvider === 'gemini'
             ? ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash']
@@ -317,6 +333,7 @@ export default function SettingsPage() {
     const inboxTwoMinuteFirst = inboxProcessing.twoMinuteFirst === true;
     const inboxProjectFirst = inboxProcessing.projectFirst === true;
     const inboxScheduleEnabled = inboxProcessing.scheduleEnabled !== false;
+    const includeContextStep = settings.gtd?.weeklyReview?.includeContextStep !== false;
     const autoArchiveDays = Number.isFinite(settings.gtd?.autoArchiveDays)
         ? Math.max(0, Math.floor(settings.gtd?.autoArchiveDays as number))
         : 7;
@@ -362,22 +379,21 @@ export default function SettingsPage() {
             },
         }).catch(logSettingsError);
     };
-    const localeMap: Record<Language, string> = {
-        en: 'en-US',
-        zh: 'zh-CN',
-        es: 'es-ES',
-        hi: 'hi-IN',
-        ar: 'ar',
-        de: 'de-DE',
-        ru: 'ru-RU',
-        ja: 'ja-JP',
-        fr: 'fr-FR',
-        pt: 'pt-PT',
-        ko: 'ko-KR',
-        it: 'it-IT',
-        tr: 'tr-TR',
+    const updateWeeklyReviewConfig = (partial: NonNullable<AppData['settings']['gtd']>['weeklyReview']) => {
+        updateSettings({
+            gtd: {
+                ...(settings.gtd ?? {}),
+                weeklyReview: {
+                    ...(settings.gtd?.weeklyReview ?? {}),
+                    ...partial,
+                },
+            },
+        }).catch(logSettingsError);
     };
-    const locale = localeMap[language] ?? 'en-US';
+    const systemLocale = typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function'
+        ? Intl.DateTimeFormat().resolvedOptions().locale
+        : '';
+    const locale = resolveDateLocaleTag({ language, dateFormat, systemLocale });
     const toTimePickerDate = (time: string) => {
         const [hours, minutes] = time.split(':').map((v) => parseInt(v, 10));
         const date = new Date();
@@ -451,6 +467,17 @@ export default function SettingsPage() {
         updateSettings({ weeklyReviewTime: toTimeValue(selected) }).catch(logSettingsError);
     };
 
+    const runDropboxConnectionTest = useCallback(async () => {
+        let accessToken = await getValidDropboxAccessToken(dropboxAppKey);
+        try {
+            await testDropboxAccess(accessToken);
+        } catch (error) {
+            if (!isDropboxUnauthorizedError(error)) throw error;
+            accessToken = await forceRefreshDropboxAccessToken(dropboxAppKey);
+            await testDropboxAccess(accessToken);
+        }
+    }, [dropboxAppKey]);
+
     const getWeekdayLabel = (dayIndex: number) => {
         const base = new Date(2024, 0, 7 + dayIndex);
         return base.toLocaleDateString(locale, { weekday: 'long' });
@@ -459,6 +486,50 @@ export default function SettingsPage() {
     const selectWeeklyReviewDay = () => {
         setWeeklyReviewDayPickerOpen(true);
     };
+
+    const loadSystemCalendarState = useCallback(async (requestAccess = false) => {
+        setIsSystemCalendarLoading(true);
+        try {
+            const stored = await getSystemCalendarSettings();
+            setSystemCalendarEnabled(stored.enabled);
+            setSystemCalendarSelectAll(stored.selectAll);
+            setSystemCalendarSelectedIds(stored.selectedCalendarIds);
+
+            const permission = requestAccess
+                ? await requestSystemCalendarPermission()
+                : await getSystemCalendarPermissionStatus();
+            setSystemCalendarPermission(permission);
+
+            if (permission !== 'granted') {
+                setSystemCalendars([]);
+                return;
+            }
+
+            const calendars = await getSystemCalendars();
+            setSystemCalendars(calendars);
+            if (stored.selectAll) return;
+
+            const validIds = new Set(calendars.map((calendar) => calendar.id));
+            const filteredSelection = stored.selectedCalendarIds.filter((id) => validIds.has(id));
+            if (
+                filteredSelection.length === stored.selectedCalendarIds.length &&
+                filteredSelection.every((id, index) => id === stored.selectedCalendarIds[index])
+            ) {
+                return;
+            }
+
+            setSystemCalendarSelectedIds(filteredSelection);
+            await saveSystemCalendarSettings({
+                enabled: stored.enabled,
+                selectAll: false,
+                selectedCalendarIds: filteredSelection,
+            });
+        } catch (error) {
+            logSettingsError(error);
+        } finally {
+            setIsSystemCalendarLoading(false);
+        }
+    }, []);
 
     // Load sync path on mount
     useEffect(() => {
@@ -470,6 +541,7 @@ export default function SettingsPage() {
             WEBDAV_PASSWORD_KEY,
             CLOUD_URL_KEY,
             CLOUD_TOKEN_KEY,
+            CLOUD_PROVIDER_KEY,
         ]).then((entries) => {
             const entryMap = new Map(entries);
             const path = entryMap.get(SYNC_PATH_KEY);
@@ -479,6 +551,7 @@ export default function SettingsPage() {
             const password = entryMap.get(WEBDAV_PASSWORD_KEY);
             const cloudSyncUrl = entryMap.get(CLOUD_URL_KEY);
             const cloudSyncToken = entryMap.get(CLOUD_TOKEN_KEY);
+            const storedCloudProvider = entryMap.get(CLOUD_PROVIDER_KEY);
 
             if (path) setSyncPath(path);
             const resolvedBackend = backend === 'webdav' || backend === 'cloud' || backend === 'off' || backend === 'file'
@@ -490,8 +563,66 @@ export default function SettingsPage() {
             if (password) setWebdavPassword(password);
             if (cloudSyncUrl) setCloudUrl(cloudSyncUrl);
             if (cloudSyncToken) setCloudToken(cloudSyncToken);
+            const resolvedCloudProvider =
+                storedCloudProvider === 'dropbox' && !isFossBuild
+                    ? 'dropbox'
+                    : 'selfhosted';
+            setCloudProvider(resolvedCloudProvider);
+            if (isFossBuild && storedCloudProvider === 'dropbox') {
+                AsyncStorage.setItem(CLOUD_PROVIDER_KEY, 'selfhosted').catch(logSettingsError);
+            }
         }).catch(logSettingsError);
+    }, [isFossBuild]);
+
+    const refreshSyncBadgeConfig = useCallback(async () => {
+        try {
+            const status = await getMobileSyncConfigurationStatus();
+            setSyncConfigured(status.configured);
+        } catch {
+            setSyncConfigured(false);
+        }
     }, []);
+
+    useEffect(() => {
+        const unsubscribe = subscribeMobileSyncActivityState(setSyncActivityState);
+        void refreshSyncBadgeConfig();
+        return unsubscribe;
+    }, [refreshSyncBadgeConfig]);
+
+    useEffect(() => {
+        void refreshSyncBadgeConfig();
+    }, [
+        refreshSyncBadgeConfig,
+        syncBackend,
+        syncPath,
+        settings.lastSyncStatus,
+        settings.pendingRemoteWriteAt,
+        settings.lastSyncAt,
+    ]);
+
+    const syncBadgeState = useMemo(() => resolveMobileSyncBadgeState({
+        configured: syncConfigured,
+        activityState: syncActivityState,
+        pendingRemoteWriteAt: settings.pendingRemoteWriteAt,
+        lastSyncStatus: settings.lastSyncStatus,
+        lastSyncAt: settings.lastSyncAt,
+    }), [settings.lastSyncAt, settings.lastSyncStatus, settings.pendingRemoteWriteAt, syncActivityState, syncConfigured]);
+    const syncBadgeColor = syncBadgeState === 'hidden' ? undefined : MOBILE_SYNC_BADGE_COLORS[syncBadgeState];
+
+    const syncBadgeAccessibilityLabel = useMemo(() => {
+        if (syncBadgeState === 'hidden') return undefined;
+        if (syncBadgeState === 'syncing') {
+            return localize('Sync in progress', '同步进行中');
+        }
+        if (syncBadgeState === 'healthy') {
+            return localize('Sync healthy', '同步正常');
+        }
+        return localize('Sync needs attention', '同步需要关注');
+    }, [localize, syncBadgeState]);
+
+    useEffect(() => {
+        void loadSystemCalendarState();
+    }, [loadSystemCalendarState]);
 
     useEffect(() => {
         let cancelled = false;
@@ -516,6 +647,26 @@ export default function SettingsPage() {
             cancelled = true;
         };
     }, [settings.externalCalendars]);
+
+    useEffect(() => {
+        let cancelled = false;
+        const loadDropboxState = async () => {
+            if (!dropboxConfigured) {
+                if (!cancelled) setDropboxConnected(false);
+                return;
+            }
+            try {
+                const connected = await isDropboxConnected();
+                if (!cancelled) setDropboxConnected(connected);
+            } catch {
+                if (!cancelled) setDropboxConnected(false);
+            }
+        };
+        void loadDropboxState();
+        return () => {
+            cancelled = true;
+        };
+    }, [dropboxConfigured]);
 
     useEffect(() => {
         loadAIKey(aiProvider).then(setAiApiKey).catch(logSettingsError);
@@ -548,15 +699,164 @@ export default function SettingsPage() {
         { value: 'monday', label: t('settings.weekStartMonday') },
     ];
     const currentWeekStartLabel = weekStartOptions.find((opt) => opt.value === weekStart)?.label ?? t('settings.weekStartSunday');
+    const dateFormatOptions: { value: 'system' | 'dmy' | 'mdy'; label: string }[] = [
+        { value: 'system', label: t('settings.dateFormatSystem') },
+        { value: 'dmy', label: t('settings.dateFormatDmy') },
+        { value: 'mdy', label: t('settings.dateFormatMdy') },
+    ];
+    const currentDateFormatLabel = dateFormatOptions.find((opt) => opt.value === dateFormat)?.label ?? t('settings.dateFormatSystem');
     const openLink = (url: string) => Linking.openURL(url);
-    const updateAISettings = (next: Partial<NonNullable<typeof settings.ai>>) => {
+    const updateAISettings = useCallback((next: Partial<NonNullable<typeof settings.ai>>) => {
         updateSettings({ ai: { ...(settings.ai ?? {}), ...next } }).catch(logSettingsError);
+    }, [settings.ai, updateSettings]);
+    const getAIProviderLabel = (provider: AIProviderId): string => (
+        isFossBuild && provider === 'openai'
+            ? localize('Local / Custom (OpenAI-compatible)', '本地 / 自定义（OpenAI 兼容）')
+            : provider === 'openai'
+            ? t('settings.aiProviderOpenAI')
+            : provider === 'gemini'
+                ? t('settings.aiProviderGemini')
+                : t('settings.aiProviderAnthropic')
+    );
+    const getAIProviderPolicyUrl = (provider: AIProviderId): string => (
+        isFossBuild && provider === 'openai'
+            ? ''
+            : provider === 'openai'
+            ? 'https://openai.com/policies/privacy-policy'
+            : provider === 'gemini'
+                ? 'https://policies.google.com/privacy'
+                : 'https://www.anthropic.com/privacy'
+    );
+    const loadAIProviderConsent = async (): Promise<Record<string, boolean>> => {
+        try {
+            const raw = await AsyncStorage.getItem(AI_PROVIDER_CONSENT_KEY);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+            const entries = Object.entries(parsed as Record<string, unknown>)
+                .map(([provider, value]) => [provider, value === true] as const);
+            return Object.fromEntries(entries);
+        } catch (error) {
+            logSettingsWarn('Failed to load AI consent state', error);
+            return {};
+        }
+    };
+    const saveAIProviderConsent = async (provider: AIProviderId): Promise<void> => {
+        try {
+            const consentMap = await loadAIProviderConsent();
+            consentMap[provider] = true;
+            await AsyncStorage.setItem(AI_PROVIDER_CONSENT_KEY, JSON.stringify(consentMap));
+        } catch (error) {
+            logSettingsWarn('Failed to save AI consent state', error);
+        }
+    };
+    const requestAIProviderConsent = async (provider: AIProviderId): Promise<boolean> => {
+        const consentMap = await loadAIProviderConsent();
+        if (consentMap[provider]) return true;
+
+        const providerLabel = getAIProviderLabel(provider);
+        const policyUrl = getAIProviderPolicyUrl(provider);
+        const title = localize('Enable AI features?', '启用 AI 功能？');
+        const message = isFossBuild && provider === 'openai'
+            ? localize(
+                `To use AI assistant, your task text and optional notes will be sent directly to your configured OpenAI-compatible endpoint (for example, a local or self-hosted LLM server) using your API key. Mindwtr does not collect this data. Do you want to continue?`,
+                '要使用 AI 助手，任务文本和可选备注会通过你的 API Key 直接发送到你配置的 OpenAI 兼容端点（例如本地或自托管 LLM 服务）。Mindwtr 不会收集这些数据。是否继续？'
+            )
+            : localize(
+                `To use AI assistant, your task text and optional notes will be sent directly to ${providerLabel} using your API key. Mindwtr does not collect this data. Provider privacy policy: ${policyUrl}. Do you want to continue?`,
+                `要使用 AI 助手，任务文本和可选备注会通过你的 API Key 直接发送到 ${providerLabel}。Mindwtr 不会收集这些数据。服务商隐私政策：${policyUrl}。是否继续？`
+            );
+
+        return await new Promise<boolean>((resolve) => {
+            let settled = false;
+            const finish = (value: boolean) => {
+                if (settled) return;
+                settled = true;
+                resolve(value);
+            };
+            Alert.alert(
+                title,
+                message,
+                [
+                    {
+                        text: localize('Cancel', '取消'),
+                        style: 'cancel',
+                        onPress: () => finish(false),
+                    },
+                    {
+                        text: localize('Agree', '同意'),
+                        onPress: () => {
+                            void saveAIProviderConsent(provider);
+                            finish(true);
+                        },
+                    },
+                ],
+                { cancelable: true, onDismiss: () => finish(false) }
+            );
+        });
+    };
+    const applyAIProviderDefaults = useCallback((provider: AIProviderId) => {
+        const defaults = getDefaultAIConfig(provider);
+        updateAISettings({
+            provider,
+            model: isFossBuild && provider === 'openai' ? FOSS_LOCAL_LLM_MODEL_OPTIONS[0] : defaults.model,
+            copilotModel: isFossBuild && provider === 'openai' ? FOSS_LOCAL_LLM_COPILOT_OPTIONS[0] : getDefaultCopilotModel(provider),
+            reasoningEffort: defaults.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
+            thinkingBudget: defaults.thinkingBudget
+                ?? (provider === 'gemini'
+                    ? DEFAULT_GEMINI_THINKING_BUDGET
+                    : provider === 'anthropic'
+                        ? DEFAULT_ANTHROPIC_THINKING_BUDGET
+                        : 0),
+        });
+    }, [isFossBuild, updateAISettings]);
+    useEffect(() => {
+        if (!isFossBuild) return;
+        const configuredProvider = (settings.ai?.provider ?? 'openai') as AIProviderId;
+        if (configuredProvider !== 'openai') {
+            applyAIProviderDefaults('openai');
+        }
+    }, [applyAIProviderDefaults, isFossBuild, settings.ai?.provider]);
+    const handleAIProviderChange = (provider: AIProviderId) => {
+        if (provider === aiProvider) return;
+        void (async () => {
+            if (aiEnabled) {
+                const consented = await requestAIProviderConsent(provider);
+                if (!consented) return;
+            }
+            applyAIProviderDefaults(provider);
+        })();
+    };
+    const handleAIEnabledToggle = (value: boolean) => {
+        if (!value) {
+            updateAISettings({ enabled: false });
+            return;
+        }
+        void (async () => {
+            const consented = await requestAIProviderConsent(aiProvider);
+            if (!consented) return;
+            updateAISettings({ enabled: true });
+        })();
     };
     const updateSpeechSettings = (
         next: Partial<NonNullable<NonNullable<typeof settings.ai>['speechToText']>>
     ) => {
         updateAISettings({ speechToText: { ...(settings.ai?.speechToText ?? {}), ...next } });
     };
+
+    useEffect(() => {
+        if (!isFossBuild) return;
+        const configuredProvider = settings.ai?.speechToText?.provider ?? 'whisper';
+        const configuredModel = settings.ai?.speechToText?.model;
+        const modelIsValidWhisper = typeof configuredModel === 'string'
+            && WHISPER_MODELS.some((entry) => entry.id === configuredModel);
+        if (configuredProvider !== 'whisper' || !modelIsValidWhisper) {
+            updateSpeechSettings({
+                provider: 'whisper',
+                model: modelIsValidWhisper ? configuredModel : DEFAULT_WHISPER_MODEL,
+            });
+        }
+    }, [isFossBuild, settings.ai?.speechToText?.model, settings.ai?.speechToText?.provider, updateSpeechSettings]);
 
     const getWhisperDirectories = () => {
         const candidates: Directory[] = [];
@@ -830,6 +1130,33 @@ export default function SettingsPage() {
         }
     };
 
+    useEffect(() => {
+        if (Platform.OS !== 'android') {
+            setAndroidInstallerSource('play-store');
+            return;
+        }
+        if (isFossBuild) {
+            setAndroidInstallerSource('sideload');
+            return;
+        }
+        let cancelled = false;
+        Application.getInstallReferrerAsync()
+            .then((referrer) => {
+                if (cancelled) return;
+                const normalized = (referrer || '').trim().toLowerCase();
+                setAndroidInstallerSource(normalized ? 'play-store' : 'sideload');
+            })
+            .catch((error) => {
+                if (!cancelled) {
+                    setAndroidInstallerSource('unknown');
+                }
+                logSettingsWarn('Failed to detect Android installer source', error);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [isFossBuild]);
+
     const GITHUB_RELEASES_API = 'https://api.github.com/repos/dongdongbh/Mindwtr/releases/latest';
     const GITHUB_RELEASES_URL = 'https://github.com/dongdongbh/Mindwtr/releases/latest';
     const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=tech.dongdongbh.mindwtr';
@@ -872,14 +1199,18 @@ export default function SettingsPage() {
     }, [fetchLatestRelease]);
 
     const fetchLatestAppStoreInfo = useCallback(async (): Promise<{ version: string; trackViewUrl: string | null }> => {
-        const lookupUrls = [APP_STORE_LOOKUP_URL, APP_STORE_LOOKUP_FALLBACK_URL];
+        const lookupUrls = [APP_STORE_LOOKUP_FALLBACK_URL, APP_STORE_LOOKUP_URL];
         let lastError: Error | null = null;
-        for (const url of lookupUrls) {
+        let bestMatch: { version: string; trackViewUrl: string | null } | null = null;
+        for (const baseUrl of lookupUrls) {
+            const separator = baseUrl.includes('?') ? '&' : '?';
+            const url = `${baseUrl}${separator}_=${Date.now()}`;
             const response = await fetch(url, {
                 headers: {
                     'Accept': 'application/json',
                     'User-Agent': 'Mindwtr-App'
-                }
+                },
+                cache: 'no-store',
             });
             if (!response.ok) {
                 lastError = new Error(`App Store lookup failed (${url}): ${response.status}`);
@@ -895,8 +1226,11 @@ export default function SettingsPage() {
             const trackViewUrl = typeof candidate?.trackViewUrl === 'string' && candidate.trackViewUrl.trim()
                 ? candidate.trackViewUrl.trim()
                 : null;
-            return { version, trackViewUrl };
+            if (!bestMatch || compareVersions(version, bestMatch.version) > 0) {
+                bestMatch = { version, trackViewUrl };
+            }
         }
+        if (bestMatch) return bestMatch;
         if (lastError) {
             throw lastError;
         }
@@ -954,14 +1288,17 @@ export default function SettingsPage() {
 
     const fetchLatestComparableVersion = useCallback(async (): Promise<{ version: string; source: 'play-store' | 'app-store' | 'github-release' }> => {
         if (isFossBuild) {
-            const githubVersion = await fetchLatestGithubVersion();
-            return { version: githubVersion, source: 'github-release' };
+            throw new Error('Update checks are disabled in FOSS build');
         }
         if (Platform.OS === 'ios') {
             const appStoreInfo = await fetchLatestAppStoreInfo();
             return { version: appStoreInfo.version, source: 'app-store' };
         }
         if (Platform.OS !== 'android') {
+            const githubVersion = await fetchLatestGithubVersion();
+            return { version: githubVersion, source: 'github-release' };
+        }
+        if (androidInstallerSource === 'sideload') {
             const githubVersion = await fetchLatestGithubVersion();
             return { version: githubVersion, source: 'github-release' };
         }
@@ -973,9 +1310,18 @@ export default function SettingsPage() {
             const githubVersion = await fetchLatestGithubVersion();
             return { version: githubVersion, source: 'github-release' };
         }
-    }, [fetchLatestAppStoreInfo, fetchLatestGithubVersion, fetchLatestPlayStoreVersion, isFossBuild]);
+    }, [androidInstallerSource, fetchLatestAppStoreInfo, fetchLatestGithubVersion, fetchLatestPlayStoreVersion, isFossBuild]);
 
     useEffect(() => {
+        if (isFossBuild) {
+            setHasUpdateBadge(false);
+            AsyncStorage.multiRemove([
+                UPDATE_BADGE_AVAILABLE_KEY,
+                UPDATE_BADGE_LATEST_KEY,
+                UPDATE_BADGE_LAST_CHECK_KEY,
+            ]).catch((error) => logSettingsWarn('Failed to clear update badge state for FOSS build', error));
+            return;
+        }
         let cancelled = false;
         AsyncStorage.multiGet([UPDATE_BADGE_AVAILABLE_KEY, UPDATE_BADGE_LATEST_KEY])
             .then((entries) => {
@@ -994,10 +1340,10 @@ export default function SettingsPage() {
         return () => {
             cancelled = true;
         };
-    }, [currentVersion]);
+    }, [currentVersion, isFossBuild]);
 
     useEffect(() => {
-        if (isExpoGo) return;
+        if (isExpoGo || isFossBuild) return;
         let cancelled = false;
         const checkUpdates = async () => {
             try {
@@ -1017,14 +1363,24 @@ export default function SettingsPage() {
         return () => {
             cancelled = true;
         };
-    }, [currentVersion, fetchLatestComparableVersion, isExpoGo, persistUpdateBadge]);
+    }, [currentVersion, fetchLatestComparableVersion, isExpoGo, isFossBuild, persistUpdateBadge]);
 
     const handleCheckUpdates = async () => {
+        if (isFossBuild) {
+            Alert.alert(
+                localize('Updates are managed by your distribution source', '更新由发行渠道管理'),
+                localize(
+                    'In-app update checks are disabled in this FOSS build. Please update from your repository or package source.',
+                    '此 FOSS 版本已禁用应用内更新检查。请通过你的软件源或包管理渠道更新。'
+                )
+            );
+            return;
+        }
         setIsCheckingUpdate(true);
         try {
             await AsyncStorage.setItem(UPDATE_BADGE_LAST_CHECK_KEY, String(Date.now()));
 
-            if (Platform.OS === 'android' && !isFossBuild) {
+            if (Platform.OS === 'android' && !isFossBuild && androidInstallerSource !== 'sideload') {
                 const canOpenMarket = await Linking.canOpenURL(PLAY_STORE_MARKET_URL);
                 const targetUrl = canOpenMarket ? PLAY_STORE_MARKET_URL : PLAY_STORE_URL;
                 const { version: latestVersion, source } = await fetchLatestComparableVersion();
@@ -1144,7 +1500,14 @@ export default function SettingsPage() {
         }
     };
 
-    // Set sync folder (Android) or sync file (iOS)
+    const resetSyncStatusForBackendSwitch = useCallback(() => {
+        updateSettings({
+            lastSyncStatus: 'idle',
+            lastSyncError: undefined,
+        }).catch(logSettingsError);
+    }, [updateSettings]);
+
+    // Set sync folder path (iOS can fall back to selecting a JSON file inside the target folder)
     const handleSetSyncPath = async () => {
         try {
             const result = await pickAndParseSyncFolder();
@@ -1156,6 +1519,7 @@ export default function SettingsPage() {
                     setSyncPath(fileUri);
                     await AsyncStorage.setItem(SYNC_BACKEND_KEY, 'file');
                     setSyncBackend('file');
+                    resetSyncStatusForBackendSwitch();
                     Alert.alert(
                         localize('Success', '成功'),
                         localize('Sync folder set successfully', '同步文件夹已设置')
@@ -1165,17 +1529,159 @@ export default function SettingsPage() {
         } catch (error) {
             logSettingsError(error);
             const message = String(error);
-            if (/read-only|read only|not writable|isn't writable|permission denied|EACCES/i.test(message)) {
+            if (/Selected JSON file is not a Mindwtr backup/i.test(message)) {
                 Alert.alert(
-                    localize('Sync folder is read-only', '同步文件夹不可写'),
+                    localize('Invalid sync file', '无效同步文件'),
                     localize(
-                        'The selected folder is read-only. Please choose a writable folder (e.g. My files) or make it available offline.',
-                        '所选文件夹不可写。请选择可写文件夹（如“我的文件”），或将其设为离线可用。'
+                        'Please choose a Mindwtr backup JSON file in the target folder, then try "Select Folder" again.',
+                        '请选择目标文件夹中的 Mindwtr 备份 JSON 文件，然后重试“选择文件夹”。'
                     )
                 );
                 return;
             }
+            if (/temporary Inbox location|re-select a folder in Settings -> Data & Sync/i.test(message)) {
+                Alert.alert(
+                    localize('Sync folder access expired', '同步目录访问已失效'),
+                    localize(
+                        'The selected iOS sync file is in a temporary read-only location. Please go to Settings → Data & Sync → Select Folder and pick a writable cloud file again.',
+                        '当前 iOS 同步文件位于临时只读目录。请前往「设置 → 数据与同步 → 选择文件夹」，重新选择可写的云端文件。'
+                    )
+                );
+                return;
+            }
+            if (/read-only|read only|not writable|isn't writable|permission denied|EACCES/i.test(message)) {
+                Alert.alert(
+                    localize('Sync folder is read-only', '同步文件夹不可写'),
+                    Platform.OS === 'ios'
+                        ? localize(
+                            'The selected folder is read-only. Choose a writable location, or make the cloud folder available offline in Files before selecting it.',
+                            '所选文件夹不可写。请选择可写位置，或先在“文件”App中将云端文件夹设为离线可用后再选择。'
+                        )
+                        : localize(
+                            'The selected folder is read-only. Please choose a writable folder (e.g. My files) or make it available offline.',
+                            '所选文件夹不可写。请选择可写文件夹（如“我的文件”），或将其设为离线可用。'
+                        )
+                );
+                return;
+            }
             Alert.alert(localize('Error', '错误'), localize('Failed to set sync path', '设置失败'));
+        }
+    };
+
+    const handleConnectDropbox = async () => {
+        if (isFossBuild) {
+            Alert.alert(
+                localize('Dropbox unavailable', 'Dropbox 不可用'),
+                localize('Dropbox is disabled in FOSS builds.', 'FOSS 构建不支持 Dropbox。')
+            );
+            return;
+        }
+        if (!dropboxConfigured) {
+            Alert.alert(
+                localize('Dropbox unavailable', 'Dropbox 不可用'),
+                localize('Dropbox app key is not configured in this build.', '当前构建未配置 Dropbox App Key。')
+            );
+            return;
+        }
+        if (isExpoGo) {
+            Alert.alert(
+                localize('Dropbox unavailable in Expo Go', 'Expo Go 不支持 Dropbox'),
+                `${localize(
+                    'Dropbox OAuth requires a development/release build. Expo Go uses temporary redirect URIs that Dropbox rejects.',
+                    'Dropbox OAuth 需要开发版或正式版应用。Expo Go 使用临时回调地址，Dropbox 会拒绝。'
+                )}\n\n${localize('Use redirect URI', '请使用回调地址')}: ${getDropboxRedirectUri()}`
+            );
+            return;
+        }
+        setDropboxBusy(true);
+        try {
+            await authorizeDropbox(dropboxAppKey);
+            await AsyncStorage.multiSet([
+                [SYNC_BACKEND_KEY, 'cloud'],
+                [CLOUD_PROVIDER_KEY, 'dropbox'],
+            ]);
+            setCloudProvider('dropbox');
+            setSyncBackend('cloud');
+            setDropboxConnected(true);
+            resetSyncStatusForBackendSwitch();
+            Alert.alert(localize('Success', '成功'), localize('Connected to Dropbox.', '已连接 Dropbox。'));
+        } catch (error) {
+            logSettingsError(error);
+            const message = formatError(error);
+            if (/redirect[_\s-]?uri/i.test(message)) {
+                Alert.alert(
+                    localize('Invalid redirect URI', '回调地址无效'),
+                    `${localize(
+                        'Add this exact redirect URI in Dropbox OAuth settings.',
+                        '请在 Dropbox OAuth 设置里添加以下精确回调地址。'
+                    )}\n\n${getDropboxRedirectUri()}`
+                );
+            } else {
+                Alert.alert(localize('Connection failed', '连接失败'), message);
+            }
+        } finally {
+            setDropboxBusy(false);
+        }
+    };
+
+    const handleDisconnectDropbox = async () => {
+        if (!dropboxConfigured) {
+            setDropboxConnected(false);
+            return;
+        }
+        setDropboxBusy(true);
+        try {
+            await disconnectDropbox(dropboxAppKey);
+            setDropboxConnected(false);
+            resetSyncStatusForBackendSwitch();
+            Alert.alert(localize('Disconnected', '已断开'), localize('Dropbox connection removed.', '已移除 Dropbox 连接。'));
+        } catch (error) {
+            logSettingsError(error);
+            Alert.alert(localize('Disconnect failed', '断开失败'), formatError(error));
+        } finally {
+            setDropboxBusy(false);
+        }
+    };
+
+    const handleTestDropboxConnection = async () => {
+        if (isFossBuild) {
+            Alert.alert(
+                localize('Dropbox unavailable', 'Dropbox 不可用'),
+                localize('Dropbox is disabled in FOSS builds.', 'FOSS 构建不支持 Dropbox。')
+            );
+            return;
+        }
+        if (!dropboxConfigured) {
+            Alert.alert(
+                localize('Dropbox unavailable', 'Dropbox 不可用'),
+                localize('Dropbox app key is not configured in this build.', '当前构建未配置 Dropbox App Key。')
+            );
+            return;
+        }
+        setIsTestingConnection(true);
+        try {
+            await runDropboxConnectionTest();
+            setDropboxConnected(true);
+            Alert.alert(
+                localize('Connection OK', '连接成功'),
+                localize('Dropbox account is reachable.', 'Dropbox 账号可访问。')
+            );
+        } catch (error) {
+            logSettingsWarn('Dropbox connection test failed', error);
+            if (isDropboxUnauthorizedError(error)) {
+                setDropboxConnected(false);
+                Alert.alert(
+                    localize('Connection failed', '连接失败'),
+                    localize(
+                        'Dropbox token is invalid or revoked. Please tap Connect Dropbox to re-authorize.',
+                        'Dropbox 令牌无效或已失效。请点击“连接 Dropbox”重新授权。'
+                    )
+                );
+            } else {
+                Alert.alert(localize('Connection failed', '连接失败'), formatError(error));
+            }
+        } finally {
+            setIsTestingConnection(false);
         }
     };
 
@@ -1208,25 +1714,55 @@ export default function SettingsPage() {
                     [WEBDAV_PASSWORD_KEY, webdavPassword],
                 ]);
             } else if (syncBackend === 'cloud') {
-                if (!cloudUrl.trim()) {
-                    Alert.alert(
-                        localize('Notice', '提示'),
-                        localize('Please set a self-hosted URL first', '请先设置自托管地址')
-                    );
-                    return;
+                if (cloudProvider === 'dropbox') {
+                    if (isFossBuild) {
+                        Alert.alert(
+                            localize('Dropbox unavailable', 'Dropbox 不可用'),
+                            localize('Dropbox is disabled in FOSS builds.', 'FOSS 构建不支持 Dropbox。')
+                        );
+                        return;
+                    }
+                    if (!dropboxConfigured) {
+                        Alert.alert(
+                            localize('Dropbox unavailable', 'Dropbox 不可用'),
+                            localize('Dropbox app key is not configured in this build.', '当前构建未配置 Dropbox App Key。')
+                        );
+                        return;
+                    }
+                    const connected = await isDropboxConnected();
+                    if (!connected) {
+                        Alert.alert(
+                            localize('Notice', '提示'),
+                            localize('Please connect Dropbox first.', '请先连接 Dropbox。')
+                        );
+                        return;
+                    }
+                    await AsyncStorage.multiSet([
+                        [SYNC_BACKEND_KEY, 'cloud'],
+                        [CLOUD_PROVIDER_KEY, 'dropbox'],
+                    ]);
+                } else {
+                    if (!cloudUrl.trim()) {
+                        Alert.alert(
+                            localize('Notice', '提示'),
+                            localize('Please set a self-hosted URL first', '请先设置自托管地址')
+                        );
+                        return;
+                    }
+                    if (cloudUrlError) {
+                        Alert.alert(
+                            localize('Invalid URL', '地址无效'),
+                            localize('Please enter a valid self-hosted URL (http/https).', '请输入有效的自托管地址（http/https）。')
+                        );
+                        return;
+                    }
+                    await AsyncStorage.multiSet([
+                        [SYNC_BACKEND_KEY, 'cloud'],
+                        [CLOUD_PROVIDER_KEY, 'selfhosted'],
+                        [CLOUD_URL_KEY, cloudUrl.trim()],
+                        [CLOUD_TOKEN_KEY, cloudToken],
+                    ]);
                 }
-                if (cloudUrlError) {
-                    Alert.alert(
-                        localize('Invalid URL', '地址无效'),
-                        localize('Please enter a valid self-hosted URL (http/https).', '请输入有效的自托管地址（http/https）。')
-                    );
-                    return;
-                }
-                await AsyncStorage.multiSet([
-                    [SYNC_BACKEND_KEY, 'cloud'],
-                    [CLOUD_URL_KEY, cloudUrl.trim()],
-                    [CLOUD_TOKEN_KEY, cloudToken],
-                ]);
             } else {
                 if (!syncPath) {
                     Alert.alert(
@@ -1238,6 +1774,7 @@ export default function SettingsPage() {
                 await AsyncStorage.setItem(SYNC_BACKEND_KEY, 'file');
             }
 
+            resetSyncStatusForBackendSwitch();
             const result = await performMobileSync(syncBackend === 'file' ? syncPath || undefined : undefined);
             if (result.success) {
                 const conflictCount = (result.stats?.tasks.conflicts || 0) + (result.stats?.projects.conflicts || 0);
@@ -1252,9 +1789,94 @@ export default function SettingsPage() {
             }
         } catch (error) {
             logSettingsError(error);
+            const message = String(error);
+            if (/temporary Inbox location|re-select a folder in Settings -> Data & Sync|Cannot access the selected sync file/i.test(message)) {
+                Alert.alert(
+                    localize('Sync folder access expired', '同步目录访问已失效'),
+                    localize(
+                        'The selected iOS sync file is in a temporary read-only location. Please go to Settings → Data & Sync → Select Folder and pick a writable iCloud Drive folder.',
+                        '当前 iOS 同步文件位于临时只读目录。请前往「设置 → 数据与同步 → 选择文件夹」，重新选择可写的 iCloud Drive 文件夹。'
+                    )
+                );
+                return;
+            }
             Alert.alert(localize('Error', '错误'), localize('Sync failed', '同步失败'));
         } finally {
             setIsSyncing(false);
+        }
+    };
+
+    const handleTestConnection = async (backend: 'webdav' | 'cloud') => {
+        setIsTestingConnection(true);
+        try {
+            if (backend === 'webdav') {
+                if (!webdavUrl.trim() || webdavUrlError) {
+                    Alert.alert(
+                        localize('Invalid URL', '地址无效'),
+                        localize('Please enter a valid WebDAV URL (http/https).', '请输入有效的 WebDAV 地址（http/https）。')
+                    );
+                    return;
+                }
+                await webdavGetJson<unknown>(normalizeWebdavUrl(webdavUrl.trim()), {
+                    username: webdavUsername.trim(),
+                    password: webdavPassword,
+                    timeoutMs: 10_000,
+                });
+                Alert.alert(
+                    localize('Connection OK', '连接成功'),
+                    localize('WebDAV endpoint is reachable.', 'WebDAV 端点可访问。')
+                );
+                return;
+            }
+
+            if (cloudProvider === 'dropbox') {
+                if (isFossBuild) {
+                    Alert.alert(
+                        localize('Dropbox unavailable', 'Dropbox 不可用'),
+                        localize('Dropbox is disabled in FOSS builds.', 'FOSS 构建不支持 Dropbox。')
+                    );
+                    return;
+                }
+                await runDropboxConnectionTest();
+                setDropboxConnected(true);
+                Alert.alert(
+                    localize('Connection OK', '连接成功'),
+                    localize('Dropbox account is reachable.', 'Dropbox 账号可访问。')
+                );
+                return;
+            }
+
+            if (!cloudUrl.trim() || cloudUrlError) {
+                Alert.alert(
+                    localize('Invalid URL', '地址无效'),
+                    localize('Please enter a valid self-hosted URL (http/https).', '请输入有效的自托管地址（http/https）。')
+                );
+                return;
+            }
+            await cloudGetJson<unknown>(normalizeCloudUrl(cloudUrl.trim()), {
+                token: cloudToken,
+                timeoutMs: 10_000,
+            });
+            Alert.alert(
+                localize('Connection OK', '连接成功'),
+                localize('Self-hosted endpoint is reachable.', '自托管端点可访问。')
+            );
+        } catch (error) {
+            logSettingsWarn('Sync connection test failed', error);
+            if (cloudProvider === 'dropbox' && isDropboxUnauthorizedError(error)) {
+                setDropboxConnected(false);
+            }
+            Alert.alert(
+                localize('Connection failed', '连接失败'),
+                cloudProvider === 'dropbox' && isDropboxUnauthorizedError(error)
+                    ? localize(
+                        'Dropbox token is invalid or revoked. Please tap Connect Dropbox to re-authorize.',
+                        'Dropbox 令牌无效或已失效。请点击“连接 Dropbox”重新授权。'
+                    )
+                    : formatError(error)
+            );
+        } finally {
+            setIsTestingConnection(false);
         }
     };
 
@@ -1264,19 +1886,22 @@ export default function SettingsPage() {
             <View style={{ marginTop: 6 }}>
                 <TouchableOpacity onPress={() => setSyncHistoryExpanded((value) => !value)} activeOpacity={0.7}>
                     <Text style={[styles.settingDescription, { color: tc.secondaryText, fontWeight: '600' }]}>
-                        {localize('Sync history', '同步历史')} ({syncHistoryEntries.length}) {syncHistoryExpanded ? '▾' : '▸'}
+                        {t('settings.syncHistory')} ({syncHistoryEntries.length}) {syncHistoryExpanded ? '▾' : '▸'}
                     </Text>
                 </TouchableOpacity>
                 {syncHistoryExpanded && syncHistoryEntries.map((entry) => {
                     const statusLabel = entry.status === 'success'
-                        ? localize('Completed', '完成')
+                        ? t('settings.lastSyncSuccess')
                         : entry.status === 'conflict'
-                            ? localize('Conflicts', '冲突')
-                            : localize('Failed', '失败');
+                            ? t('settings.lastSyncConflict')
+                            : t('settings.lastSyncError');
                     const details = [
-                        entry.conflicts ? `${localize('Conflicts', '冲突')}: ${entry.conflicts}` : null,
-                        entry.maxClockSkewMs > 0 ? `${localize('Clock skew', '时钟偏差')}: ${formatClockSkew(entry.maxClockSkewMs)}` : null,
-                        entry.timestampAdjustments > 0 ? `${localize('Timestamp fixes', '时间修正')}: ${entry.timestampAdjustments}` : null,
+                        entry.backend ? `${t('settings.syncHistoryBackend')}: ${entry.backend}` : null,
+                        entry.type ? `${t('settings.syncHistoryType')}: ${entry.type}` : null,
+                        entry.conflicts ? `${t('settings.lastSyncConflicts')}: ${entry.conflicts}` : null,
+                        entry.maxClockSkewMs > 0 ? `${t('settings.lastSyncSkew')}: ${formatClockSkew(entry.maxClockSkewMs)}` : null,
+                        entry.timestampAdjustments > 0 ? `${t('settings.lastSyncAdjusted')}: ${entry.timestampAdjustments}` : null,
+                        entry.details ? `${t('settings.syncHistoryDetails')}: ${entry.details}` : null,
                     ].filter(Boolean);
                     return (
                         <Text key={`${entry.at}-${entry.status}`} style={[styles.settingDescription, { color: tc.secondaryText }]}>
@@ -1375,15 +2000,27 @@ export default function SettingsPage() {
     );
 
     // Menu Item
-    const MenuItem = ({ title, onPress, showIndicator }: { title: string; onPress: () => void; showIndicator?: boolean }) => (
+    const MenuItem = ({
+        title,
+        onPress,
+        showIndicator,
+        indicatorColor,
+        indicatorAccessibilityLabel,
+    }: {
+        title: string;
+        onPress: () => void;
+        showIndicator?: boolean;
+        indicatorColor?: string;
+        indicatorAccessibilityLabel?: string;
+    }) => (
         <TouchableOpacity style={[styles.menuItem, { borderBottomColor: tc.border }]} onPress={onPress}>
             <Text style={[styles.menuLabel, { color: tc.text }]}>{title}</Text>
             <View style={styles.menuRight}>
                 {showIndicator && (
                     <View
-                        accessibilityLabel={localize('Update available', '有可用更新')}
+                        accessibilityLabel={indicatorAccessibilityLabel ?? localize('Update available', '有可用更新')}
                         accessibilityRole="text"
-                        style={styles.updateDot}
+                        style={[styles.updateDot, indicatorColor ? { backgroundColor: indicatorColor } : null]}
                     />
                 )}
                 <Text style={[styles.chevron, { color: tc.secondaryText }]}>›</Text>
@@ -1927,6 +2564,56 @@ export default function SettingsPage() {
                             </View>
                         </Pressable>
                     </Modal>
+
+                    <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginTop: 12 }]}>
+                        <TouchableOpacity style={styles.settingRow} onPress={() => setDateFormatPickerOpen(true)}>
+                            <View style={styles.settingInfo}>
+                                <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.dateFormat')}</Text>
+                                <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                    {currentDateFormatLabel}
+                                </Text>
+                            </View>
+                            <Text style={{ color: tc.secondaryText, fontSize: 18 }}>▾</Text>
+                        </TouchableOpacity>
+                    </View>
+                    <Modal
+                        transparent
+                        visible={dateFormatPickerOpen}
+                        animationType="fade"
+                        onRequestClose={() => setDateFormatPickerOpen(false)}
+                    >
+                        <Pressable style={styles.pickerOverlay} onPress={() => setDateFormatPickerOpen(false)}>
+                            <View
+                                style={[styles.pickerCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}
+                                onStartShouldSetResponder={() => true}
+                            >
+                                <Text style={[styles.pickerTitle, { color: tc.text }]}>{t('settings.dateFormat')}</Text>
+                                <ScrollView style={styles.pickerList} contentContainerStyle={styles.pickerListContent}>
+                                    {dateFormatOptions.map((option) => {
+                                        const selected = dateFormat === option.value;
+                                        return (
+                                            <TouchableOpacity
+                                                key={option.value}
+                                                style={[
+                                                    styles.pickerOption,
+                                                    { borderColor: tc.border, backgroundColor: selected ? tc.filterBg : 'transparent' },
+                                                ]}
+                                                onPress={() => {
+                                                    updateSettings({ dateFormat: option.value }).catch(logSettingsError);
+                                                    setDateFormatPickerOpen(false);
+                                                }}
+                                            >
+                                                <Text style={[styles.pickerOptionText, { color: selected ? tc.tint : tc.text }]}>
+                                                    {option.label}
+                                                </Text>
+                                                {selected && <Text style={{ color: tc.tint, fontSize: 18 }}>✓</Text>}
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </ScrollView>
+                            </View>
+                        </Pressable>
+                    </Modal>
                 </ScrollView>
             </SafeAreaView>
         );
@@ -1969,10 +2656,16 @@ export default function SettingsPage() {
                             <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
                                 <View style={styles.settingInfo}>
                                     <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.aiEnable')}</Text>
+                                    <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                        {localize(
+                                            `When enabled, task text is sent directly to ${getAIProviderLabel(aiProvider)} using your API key.`,
+                                            `启用后，任务文本将通过你的 API Key 直接发送到 ${getAIProviderLabel(aiProvider)}。`
+                                        )}
+                                    </Text>
                                 </View>
                                 <Switch
                                     value={aiEnabled}
-                                    onValueChange={(value) => updateAISettings({ enabled: value })}
+                                    onValueChange={handleAIEnabledToggle}
                                     trackColor={{ false: '#767577', true: '#3B82F6' }}
                                 />
                             </View>
@@ -1981,11 +2674,7 @@ export default function SettingsPage() {
                                 <View style={styles.settingInfo}>
                                     <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.aiProvider')}</Text>
                                     <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                        {aiProvider === 'openai'
-                                            ? t('settings.aiProviderOpenAI')
-                                            : aiProvider === 'gemini'
-                                                ? t('settings.aiProviderGemini')
-                                                : t('settings.aiProviderAnthropic')}
+                                        {getAIProviderLabel(aiProvider)}
                                     </Text>
                                 </View>
                             </View>
@@ -1996,61 +2685,38 @@ export default function SettingsPage() {
                                             styles.backendOption,
                                             { borderColor: tc.border, backgroundColor: aiProvider === 'openai' ? tc.filterBg : 'transparent' },
                                         ]}
-                                        onPress={() => {
-                                            const defaults = getDefaultAIConfig('openai');
-                                            updateAISettings({
-                                                provider: 'openai',
-                                                model: defaults.model,
-                                                copilotModel: getDefaultCopilotModel('openai'),
-                                                reasoningEffort: defaults.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
-                                                thinkingBudget: defaults.thinkingBudget ?? 0,
-                                            });
-                                        }}
+                                        onPress={() => handleAIProviderChange('openai')}
                                     >
                                         <Text style={[styles.backendOptionText, { color: aiProvider === 'openai' ? tc.tint : tc.secondaryText }]}>
-                                            {t('settings.aiProviderOpenAI')}
+                                            {getAIProviderLabel('openai')}
                                         </Text>
                                     </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.backendOption,
-                                            { borderColor: tc.border, backgroundColor: aiProvider === 'gemini' ? tc.filterBg : 'transparent' },
-                                        ]}
-                                        onPress={() => {
-                                            const defaults = getDefaultAIConfig('gemini');
-                                            updateAISettings({
-                                                provider: 'gemini',
-                                                model: defaults.model,
-                                                copilotModel: getDefaultCopilotModel('gemini'),
-                                                reasoningEffort: defaults.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
-                                                thinkingBudget: defaults.thinkingBudget ?? DEFAULT_GEMINI_THINKING_BUDGET,
-                                            });
-                                        }}
-                                    >
-                                        <Text style={[styles.backendOptionText, { color: aiProvider === 'gemini' ? tc.tint : tc.secondaryText }]}>
-                                            {t('settings.aiProviderGemini')}
-                                        </Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.backendOption,
-                                            { borderColor: tc.border, backgroundColor: aiProvider === 'anthropic' ? tc.filterBg : 'transparent' },
-                                        ]}
-                                        onPress={() => {
-                                            const defaults = getDefaultAIConfig('anthropic');
-                                            updateAISettings({
-                                                provider: 'anthropic',
-                                                model: defaults.model,
-                                                copilotModel: getDefaultCopilotModel('anthropic'),
-                                                reasoningEffort: defaults.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
-                                                thinkingBudget: defaults.thinkingBudget ?? DEFAULT_ANTHROPIC_THINKING_BUDGET,
-                                            });
-                                        }}
-                                    >
-                                        <Text style={[styles.backendOptionText, { color: aiProvider === 'anthropic' ? tc.tint : tc.secondaryText }]}>
-                                            {t('settings.aiProviderAnthropic')}
-                                        </Text>
-                                    </TouchableOpacity>
+                                    {!isFossBuild && (
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.backendOption,
+                                                { borderColor: tc.border, backgroundColor: aiProvider === 'gemini' ? tc.filterBg : 'transparent' },
+                                            ]}
+                                            onPress={() => handleAIProviderChange('gemini')}
+                                        >
+                                            <Text style={[styles.backendOptionText, { color: aiProvider === 'gemini' ? tc.tint : tc.secondaryText }]}>
+                                                {t('settings.aiProviderGemini')}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
+                                    {!isFossBuild && (
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.backendOption,
+                                                { borderColor: tc.border, backgroundColor: aiProvider === 'anthropic' ? tc.filterBg : 'transparent' },
+                                            ]}
+                                            onPress={() => handleAIProviderChange('anthropic')}
+                                        >
+                                            <Text style={[styles.backendOptionText, { color: aiProvider === 'anthropic' ? tc.tint : tc.secondaryText }]}>
+                                                {t('settings.aiProviderAnthropic')}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
                                 </View>
                             </View>
 
@@ -2060,15 +2726,25 @@ export default function SettingsPage() {
                                 </View>
                             </View>
                             <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
-                                <TouchableOpacity
-                                    style={[styles.dropdownButton, { borderColor: tc.border, backgroundColor: tc.cardBg }]}
-                                    onPress={() => setModelPicker('model')}
-                                >
-                                    <Text style={[styles.dropdownValue, { color: tc.text }]} numberOfLines={1}>
-                                        {aiModel}
-                                    </Text>
-                                    <Text style={[styles.dropdownChevron, { color: tc.secondaryText }]}>▾</Text>
-                                </TouchableOpacity>
+                                <View style={styles.modelInputRow}>
+                                    <TextInput
+                                        value={aiModel}
+                                        onChangeText={(value) => updateAISettings({ model: value })}
+                                        placeholder={aiModelOptions[0]}
+                                        placeholderTextColor={tc.secondaryText}
+                                        autoCapitalize="none"
+                                        autoCorrect={false}
+                                        style={[styles.modelTextInput, { borderColor: tc.border, color: tc.text }]}
+                                    />
+                                    <TouchableOpacity
+                                        style={[styles.modelSuggestButton, { borderColor: tc.border, backgroundColor: tc.cardBg }]}
+                                        onPress={() => setModelPicker('model')}
+                                    >
+                                        <Text style={[styles.modelSuggestButtonText, { color: tc.secondaryText }]}>
+                                            {localize('Suggestions', '建议')}
+                                        </Text>
+                                    </TouchableOpacity>
+                                </View>
                             </View>
 
                             <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
@@ -2080,15 +2756,25 @@ export default function SettingsPage() {
                                 </View>
                             </View>
                             <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
-                                <TouchableOpacity
-                                    style={[styles.dropdownButton, { borderColor: tc.border, backgroundColor: tc.cardBg }]}
-                                    onPress={() => setModelPicker('copilot')}
-                                >
-                                    <Text style={[styles.dropdownValue, { color: tc.text }]} numberOfLines={1}>
-                                        {aiCopilotModel}
-                                    </Text>
-                                    <Text style={[styles.dropdownChevron, { color: tc.secondaryText }]}>▾</Text>
-                                </TouchableOpacity>
+                                <View style={styles.modelInputRow}>
+                                    <TextInput
+                                        value={aiCopilotModel}
+                                        onChangeText={(value) => updateAISettings({ copilotModel: value })}
+                                        placeholder={aiCopilotOptions[0]}
+                                        placeholderTextColor={tc.secondaryText}
+                                        autoCapitalize="none"
+                                        autoCorrect={false}
+                                        style={[styles.modelTextInput, { borderColor: tc.border, color: tc.text }]}
+                                    />
+                                    <TouchableOpacity
+                                        style={[styles.modelSuggestButton, { borderColor: tc.border, backgroundColor: tc.cardBg }]}
+                                        onPress={() => setModelPicker('copilot')}
+                                    >
+                                        <Text style={[styles.modelSuggestButtonText, { color: tc.secondaryText }]}>
+                                            {localize('Suggestions', '建议')}
+                                        </Text>
+                                    </TouchableOpacity>
+                                </View>
                             </View>
 
                         {aiProvider === 'openai' && (
@@ -2097,7 +2783,7 @@ export default function SettingsPage() {
                                     <View style={styles.settingInfo}>
                                         <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.aiReasoning')}</Text>
                                         <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                            {t('settings.aiReasoningHint')}
+                                            {t(isFossBuild ? 'settings.aiReasoningHintFoss' : 'settings.aiReasoningHint')}
                                         </Text>
                                     </View>
                                 </View>
@@ -2122,6 +2808,25 @@ export default function SettingsPage() {
                                             </TouchableOpacity>
                                         ))}
                                     </View>
+                                </View>
+                                <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
+                                    <View style={styles.settingInfo}>
+                                        <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.aiBaseUrl')}</Text>
+                                        <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                            {t('settings.aiBaseUrlHint')}
+                                        </Text>
+                                    </View>
+                                </View>
+                                <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+                                    <TextInput
+                                        value={aiBaseUrl}
+                                        onChangeText={(value) => updateAISettings({ baseUrl: value })}
+                                        placeholder={t('settings.aiBaseUrlPlaceholder')}
+                                        placeholderTextColor={tc.secondaryText}
+                                        autoCapitalize="none"
+                                        autoCorrect={false}
+                                        style={[styles.textInput, { borderColor: tc.border, color: tc.text }]}
+                                    />
                                 </View>
                             </>
                         )}
@@ -2287,40 +2992,44 @@ export default function SettingsPage() {
                             </View>
                             <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
                                 <View style={styles.backendToggle}>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.backendOption,
-                                            { borderColor: tc.border, backgroundColor: speechProvider === 'openai' ? tc.filterBg : 'transparent' },
-                                        ]}
-                                        onPress={() => {
-                                            updateSpeechSettings({
-                                                provider: 'openai',
-                                                model: 'gpt-4o-transcribe',
-                                                offlineModelPath: undefined,
-                                            });
-                                        }}
-                                    >
-                                        <Text style={[styles.backendOptionText, { color: speechProvider === 'openai' ? tc.tint : tc.secondaryText }]}>
-                                            {t('settings.aiProviderOpenAI')}
-                                        </Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.backendOption,
-                                            { borderColor: tc.border, backgroundColor: speechProvider === 'gemini' ? tc.filterBg : 'transparent' },
-                                        ]}
-                                        onPress={() => {
-                                            updateSpeechSettings({
-                                                provider: 'gemini',
-                                                model: 'gemini-2.5-flash',
-                                                offlineModelPath: undefined,
-                                            });
-                                        }}
-                                    >
-                                        <Text style={[styles.backendOptionText, { color: speechProvider === 'gemini' ? tc.tint : tc.secondaryText }]}>
-                                            {t('settings.aiProviderGemini')}
-                                        </Text>
-                                    </TouchableOpacity>
+                                    {!isFossBuild && (
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.backendOption,
+                                                { borderColor: tc.border, backgroundColor: speechProvider === 'openai' ? tc.filterBg : 'transparent' },
+                                            ]}
+                                            onPress={() => {
+                                                updateSpeechSettings({
+                                                    provider: 'openai',
+                                                    model: 'gpt-4o-transcribe',
+                                                    offlineModelPath: undefined,
+                                                });
+                                            }}
+                                        >
+                                            <Text style={[styles.backendOptionText, { color: speechProvider === 'openai' ? tc.tint : tc.secondaryText }]}>
+                                                {t('settings.aiProviderOpenAI')}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
+                                    {!isFossBuild && (
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.backendOption,
+                                                { borderColor: tc.border, backgroundColor: speechProvider === 'gemini' ? tc.filterBg : 'transparent' },
+                                            ]}
+                                            onPress={() => {
+                                                updateSpeechSettings({
+                                                    provider: 'gemini',
+                                                    model: 'gemini-2.5-flash',
+                                                    offlineModelPath: undefined,
+                                                });
+                                            }}
+                                        >
+                                            <Text style={[styles.backendOptionText, { color: speechProvider === 'gemini' ? tc.tint : tc.secondaryText }]}>
+                                                {t('settings.aiProviderGemini')}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
                                     <TouchableOpacity
                                         style={[
                                             styles.backendOption,
@@ -2335,7 +3044,9 @@ export default function SettingsPage() {
                                         }}
                                     >
                                         <Text style={[styles.backendOptionText, { color: speechProvider === 'whisper' ? tc.tint : tc.secondaryText }]}>
-                                            {t('settings.speechProviderOffline')}
+                                            {isFossBuild
+                                                ? localize('Local Whisper', '本地 Whisper')
+                                                : t('settings.speechProviderOffline')}
                                         </Text>
                                     </TouchableOpacity>
                                 </View>
@@ -2630,32 +3341,6 @@ export default function SettingsPage() {
                         </View>
                         <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
                             <View style={styles.settingInfo}>
-                                <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.featurePriorities')}</Text>
-                                <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                    {t('settings.featurePrioritiesDesc')}
-                                </Text>
-                            </View>
-                            <Switch
-                                value={prioritiesEnabled}
-                                onValueChange={(value) => updateFeatureFlags({ priorities: value })}
-                                trackColor={{ false: '#767577', true: '#3B82F6' }}
-                            />
-                        </View>
-                        <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
-                            <View style={styles.settingInfo}>
-                                <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.featureTimeEstimates')}</Text>
-                                <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                    {t('settings.featureTimeEstimatesDesc')}
-                                </Text>
-                            </View>
-                            <Switch
-                                value={timeEstimatesEnabled}
-                                onValueChange={(value) => updateFeatureFlags({ timeEstimates: value })}
-                                trackColor={{ false: '#767577', true: '#3B82F6' }}
-                            />
-                        </View>
-                        <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
-                            <View style={styles.settingInfo}>
                                 <Text style={[styles.settingLabel, { color: tc.text }]}>{featurePomodoroLabel}</Text>
                                 <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
                                     {featurePomodoroDesc}
@@ -2760,12 +3445,46 @@ export default function SettingsPage() {
                     <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginTop: 12 }]}>
                         <View style={styles.settingRow}>
                             <View style={styles.settingInfo}>
+                                <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.weeklyReviewConfig')}</Text>
+                                <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                    {t('settings.weeklyReviewConfigDesc')}
+                                </Text>
+                            </View>
+                        </View>
+                        <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
+                            <View style={styles.settingInfo}>
+                                <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.weeklyReviewIncludeContextsStep')}</Text>
+                                <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                    {t('settings.weeklyReviewIncludeContextsStepDesc')}
+                                </Text>
+                            </View>
+                            <Switch
+                                value={includeContextStep}
+                                onValueChange={(value) => updateWeeklyReviewConfig({ includeContextStep: value })}
+                                trackColor={{ false: '#767577', true: '#3B82F6' }}
+                            />
+                        </View>
+                    </View>
+
+                    <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginTop: 12 }]}>
+                        <View style={styles.settingRow}>
+                            <TouchableOpacity
+                                style={styles.settingInfo}
+                                onPress={() => setGtdInboxProcessingExpanded((prev) => !prev)}
+                                activeOpacity={0.7}
+                            >
                                 <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.inboxProcessing')}</Text>
                                 <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
                                     {t('settings.inboxProcessingDesc')}
                                 </Text>
-                            </View>
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => setGtdInboxProcessingExpanded((prev) => !prev)} activeOpacity={0.7}>
+                                <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                    {gtdInboxProcessingExpanded ? '▾' : '▸'}
+                                </Text>
+                            </TouchableOpacity>
                         </View>
+                        {gtdInboxProcessingExpanded && (
                         <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
                             <View style={styles.settingInfo}>
                                 <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.inboxTwoMinuteFirst')}</Text>
@@ -2776,6 +3495,8 @@ export default function SettingsPage() {
                                 trackColor={{ false: '#767577', true: '#3B82F6' }}
                             />
                         </View>
+                        )}
+                        {gtdInboxProcessingExpanded && (
                         <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
                             <View style={styles.settingInfo}>
                                 <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.inboxProjectFirst')}</Text>
@@ -2786,6 +3507,8 @@ export default function SettingsPage() {
                                 trackColor={{ false: '#767577', true: '#3B82F6' }}
                             />
                         </View>
+                        )}
+                        {gtdInboxProcessingExpanded && (
                         <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
                             <View style={styles.settingInfo}>
                                 <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.inboxScheduleEnabled')}</Text>
@@ -2796,6 +3519,7 @@ export default function SettingsPage() {
                                 trackColor={{ false: '#767577', true: '#3B82F6' }}
                             />
                         </View>
+                        )}
                     </View>
                 </ScrollView>
             </SafeAreaView>
@@ -2807,7 +3531,7 @@ export default function SettingsPage() {
         const autoArchiveOptions = [0, 1, 3, 7, 14, 30, 60];
         const formatAutoArchiveLabel = (days: number) => {
             if (days <= 0) return t('settings.autoArchiveNever');
-            return language === 'zh' ? `${days} 天` : `${days} ${translateText('days', language)}`;
+            return isChineseLanguage ? `${days} 天` : `${days} ${translateText('days', language)}`;
         };
 
         const handleSelectArchive = (days: number) => {
@@ -2948,7 +3672,6 @@ export default function SettingsPage() {
             'priority',
             'contexts',
             'description',
-            'textDirection',
             'tags',
             'timeEstimate',
             'recurrence',
@@ -2964,7 +3687,6 @@ export default function SettingsPage() {
             'project',
             'area',
             'description',
-            'textDirection',
             'checklist',
             'contexts',
             'dueDate',
@@ -3011,8 +3733,6 @@ export default function SettingsPage() {
                     return t('attachments.title');
                 case 'checklist':
                     return t('taskEdit.checklist');
-                case 'textDirection':
-                    return t('taskEdit.textDirectionLabel');
                 default:
                     return fieldId;
             }
@@ -3065,7 +3785,7 @@ export default function SettingsPage() {
             { id: 'basic', title: t('taskEdit.basic') || 'Basic', fields: ['status', 'project', 'area', 'dueDate'] },
             { id: 'scheduling', title: t('taskEdit.scheduling'), fields: ['startTime', 'recurrence', 'reviewAt'] },
             { id: 'organization', title: t('taskEdit.organization'), fields: ['contexts', 'tags', 'priority', 'timeEstimate'] },
-            { id: 'details', title: t('taskEdit.details'), fields: ['description', 'textDirection', 'attachments', 'checklist'] },
+            { id: 'details', title: t('taskEdit.details'), fields: ['description', 'attachments', 'checklist'] },
         ];
 
         function TaskEditorRow({
@@ -3195,6 +3915,53 @@ export default function SettingsPage() {
 
     // ============ CALENDAR SCREEN ============
     if (currentScreen === 'calendar') {
+        const persistSystemCalendarState = async (next: {
+            enabled?: boolean;
+            selectAll?: boolean;
+            selectedCalendarIds?: string[];
+        }) => {
+            const payload = {
+                enabled: next.enabled ?? systemCalendarEnabled,
+                selectAll: next.selectAll ?? systemCalendarSelectAll,
+                selectedCalendarIds: next.selectedCalendarIds ?? systemCalendarSelectedIds,
+            };
+            setSystemCalendarEnabled(payload.enabled);
+            setSystemCalendarSelectAll(payload.selectAll);
+            setSystemCalendarSelectedIds(payload.selectedCalendarIds);
+            await saveSystemCalendarSettings(payload);
+        };
+
+        const handleToggleSystemCalendarEnabled = async (enabled: boolean) => {
+            await persistSystemCalendarState({ enabled });
+            if (enabled && systemCalendarPermission !== 'granted') {
+                await loadSystemCalendarState(true);
+            }
+        };
+
+        const handleRequestSystemCalendarAccess = async () => {
+            await loadSystemCalendarState(true);
+        };
+
+        const handleToggleSystemCalendarSelection = async (calendarId: string, enabled: boolean) => {
+            const allIds = systemCalendars.map((calendar) => calendar.id);
+            if (allIds.length === 0) return;
+
+            const currentSelection = systemCalendarSelectAll
+                ? allIds
+                : Array.from(new Set(systemCalendarSelectedIds.filter((id) => allIds.includes(id))));
+            const nextSelection = enabled
+                ? Array.from(new Set([...currentSelection, calendarId]))
+                : currentSelection.filter((id) => id !== calendarId);
+            const selectAll = nextSelection.length === allIds.length;
+
+            await persistSystemCalendarState({
+                selectAll,
+                selectedCalendarIds: selectAll ? [] : nextSelection,
+            });
+        };
+
+        const selectedSystemCalendarSet = new Set(systemCalendarSelectedIds);
+
         const handleAddCalendar = async () => {
             const url = newCalendarUrl.trim();
             if (!url) return;
@@ -3234,7 +4001,7 @@ export default function SettingsPage() {
                 const { events } = await fetchExternalCalendarEvents(rangeStart, rangeEnd);
                 Alert.alert(
                     localize('Success', '成功'),
-                    language === 'zh' ? `已加载 ${events.length} 个日程` : translateText(`Loaded ${events.length} events`, language)
+                    isChineseLanguage ? `已加载 ${events.length} 个日程` : translateText(`Loaded ${events.length} events`, language)
                 );
             } catch (error) {
                 logSettingsError(error);
@@ -3252,6 +4019,95 @@ export default function SettingsPage() {
                     </Text>
 
                     <View style={[styles.settingCard, { backgroundColor: tc.cardBg }]}>
+                        <View style={styles.settingRow}>
+                            <View style={styles.settingInfo}>
+                                <Text style={[styles.settingLabel, { color: tc.text }]}>
+                                    {localize('Device calendars', '设备日历')}
+                                </Text>
+                                <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                    {localize(
+                                        'Read events from calendars already synced on this device (DAVx5, iCloud, Outlook, etc.).',
+                                        '读取设备上已同步的日历事件（DAVx5、iCloud、Outlook 等）。'
+                                    )}
+                                </Text>
+                            </View>
+                            <Switch
+                                value={systemCalendarEnabled}
+                                onValueChange={handleToggleSystemCalendarEnabled}
+                                trackColor={{ false: '#767577', true: '#3B82F6' }}
+                            />
+                        </View>
+
+                        {systemCalendarEnabled && (
+                            <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: tc.border }}>
+                                {systemCalendarPermission !== 'granted' ? (
+                                    <View>
+                                        <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                            {systemCalendarPermission === 'denied'
+                                                ? localize(
+                                                    'Calendar access is denied. Enable it in system settings, then refresh.',
+                                                    '日历权限被拒绝。请在系统设置中开启后刷新。'
+                                                )
+                                                : localize(
+                                                    'Calendar access is required to read device events.',
+                                                    '读取设备日历事件需要日历权限。'
+                                                )}
+                                        </Text>
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.backendOption,
+                                                { borderColor: tc.border, backgroundColor: tc.filterBg, marginTop: 12, alignSelf: 'flex-start' },
+                                            ]}
+                                            onPress={handleRequestSystemCalendarAccess}
+                                        >
+                                            <Text style={[styles.backendOptionText, { color: tc.text }]}>
+                                                {localize('Grant access', '授权访问')}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                ) : isSystemCalendarLoading ? (
+                                    <View style={{ paddingVertical: 8 }}>
+                                        <ActivityIndicator color={tc.tint} />
+                                    </View>
+                                ) : systemCalendars.length === 0 ? (
+                                    <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                        {localize('No device calendars found.', '未找到设备日历。')}
+                                    </Text>
+                                ) : (
+                                    <View>
+                                        {systemCalendars.map((calendar, idx) => {
+                                            const selected = systemCalendarSelectAll || selectedSystemCalendarSet.has(calendar.id);
+                                            return (
+                                                <View
+                                                    key={calendar.id}
+                                                    style={[
+                                                        styles.settingRow,
+                                                        idx > 0 && { borderTopWidth: 1, borderTopColor: tc.border },
+                                                    ]}
+                                                >
+                                                    <View style={styles.settingInfo}>
+                                                        <Text style={[styles.settingLabel, { color: tc.text }]} numberOfLines={1}>
+                                                            {calendar.name}
+                                                        </Text>
+                                                        <Text style={[styles.settingDescription, { color: tc.secondaryText }]} numberOfLines={1}>
+                                                            {localize('Device calendar', '设备日历')}
+                                                        </Text>
+                                                    </View>
+                                                    <Switch
+                                                        value={selected}
+                                                        onValueChange={(value) => handleToggleSystemCalendarSelection(calendar.id, value)}
+                                                        trackColor={{ false: '#767577', true: '#3B82F6' }}
+                                                    />
+                                                </View>
+                                            );
+                                        })}
+                                    </View>
+                                )}
+                            </View>
+                        )}
+                    </View>
+
+                    <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginTop: 16 }]}>
                         <View style={styles.inputGroup}>
                             <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.externalCalendarName')}</Text>
                             <TextInput
@@ -3265,7 +4121,7 @@ export default function SettingsPage() {
                             <Text style={[styles.settingLabel, { color: tc.text, marginTop: 12 }]}>{t('settings.externalCalendarUrl')}</Text>
                             <TextInput
                                 style={[styles.textInput, { borderColor: tc.border, color: tc.text }]}
-                                placeholder="https://..."
+                                placeholder={t('settings.externalCalendarUrlPlaceholder')}
                                 placeholderTextColor={tc.secondaryText}
                                 autoCapitalize="none"
                                 autoCorrect={false}
@@ -3386,6 +4242,7 @@ export default function SettingsPage() {
                                     onPress={() => {
                                         AsyncStorage.setItem(SYNC_BACKEND_KEY, 'off').catch(logSettingsError);
                                         setSyncBackend('off');
+                                        resetSyncStatusForBackendSwitch();
                                     }}
                                 >
                                     <Text style={[styles.backendOptionText, { color: syncBackend === 'off' ? tc.tint : tc.secondaryText }]}>
@@ -3400,6 +4257,7 @@ export default function SettingsPage() {
                                     onPress={() => {
                                         AsyncStorage.setItem(SYNC_BACKEND_KEY, 'file').catch(logSettingsError);
                                         setSyncBackend('file');
+                                        resetSyncStatusForBackendSwitch();
                                     }}
                                 >
                                     <Text style={[styles.backendOptionText, { color: syncBackend === 'file' ? tc.tint : tc.secondaryText }]}>
@@ -3413,6 +4271,7 @@ export default function SettingsPage() {
                                     ]}
                                     onPress={() => {
                                         setSyncBackend('webdav');
+                                        resetSyncStatusForBackendSwitch();
                                     }}
                                 >
                                     <Text style={[styles.backendOptionText, { color: syncBackend === 'webdav' ? tc.tint : tc.secondaryText }]}>
@@ -3427,6 +4286,7 @@ export default function SettingsPage() {
                                     onPress={() => {
                                         AsyncStorage.setItem(SYNC_BACKEND_KEY, 'cloud').catch(logSettingsError);
                                         setSyncBackend('cloud');
+                                        resetSyncStatusForBackendSwitch();
                                     }}
                                 >
                                     <Text style={[styles.backendOptionText, { color: syncBackend === 'cloud' ? tc.tint : tc.secondaryText }]}>
@@ -3456,28 +4316,29 @@ export default function SettingsPage() {
                                     {localize('How to Sync', '如何同步')}
                                 </Text>
                                 <Text style={[styles.helpText, { color: tc.secondaryText }]}>
-                                    {language === 'zh'
-                                        ? '1. 先点击"导出备份"保存文件到同步文件夹（如 Google Drive）\n2. 点击"选择文件夹"授权该文件夹\n3. 之后点击"同步"即可合并数据'
-                                        : translateText('1. First, tap "Export Backup" and save to your sync folder (e.g., Google Drive)\n2. Tap "Select Folder" to grant access to that folder\n3. Then tap "Sync" to merge data', language)}
+                                    {Platform.OS === 'ios' ? t('settings.fileSyncHowToIos') : t('settings.fileSyncHowToAndroid')}
+                                </Text>
+                                <Text style={[styles.helpText, { color: tc.secondaryText, marginTop: 8 }]}>
+                                    {t('settings.fileSyncTip')}
                                 </Text>
                             </View>
 
                             <Text style={[styles.sectionTitle, { color: tc.text, marginTop: 16 }]}>
-                                {localize('Sync Settings', '同步设置')}
+                                {t('settings.syncSettings')}
                             </Text>
                             <View style={[styles.settingCard, { backgroundColor: tc.cardBg }]}>
                                 {/* Sync File Path */}
                                 <View style={styles.settingRow}>
                                     <View style={styles.settingInfo}>
                                         <Text style={[styles.settingLabel, { color: tc.text }]}>
-                                            {localize('Sync Folder', '同步文件夹')}
+                                            {t('settings.syncFolderLocation')}
                                         </Text>
                                         <Text style={[styles.settingDescription, { color: tc.secondaryText }]} numberOfLines={1}>
-                                            {syncPath ? syncPath.split('/').pop() : localize('Not set', '未设置')}
+                                            {syncPath ? syncPath.split('/').pop() : t('common.notSet')}
                                         </Text>
                                     </View>
                                     <TouchableOpacity onPress={handleSetSyncPath}>
-                                        <Text style={styles.linkText}>{localize('Select Folder', '选择文件夹')}</Text>
+                                        <Text style={styles.linkText}>{t('settings.selectFolder')}</Text>
                                     </TouchableOpacity>
                                 </View>
 
@@ -3489,10 +4350,10 @@ export default function SettingsPage() {
                                 >
                                     <View style={styles.settingInfo}>
                                         <Text style={[styles.settingLabel, { color: syncPath ? '#3B82F6' : tc.secondaryText }]}>
-                                            {localize('Sync', '同步')}
+                                            {t('settings.syncNow')}
                                         </Text>
                                         <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                            {language === 'zh' ? '读取并合并同步文件夹' : translateText('Read and merge sync folder', language)}
+                                            {t('settings.syncReadMergeFolder')}
                                         </Text>
                                     </View>
                                     {isSyncing && <ActivityIndicator size="small" color="#3B82F6" />}
@@ -3502,33 +4363,33 @@ export default function SettingsPage() {
                                 <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
                                     <View style={styles.settingInfo}>
                                         <Text style={[styles.settingLabel, { color: tc.text }]}>
-                                            {localize('Last Sync', '上次同步')}
+                                            {t('settings.lastSync')}
                                         </Text>
                                         <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
                                             {settings.lastSyncAt
                                                 ? new Date(settings.lastSyncAt).toLocaleString()
-                                                : localize('Never', '从未同步')}
-                                            {settings.lastSyncStatus === 'error' && localize(' (failed)', '（失败）')}
-                                            {settings.lastSyncStatus === 'conflict' && localize(' (conflicts)', '（有冲突）')}
+                                                : t('settings.lastSyncNever')}
+                                            {settings.lastSyncStatus === 'error' && t('settings.syncStatusFailedSuffix')}
+                                            {settings.lastSyncStatus === 'conflict' && t('settings.syncStatusConflictsSuffix')}
                                         </Text>
                                         {lastSyncStats && (
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                                {localize('Conflicts', '冲突')}: {syncConflictCount}
+                                                {t('settings.lastSyncConflicts')}: {syncConflictCount}
                                             </Text>
                                         )}
                                         {lastSyncStats && maxClockSkewMs > 0 && (
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                                {localize('Clock skew', '时钟偏差')}: {formatClockSkew(maxClockSkewMs)}
+                                                {t('settings.lastSyncSkew')}: {formatClockSkew(maxClockSkewMs)}
                                             </Text>
                                         )}
                                         {lastSyncStats && timestampAdjustments > 0 && (
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                                {localize('Timestamp fixes', '时间修正')}: {timestampAdjustments}
+                                                {t('settings.lastSyncAdjusted')}: {timestampAdjustments}
                                             </Text>
                                         )}
                                         {lastSyncStats && conflictIds.length > 0 && (
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                                {localize('Conflict IDs', '冲突 ID')}: {conflictIds.join(', ')}
+                                                {t('settings.lastSyncConflictIds')}: {conflictIds.join(', ')}
                                             </Text>
                                         )}
                                         {settings.lastSyncStatus === 'error' && settings.lastSyncError && (
@@ -3554,7 +4415,7 @@ export default function SettingsPage() {
                                     <TextInput
                                         value={webdavUrl}
                                         onChangeText={setWebdavUrl}
-                                        placeholder="https://example.com/remote.php/dav/files/user/mindwtr"
+                                        placeholder={t('settings.webdavUrlPlaceholder')}
                                         placeholderTextColor={tc.secondaryText}
                                         autoCapitalize="none"
                                         autoCorrect={false}
@@ -3575,7 +4436,7 @@ export default function SettingsPage() {
                                     <TextInput
                                         value={webdavUsername}
                                         onChangeText={setWebdavUsername}
-                                        placeholder="user"
+                                        placeholder={t('settings.webdavUsernamePlaceholder')}
                                         placeholderTextColor={tc.secondaryText}
                                         autoCapitalize="none"
                                         autoCorrect={false}
@@ -3621,6 +4482,7 @@ export default function SettingsPage() {
                                             [WEBDAV_USERNAME_KEY, webdavUsername.trim()],
                                             [WEBDAV_PASSWORD_KEY, webdavPassword],
                                         ]).then(() => {
+                                            resetSyncStatusForBackendSwitch();
                                             Alert.alert(localize('Success', '成功'), t('settings.webdavSave'));
                                         }).catch(logSettingsError);
                                     }}
@@ -3643,45 +4505,63 @@ export default function SettingsPage() {
                                 >
                                     <View style={styles.settingInfo}>
                                         <Text style={[styles.settingLabel, { color: webdavUrl.trim() && !webdavUrlError ? tc.tint : tc.secondaryText }]}>
-                                            {localize('Sync', '同步')}
+                                            {t('settings.syncNow')}
                                         </Text>
                                         <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                            {language === 'zh' ? '读取并合并 WebDAV 数据' : translateText('Read and merge WebDAV data', language)}
+                                            {t('settings.syncReadMergeWebdav')}
                                         </Text>
                                     </View>
                                     {isSyncing && <ActivityIndicator size="small" color={tc.tint} />}
                                 </TouchableOpacity>
 
+                                <TouchableOpacity
+                                    style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
+                                    onPress={() => handleTestConnection('webdav')}
+                                    disabled={isSyncing || isTestingConnection || !webdavUrl.trim() || webdavUrlError}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={localize('Test WebDAV connection', '测试 WebDAV 连接')}
+                                >
+                                    <View style={styles.settingInfo}>
+                                        <Text style={[styles.settingLabel, { color: webdavUrl.trim() && !webdavUrlError ? tc.tint : tc.secondaryText }]}>
+                                            {localize('Test connection', '测试连接')}
+                                        </Text>
+                                        <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                            {localize('Verify URL and credentials without syncing data', '仅验证地址和凭据，不执行数据同步')}
+                                        </Text>
+                                    </View>
+                                    {isTestingConnection && <ActivityIndicator size="small" color={tc.tint} />}
+                                </TouchableOpacity>
+
                                 <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
                                     <View style={styles.settingInfo}>
                                         <Text style={[styles.settingLabel, { color: tc.text }]}>
-                                            {localize('Last Sync', '上次同步')}
+                                            {t('settings.lastSync')}
                                         </Text>
                                         <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
                                             {settings.lastSyncAt
                                                 ? new Date(settings.lastSyncAt).toLocaleString()
-                                                : localize('Never', '从未同步')}
-                                            {settings.lastSyncStatus === 'error' && localize(' (failed)', '（失败）')}
-                                            {settings.lastSyncStatus === 'conflict' && localize(' (conflicts)', '（有冲突）')}
+                                                : t('settings.lastSyncNever')}
+                                            {settings.lastSyncStatus === 'error' && t('settings.syncStatusFailedSuffix')}
+                                            {settings.lastSyncStatus === 'conflict' && t('settings.syncStatusConflictsSuffix')}
                                         </Text>
                                         {lastSyncStats && (
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                                {localize('Conflicts', '冲突')}: {syncConflictCount}
+                                                {t('settings.lastSyncConflicts')}: {syncConflictCount}
                                             </Text>
                                         )}
                                         {lastSyncStats && maxClockSkewMs > 0 && (
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                                {localize('Clock skew', '时钟偏差')}: {formatClockSkew(maxClockSkewMs)}
+                                                {t('settings.lastSyncSkew')}: {formatClockSkew(maxClockSkewMs)}
                                             </Text>
                                         )}
                                         {lastSyncStats && timestampAdjustments > 0 && (
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                                {localize('Timestamp fixes', '时间修正')}: {timestampAdjustments}
+                                                {t('settings.lastSyncAdjusted')}: {timestampAdjustments}
                                             </Text>
                                         )}
                                         {lastSyncStats && conflictIds.length > 0 && (
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                                {localize('Conflict IDs', '冲突 ID')}: {conflictIds.join(', ')}
+                                                {t('settings.lastSyncConflictIds')}: {conflictIds.join(', ')}
                                             </Text>
                                         )}
                                         {settings.lastSyncStatus === 'error' && settings.lastSyncError && (
@@ -3702,120 +4582,286 @@ export default function SettingsPage() {
                                 {t('settings.syncBackendCloud')}
                             </Text>
                             <View style={[styles.settingCard, { backgroundColor: tc.cardBg }]}>
-                                <View style={styles.inputGroup}>
-                                    <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.cloudUrl')}</Text>
-                                    <TextInput
-                                        value={cloudUrl}
-                                        onChangeText={setCloudUrl}
-                                        placeholder="https://example.com/v1"
-                                        placeholderTextColor={tc.secondaryText}
-                                        autoCapitalize="none"
-                                        autoCorrect={false}
-                                        style={[styles.textInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
-                                    />
-                                    <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                        {t('settings.cloudHint')}
+                                <View style={[styles.settingRowColumn]}>
+                                    <Text style={[styles.settingLabel, { color: tc.text }]}>
+                                        {localize('Cloud provider', '云端提供方')}
                                     </Text>
-                                    <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                        {localize('Use the base URL — Mindwtr will append /data.', '填写基础地址，Mindwtr 会自动加上 /data。')}
-                                    </Text>
-                                    {cloudUrlError && (
-                                        <Text style={[styles.settingDescription, { color: '#EF4444' }]}>
-                                            {localize('Invalid URL. Use http/https.', '地址无效，请使用 http/https。')}
-                                        </Text>
-                                    )}
+                                    <View style={[styles.backendToggle, { marginTop: 8, width: '100%' }]}>
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.backendOption,
+                                                {
+                                                    borderColor: tc.border,
+                                                    backgroundColor: cloudProvider === 'selfhosted' ? tc.filterBg : 'transparent',
+                                                },
+                                            ]}
+                                            onPress={() => {
+                                                setCloudProvider('selfhosted');
+                                                AsyncStorage.setItem(CLOUD_PROVIDER_KEY, 'selfhosted').catch(logSettingsError);
+                                                resetSyncStatusForBackendSwitch();
+                                            }}
+                                        >
+                                            <Text style={[styles.backendOptionText, { color: cloudProvider === 'selfhosted' ? tc.tint : tc.secondaryText }]}>
+                                                {localize('Self-hosted', '自托管')}
+                                            </Text>
+                                        </TouchableOpacity>
+                                        {!isFossBuild && (
+                                            <TouchableOpacity
+                                                style={[
+                                                    styles.backendOption,
+                                                    {
+                                                        borderColor: tc.border,
+                                                        backgroundColor: cloudProvider === 'dropbox' ? tc.filterBg : 'transparent',
+                                                    },
+                                                ]}
+                                                onPress={() => {
+                                                    setCloudProvider('dropbox');
+                                                    AsyncStorage.setItem(CLOUD_PROVIDER_KEY, 'dropbox').catch(logSettingsError);
+                                                    resetSyncStatusForBackendSwitch();
+                                                }}
+                                            >
+                                                <Text style={[styles.backendOptionText, { color: cloudProvider === 'dropbox' ? tc.tint : tc.secondaryText }]}>
+                                                    Dropbox
+                                                </Text>
+                                            </TouchableOpacity>
+                                        )}
+                                    </View>
                                 </View>
+                            </View>
 
-                                <View style={[styles.inputGroup, { borderTopWidth: 1, borderTopColor: tc.border }]}>
-                                    <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.cloudToken')}</Text>
-                                    <TextInput
-                                        value={cloudToken}
-                                        onChangeText={setCloudToken}
-                                        placeholder="••••••••"
-                                        placeholderTextColor={tc.secondaryText}
-                                        autoCapitalize="none"
-                                        autoCorrect={false}
-                                        secureTextEntry
-                                        style={[styles.textInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
-                                    />
-                                </View>
-
-                                <TouchableOpacity
-                                    style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
-                                    onPress={() => {
-                                        if (cloudUrlError || !cloudUrl.trim()) {
-                                            Alert.alert(
-                                                localize('Invalid URL', '地址无效'),
-                                                localize('Please enter a valid self-hosted URL (http/https).', '请输入有效的自托管地址（http/https）。')
-                                            );
-                                            return;
-                                        }
-                                        AsyncStorage.multiSet([
-                                            [SYNC_BACKEND_KEY, 'cloud'],
-                                            [CLOUD_URL_KEY, cloudUrl.trim()],
-                                            [CLOUD_TOKEN_KEY, cloudToken],
-                                        ]).then(() => {
-                                            Alert.alert(localize('Success', '成功'), t('settings.cloudSave'));
-                                        }).catch(logSettingsError);
-                                    }}
-                                    disabled={cloudUrlError || !cloudUrl.trim()}
-                                >
-                                    <View style={styles.settingInfo}>
-                                        <Text style={[styles.settingLabel, { color: cloudUrlError || !cloudUrl.trim() ? tc.secondaryText : tc.tint }]}>
-                                            {t('settings.cloudSave')}
+                            {cloudProvider === 'selfhosted' || isFossBuild ? (
+                                <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginTop: 12 }]}>
+                                    <View style={styles.inputGroup}>
+                                        <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.cloudUrl')}</Text>
+                                        <TextInput
+                                            value={cloudUrl}
+                                            onChangeText={setCloudUrl}
+                                            placeholder={t('settings.cloudUrlPlaceholder')}
+                                            placeholderTextColor={tc.secondaryText}
+                                            autoCapitalize="none"
+                                            autoCorrect={false}
+                                            style={[styles.textInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
+                                        />
+                                        <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                            {t('settings.cloudHint')}
                                         </Text>
                                         <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                            {t('settings.cloudUrl')}
+                                            {localize('Use the base URL — Mindwtr will append /data.', '填写基础地址，Mindwtr 会自动加上 /data。')}
+                                        </Text>
+                                        {cloudUrlError && (
+                                            <Text style={[styles.settingDescription, { color: '#EF4444' }]}>
+                                                {localize('Invalid URL. Use http/https.', '地址无效，请使用 http/https。')}
+                                            </Text>
+                                        )}
+                                    </View>
+
+                                    <View style={[styles.inputGroup, { borderTopWidth: 1, borderTopColor: tc.border }]}>
+                                        <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.cloudToken')}</Text>
+                                        <TextInput
+                                            value={cloudToken}
+                                            onChangeText={setCloudToken}
+                                            placeholder="••••••••"
+                                            placeholderTextColor={tc.secondaryText}
+                                            autoCapitalize="none"
+                                            autoCorrect={false}
+                                            secureTextEntry
+                                            style={[styles.textInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
+                                        />
+                                    </View>
+
+                                    <TouchableOpacity
+                                        style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
+                                        onPress={() => {
+                                            if (cloudUrlError || !cloudUrl.trim()) {
+                                                Alert.alert(
+                                                    localize('Invalid URL', '地址无效'),
+                                                    localize('Please enter a valid self-hosted URL (http/https).', '请输入有效的自托管地址（http/https）。')
+                                                );
+                                                return;
+                                            }
+                                            AsyncStorage.multiSet([
+                                                [SYNC_BACKEND_KEY, 'cloud'],
+                                                [CLOUD_PROVIDER_KEY, 'selfhosted'],
+                                                [CLOUD_URL_KEY, cloudUrl.trim()],
+                                                [CLOUD_TOKEN_KEY, cloudToken],
+                                            ]).then(() => {
+                                                resetSyncStatusForBackendSwitch();
+                                                Alert.alert(localize('Success', '成功'), t('settings.cloudSave'));
+                                            }).catch(logSettingsError);
+                                        }}
+                                        disabled={cloudUrlError || !cloudUrl.trim()}
+                                    >
+                                        <View style={styles.settingInfo}>
+                                            <Text style={[styles.settingLabel, { color: cloudUrlError || !cloudUrl.trim() ? tc.secondaryText : tc.tint }]}>
+                                                {t('settings.cloudSave')}
+                                            </Text>
+                                            <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                                {t('settings.cloudUrl')}
+                                            </Text>
+                                        </View>
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity
+                                        style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
+                                        onPress={handleSync}
+                                        disabled={isSyncing || !cloudUrl.trim() || cloudUrlError}
+                                    >
+                                        <View style={styles.settingInfo}>
+                                            <Text style={[styles.settingLabel, { color: cloudUrl.trim() && !cloudUrlError ? tc.tint : tc.secondaryText }]}>
+                                                {t('settings.syncNow')}
+                                            </Text>
+                                            <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                                {t('settings.syncReadMergeSelfHosted')}
+                                            </Text>
+                                        </View>
+                                        {isSyncing && <ActivityIndicator size="small" color={tc.tint} />}
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity
+                                        style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
+                                        onPress={() => handleTestConnection('cloud')}
+                                        disabled={isSyncing || isTestingConnection || !cloudUrl.trim() || cloudUrlError}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={localize('Test self-hosted connection', '测试自托管连接')}
+                                    >
+                                        <View style={styles.settingInfo}>
+                                            <Text style={[styles.settingLabel, { color: cloudUrl.trim() && !cloudUrlError ? tc.tint : tc.secondaryText }]}>
+                                                {localize('Test connection', '测试连接')}
+                                            </Text>
+                                            <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                                {localize('Verify URL and token without syncing data', '仅验证地址和令牌，不执行数据同步')}
+                                            </Text>
+                                        </View>
+                                        {isTestingConnection && <ActivityIndicator size="small" color={tc.tint} />}
+                                    </TouchableOpacity>
+                                </View>
+                            ) : (
+                                <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginTop: 12 }]}>
+                                    <View style={styles.settingRowColumn}>
+                                        <Text style={[styles.settingLabel, { color: tc.text }]}>
+                                            {localize('Dropbox account', 'Dropbox 账号')}
+                                        </Text>
+                                        <Text style={[styles.settingDescription, { color: tc.secondaryText, marginTop: 6 }]}>
+                                            {localize(
+                                                'OAuth with Dropbox App Folder access. Mindwtr syncs /Apps/Mindwtr/data.json and /Apps/Mindwtr/attachments/* in your Dropbox.',
+                                                '使用 Dropbox OAuth（应用文件夹权限）。Mindwtr 会同步 Dropbox 中 /Apps/Mindwtr/data.json 与 /Apps/Mindwtr/attachments/*。'
+                                            )}
+                                        </Text>
+                                        <Text style={[styles.settingDescription, { color: tc.secondaryText, marginTop: 6 }]}>
+                                            {localize('Redirect URI', '回调地址')}: {getDropboxRedirectUri()}
+                                        </Text>
+                                        {!dropboxConfigured && (
+                                            <Text style={[styles.settingDescription, { color: '#EF4444', marginTop: 8 }]}>
+                                                {localize('Dropbox app key is not configured for this build.', '当前构建未配置 Dropbox App Key。')}
+                                            </Text>
+                                        )}
+                                        {isExpoGo && (
+                                            <Text style={[styles.settingDescription, { color: '#EF4444', marginTop: 8 }]}>
+                                                {localize(
+                                                    'Expo Go is not supported for Dropbox OAuth. Use a development/release build.',
+                                                    'Expo Go 不支持 Dropbox OAuth。请使用开发版或正式版应用。'
+                                                )}
+                                            </Text>
+                                        )}
+                                        <Text style={[styles.settingDescription, { color: tc.secondaryText, marginTop: 8 }]}>
+                                            {dropboxConnected
+                                                ? localize('Status: Connected', '状态：已连接')
+                                                : localize('Status: Not connected', '状态：未连接')}
                                         </Text>
                                     </View>
-                                </TouchableOpacity>
 
-                                <TouchableOpacity
-                                    style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
-                                    onPress={handleSync}
-                                    disabled={isSyncing || !cloudUrl.trim() || cloudUrlError}
-                                >
-                                    <View style={styles.settingInfo}>
-                                        <Text style={[styles.settingLabel, { color: cloudUrl.trim() && !cloudUrlError ? tc.tint : tc.secondaryText }]}>
-                                            {localize('Sync', '同步')}
-                                        </Text>
-                                        <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                            {language === 'zh' ? '读取并合并自托管数据' : translateText('Read and merge self-hosted data', language)}
-                                        </Text>
-                                    </View>
-                                    {isSyncing && <ActivityIndicator size="small" color={tc.tint} />}
-                                </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
+                                        onPress={dropboxConnected ? handleDisconnectDropbox : handleConnectDropbox}
+                                        disabled={dropboxBusy || !dropboxConfigured || isExpoGo}
+                                    >
+                                        <View style={styles.settingInfo}>
+                                            <Text style={[styles.settingLabel, { color: dropboxConfigured && !isExpoGo ? tc.tint : tc.secondaryText }]}>
+                                                {dropboxConnected
+                                                    ? localize('Disconnect Dropbox', '断开 Dropbox')
+                                                    : localize('Connect Dropbox', '连接 Dropbox')}
+                                            </Text>
+                                            <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                                {isExpoGo
+                                                    ? localize(
+                                                        'Requires development/release build (Expo Go unsupported).',
+                                                        '需要开发版/正式版应用（Expo Go 不支持）。'
+                                                    )
+                                                    : dropboxConnected
+                                                    ? localize('Revoke app token and remove local auth.', '撤销应用令牌并移除本地授权。')
+                                                    : localize('Open Dropbox OAuth sign-in in browser.', '在浏览器中打开 Dropbox OAuth 登录。')}
+                                            </Text>
+                                        </View>
+                                        {dropboxBusy && <ActivityIndicator size="small" color={tc.tint} />}
+                                    </TouchableOpacity>
 
-                                <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
+                                    <TouchableOpacity
+                                        style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
+                                        onPress={handleTestDropboxConnection}
+                                        disabled={isTestingConnection || !dropboxConfigured || !dropboxConnected}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={localize('Test Dropbox connection', '测试 Dropbox 连接')}
+                                    >
+                                        <View style={styles.settingInfo}>
+                                            <Text style={[styles.settingLabel, { color: dropboxConnected ? tc.tint : tc.secondaryText }]}>
+                                                {localize('Test connection', '测试连接')}
+                                            </Text>
+                                            <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                                {localize('Verify Dropbox token and account access.', '验证 Dropbox 令牌与账号访问。')}
+                                            </Text>
+                                        </View>
+                                        {isTestingConnection && <ActivityIndicator size="small" color={tc.tint} />}
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity
+                                        style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
+                                        onPress={handleSync}
+                                        disabled={isSyncing || !dropboxConfigured || !dropboxConnected}
+                                    >
+                                        <View style={styles.settingInfo}>
+                                            <Text style={[styles.settingLabel, { color: dropboxConnected ? tc.tint : tc.secondaryText }]}>
+                                                {t('settings.syncNow')}
+                                            </Text>
+                                            <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                                {localize('Read and merge Dropbox data.', '读取并合并 Dropbox 数据。')}
+                                            </Text>
+                                        </View>
+                                        {isSyncing && <ActivityIndicator size="small" color={tc.tint} />}
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+
+                            <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginTop: 12 }]}>
+                                <View style={styles.settingRow}>
                                     <View style={styles.settingInfo}>
                                         <Text style={[styles.settingLabel, { color: tc.text }]}>
-                                            {localize('Last Sync', '上次同步')}
+                                            {t('settings.lastSync')}
                                         </Text>
                                         <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
                                             {settings.lastSyncAt
                                                 ? new Date(settings.lastSyncAt).toLocaleString()
-                                                : localize('Never', '从未同步')}
-                                            {settings.lastSyncStatus === 'error' && localize(' (failed)', '（失败）')}
-                                            {settings.lastSyncStatus === 'conflict' && localize(' (conflicts)', '（有冲突）')}
+                                                : t('settings.lastSyncNever')}
+                                            {settings.lastSyncStatus === 'error' && t('settings.syncStatusFailedSuffix')}
+                                            {settings.lastSyncStatus === 'conflict' && t('settings.syncStatusConflictsSuffix')}
                                         </Text>
                                         {lastSyncStats && (
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                                {localize('Conflicts', '冲突')}: {syncConflictCount}
+                                                {t('settings.lastSyncConflicts')}: {syncConflictCount}
                                             </Text>
                                         )}
                                         {lastSyncStats && maxClockSkewMs > 0 && (
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                                {localize('Clock skew', '时钟偏差')}: {formatClockSkew(maxClockSkewMs)}
+                                                {t('settings.lastSyncSkew')}: {formatClockSkew(maxClockSkewMs)}
                                             </Text>
                                         )}
                                         {lastSyncStats && timestampAdjustments > 0 && (
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                                {localize('Timestamp fixes', '时间修正')}: {timestampAdjustments}
+                                                {t('settings.lastSyncAdjusted')}: {timestampAdjustments}
                                             </Text>
                                         )}
                                         {lastSyncStats && conflictIds.length > 0 && (
                                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                                {localize('Conflict IDs', '冲突 ID')}: {conflictIds.join(', ')}
+                                                {t('settings.lastSyncConflictIds')}: {conflictIds.join(', ')}
                                             </Text>
                                         )}
                                         {settings.lastSyncStatus === 'error' && settings.lastSyncError && (
@@ -3833,7 +4879,7 @@ export default function SettingsPage() {
 
                     {/* Backup Section */}
                     <Text style={[styles.sectionTitle, { color: tc.text, marginTop: 24 }]}>
-                        {localize('Backup', '备份')}
+                        {t('settings.backup')}
                     </Text>
                     <View style={[styles.settingCard, { backgroundColor: tc.cardBg }]}>
                         <TouchableOpacity
@@ -3843,10 +4889,10 @@ export default function SettingsPage() {
                         >
                             <View style={styles.settingInfo}>
                                 <Text style={[styles.settingLabel, { color: '#3B82F6' }]}>
-                                    {localize('Export Backup', '导出备份')}
+                                    {t('settings.exportBackup')}
                                 </Text>
                                 <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                    {localize('Save to sync folder', '保存到同步文件夹')}
+                                    {t('settings.saveToSyncFolder')}
                                 </Text>
                             </View>
                         </TouchableOpacity>
@@ -3980,7 +5026,7 @@ export default function SettingsPage() {
                             style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
                             onPress={() => openLink('https://github.com/dongdongbh/Mindwtr/wiki')}
                         >
-                            <Text style={[styles.settingLabel, { color: tc.text }]}>{localize('Documentation', '文档')}</Text>
+                            <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.documentation')}</Text>
                             <Text style={styles.linkText}>GitHub Wiki</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
@@ -3988,7 +5034,7 @@ export default function SettingsPage() {
                             onPress={() => openLink('https://ko-fi.com/dongdongbh')}
                         >
                             <Text style={[styles.settingLabel, { color: tc.text }]}>
-                                {localize('Support Project', '支持项目')}
+                                {t('settings.sponsorProject')}
                             </Text>
                             <Text style={styles.linkText}>Ko-fi</Text>
                         </TouchableOpacity>
@@ -4004,30 +5050,32 @@ export default function SettingsPage() {
                             onPress={() => openLink('https://dongdongbh.tech')}
                         >
                             <Text style={[styles.settingLabel, { color: tc.text }]}>
-                                {localize('Developer Website', '开发者网站')}
+                                {t('settings.website')}
                             </Text>
                             <Text style={styles.linkText}>dongdongbh.tech</Text>
                         </TouchableOpacity>
                         <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
-                            <Text style={[styles.settingLabel, { color: tc.text }]}>{localize('License', '许可证')}</Text>
+                            <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.license')}</Text>
                             <Text style={[styles.settingValue, { color: tc.secondaryText }]}>AGPL-3.0</Text>
                         </View>
-                        <TouchableOpacity
-                            style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
-                            onPress={handleCheckUpdates}
-                            disabled={isCheckingUpdate}
-                        >
-                            <Text style={[styles.settingLabel, { color: tc.text }]}>
-                                {localize('Check for Updates', '检查更新')}
-                            </Text>
-                            {isCheckingUpdate ? (
-                                <ActivityIndicator size="small" color="#3B82F6" />
-                            ) : (
-                                <Text style={styles.linkText}>
-                                    {localize('Tap to check', '点击检查')}
+                        {!isFossBuild && (
+                            <TouchableOpacity
+                                style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
+                                onPress={handleCheckUpdates}
+                                disabled={isCheckingUpdate}
+                            >
+                                <Text style={[styles.settingLabel, { color: tc.text }]}>
+                                    {t('settings.checkForUpdates')}
                                 </Text>
-                            )}
-                        </TouchableOpacity>
+                                {isCheckingUpdate ? (
+                                    <ActivityIndicator size="small" color="#3B82F6" />
+                                ) : (
+                                    <Text style={styles.linkText}>
+                                        {localize('Tap to check', '点击检查')}
+                                    </Text>
+                                )}
+                            </TouchableOpacity>
+                        )}
                     </View>
                 </ScrollView>
             </SafeAreaView>
@@ -4043,9 +5091,15 @@ export default function SettingsPage() {
                     <MenuItem title={t('settings.general')} onPress={() => pushSettingsScreen('general')} />
                     <MenuItem title={t('settings.gtd')} onPress={() => pushSettingsScreen('gtd')} />
                     <MenuItem title={t('settings.notifications')} onPress={() => pushSettingsScreen('notifications')} />
-                    <MenuItem title={t('settings.dataSync')} onPress={() => pushSettingsScreen('sync')} />
+                    <MenuItem
+                        title={t('settings.dataSync')}
+                        onPress={() => pushSettingsScreen('sync')}
+                        showIndicator={Boolean(syncBadgeColor)}
+                        indicatorColor={syncBadgeColor}
+                        indicatorAccessibilityLabel={syncBadgeAccessibilityLabel}
+                    />
                     <MenuItem title={t('settings.advanced')} onPress={() => pushSettingsScreen('advanced')} />
-                    <MenuItem title={t('settings.about')} onPress={() => pushSettingsScreen('about')} showIndicator={hasUpdateBadge} />
+                    <MenuItem title={t('settings.about')} onPress={() => pushSettingsScreen('about')} showIndicator={!isFossBuild && hasUpdateBadge} />
                 </View>
             </ScrollView>
         </SafeAreaView>
@@ -4125,6 +5179,29 @@ const styles = StyleSheet.create({
     },
     dropdownChevron: {
         fontSize: 14,
+        fontWeight: '600',
+    },
+    modelInputRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    modelTextInput: {
+        flex: 1,
+        borderWidth: 1,
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        fontSize: 14,
+    },
+    modelSuggestButton: {
+        borderWidth: 1,
+        borderRadius: 10,
+        paddingHorizontal: 10,
+        paddingVertical: 10,
+    },
+    modelSuggestButtonText: {
+        fontSize: 12,
         fontWeight: '600',
     },
     pickerOverlay: {

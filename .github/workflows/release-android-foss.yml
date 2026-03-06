@@ -15,11 +15,11 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: release-android-foss-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   android-foss:
@@ -29,58 +29,54 @@ jobs:
     env:
       # Keep Metro/JS bundling stable on CI during release builds.
       NODE_OPTIONS: --max-old-space-size=6144
+      DROPBOX_APP_KEY: ${{ vars.DROPBOX_APP_KEY || secrets.DROPBOX_APP_KEY }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+      - name: Install pinned Node.js (match reproducible recipe)
+        run: |
+          wget -q -O /tmp/nodejs-lts.tar.xz -- https://nodejs.org/dist/v24.13.1/node-v24.13.1-linux-x64.tar.xz
+          sha256sum -c <<< '30215f90ea3cd04dfbc06e762c021393fa173a1d392974298bbc871a8e461089  /tmp/nodejs-lts.tar.xz'
+          tar xf /tmp/nodejs-lts.tar.xz -C /opt
+          echo "/opt/node-v24.13.1-linux-x64/bin" >> "$GITHUB_PATH"
+          /opt/node-v24.13.1-linux-x64/bin/node -v
+          /opt/node-v24.13.1-linux-x64/bin/npm -v
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
 
       - name: Prepare FOSS dependency manifest
-        working-directory: apps/mobile
-        run: ./scripts/fdroid_prep.sh
+        run: bash apps/mobile/scripts/fdroid_prep.sh
 
       - name: Install core dependencies
-        working-directory: packages/core
-        run: npm install --workspaces=false --legacy-peer-deps --no-audit --no-fund
+        run: npm ci --workspaces=false --legacy-peer-deps --no-audit --no-fund --prefix packages/core
 
       - name: Install mobile dependencies
-        working-directory: apps/mobile
-        run: npm install --workspaces=false --legacy-peer-deps --no-audit --no-fund
+        run: npm ci --workspaces=false --legacy-peer-deps --no-audit --no-fund --prefix apps/mobile
 
       - name: Resolve version
         id: version
         run: |
-          TAG_INPUT="${{ inputs.tag }}"
-          if [ -z "$TAG_INPUT" ]; then
-            TAG_INPUT="${{ github.event.inputs.tag }}"
-          fi
-          if [ -n "$TAG_INPUT" ]; then
-            TAG="$TAG_INPUT"
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          INPUT_TAG="${{ inputs.tag || github.event.inputs.tag }}"
+          GITHUB_EVENT_INPUTS_TAG="${{ github.event.inputs.tag }}"
+          scripts/ci/resolve-release-version.sh "$INPUT_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Build FOSS Android APK (Gradle, arm64-v8a only)
-        working-directory: apps/mobile
+        timeout-minutes: 30
         run: |
-          UNSIGNED_APK=1 FOSS_BUILD=1 SKIP_FDROID_PREP=1 ARCHS=arm64-v8a bash ./scripts/android_build.sh
-          ls -la ./build
+          UNSIGNED_APK=1 FOSS_BUILD=1 SKIP_FDROID_PREP=1 ARCHS=arm64-v8a bash apps/mobile/scripts/android_build.sh
+          ls -la apps/mobile/build
 
       - name: Sign FOSS APK with release key
+        timeout-minutes: 15
         env:
           ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
           ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
@@ -99,11 +95,13 @@ jobs:
             fi
           done
 
-          APK_PATH="$(ls apps/mobile/build/mindwtr-*-arm64-v8a-foss.apk | head -1)"
-          if [[ -z "${APK_PATH}" ]]; then
-            echo "No arm64 FOSS APK produced for signing" >&2
+          mapfile -t apk_matches < <(find apps/mobile/build -maxdepth 1 -type f -name 'mindwtr-*-arm64-v8a-foss.apk' | sort)
+          if [[ "${#apk_matches[@]}" -ne 1 ]]; then
+            echo "Expected exactly one arm64 FOSS APK for signing, found ${#apk_matches[@]}" >&2
+            printf '%s\n' "${apk_matches[@]}" >&2
             exit 1
           fi
+          APK_PATH="${apk_matches[0]}"
 
           APKSIGNER_BIN="$(command -v apksigner || true)"
           ZIPALIGN_BIN="$(command -v zipalign || true)"
@@ -120,6 +118,13 @@ jobs:
 
           KEYSTORE_PATH="${RUNNER_TEMP}/android-release.keystore"
           printf '%s' "${ANDROID_RELEASE_KEYSTORE_BASE64}" | base64 --decode > "${KEYSTORE_PATH}"
+          chmod 600 "${KEYSTORE_PATH}"
+
+          STORE_PASS_FILE="${RUNNER_TEMP}/android-store-pass.txt"
+          KEY_PASS_FILE="${RUNNER_TEMP}/android-key-pass.txt"
+          printf '%s' "${ANDROID_RELEASE_STORE_PASSWORD}" > "${STORE_PASS_FILE}"
+          printf '%s' "${ANDROID_RELEASE_KEY_PASSWORD}" > "${KEY_PASS_FILE}"
+          chmod 600 "${STORE_PASS_FILE}" "${KEY_PASS_FILE}"
 
           UNSIGNED_APK="${RUNNER_TEMP}/mindwtr-foss-unsigned.apk"
           ALIGNED_APK="${RUNNER_TEMP}/mindwtr-foss-aligned.apk"
@@ -131,12 +136,13 @@ jobs:
           "${APKSIGNER_BIN}" sign \
             --ks "${KEYSTORE_PATH}" \
             --ks-key-alias "${ANDROID_RELEASE_KEY_ALIAS}" \
-            --ks-pass "pass:${ANDROID_RELEASE_STORE_PASSWORD}" \
-            --key-pass "pass:${ANDROID_RELEASE_KEY_PASSWORD}" \
+            --ks-pass "file:${STORE_PASS_FILE}" \
+            --key-pass "file:${KEY_PASS_FILE}" \
             --out "${SIGNED_APK}" \
             "${ALIGNED_APK}"
 
           mv "${SIGNED_APK}" "${APK_PATH}"
+          rm -f "${STORE_PASS_FILE}" "${KEY_PASS_FILE}" "${KEYSTORE_PATH}"
 
           SIG_REPORT="${RUNNER_TEMP}/mindwtr-foss-signature.txt"
           "${APKSIGNER_BIN}" verify --verbose --print-certs "${APK_PATH}" | tee "${SIG_REPORT}"
@@ -148,11 +154,13 @@ jobs:
 
       - name: Verify FOSS permission cleanup
         run: |
-          APK_PATH="$(ls apps/mobile/build/mindwtr-*-arm64-v8a-foss.apk | head -1)"
-          if [[ -z "${APK_PATH}" ]]; then
-            echo "No arm64 FOSS APK produced" >&2
+          mapfile -t apk_matches < <(find apps/mobile/build -maxdepth 1 -type f -name 'mindwtr-*-arm64-v8a-foss.apk' | sort)
+          if [[ "${#apk_matches[@]}" -ne 1 ]]; then
+            echo "Expected exactly one arm64 FOSS APK for permission verification, found ${#apk_matches[@]}" >&2
+            printf '%s\n' "${apk_matches[@]}" >&2
             exit 1
           fi
+          APK_PATH="${apk_matches[0]}"
           AAPT_BIN="$(command -v aapt || true)"
           if [[ -z "${AAPT_BIN}" ]]; then
             AAPT_BIN="$(ls "${ANDROID_HOME}"/build-tools/*/aapt 2>/dev/null | sort -V | tail -1)"
@@ -182,18 +190,21 @@ jobs:
       - name: Collect Android FOSS artifacts
         run: |
           VERSION=${{ steps.version.outputs.version }}
-          APK_PATH="$(ls apps/mobile/build/mindwtr-*-arm64-v8a-foss.apk | head -1)"
-          if [[ -z "${APK_PATH}" ]]; then
-            echo "No arm64 FOSS APK found for collection" >&2
+          mapfile -t apk_matches < <(find apps/mobile/build -maxdepth 1 -type f -name 'mindwtr-*-arm64-v8a-foss.apk' | sort)
+          if [[ "${#apk_matches[@]}" -ne 1 ]]; then
+            echo "Expected exactly one arm64 FOSS APK for collection, found ${#apk_matches[@]}" >&2
+            printf '%s\n' "${apk_matches[@]}" >&2
             exit 1
           fi
+          APK_PATH="${apk_matches[0]}"
           mkdir -p release-artifacts
           cp "${APK_PATH}" "release-artifacts/mindwtr-${VERSION}-foss.apk"
           ls -la release-artifacts
 
       - name: Upload Android FOSS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-android-foss
           path: release-artifacts/*
           if-no-files-found: error
+          retention-days: 28

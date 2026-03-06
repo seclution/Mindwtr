@@ -24,7 +24,6 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
     const [audioAttachment, setAudioAttachment] = useState<Attachment | null>(null);
     const [audioSource, setAudioSource] = useState<string | null>(null);
     const [audioError, setAudioError] = useState<string | null>(null);
-    const [audioObjectUrl, setAudioObjectUrl] = useState<string | null>(null);
     const [imageAttachment, setImageAttachment] = useState<Attachment | null>(null);
     const [imageSource, setImageSource] = useState<string | null>(null);
     const [textAttachment, setTextAttachment] = useState<Attachment | null>(null);
@@ -33,6 +32,8 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
     const [textLoading, setTextLoading] = useState(false);
     const [showLinkPrompt, setShowLinkPrompt] = useState(false);
     const audioRef = useRef<HTMLAudioElement | null>(null);
+    const audioLoadRequestRef = useRef(0);
+    const audioObjectUrlRef = useRef<string | null>(null);
 
     const resolveValidationMessage = useCallback((error?: string) => {
         if (error === 'file_too_large') return t('attachments.fileTooLarge');
@@ -98,6 +99,7 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
     }, [t]);
 
     const closeAudio = useCallback(() => {
+        audioLoadRequestRef.current += 1;
         if (audioRef.current) {
             audioRef.current.pause();
             audioRef.current.currentTime = 0;
@@ -105,11 +107,11 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
         setAudioAttachment(null);
         setAudioSource(null);
         setAudioError(null);
-        if (audioObjectUrl) {
-            URL.revokeObjectURL(audioObjectUrl);
-            setAudioObjectUrl(null);
+        if (audioObjectUrlRef.current) {
+            URL.revokeObjectURL(audioObjectUrlRef.current);
+            audioObjectUrlRef.current = null;
         }
-    }, [audioObjectUrl]);
+    }, []);
 
     const closeImage = useCallback(() => {
         setImageAttachment(null);
@@ -169,20 +171,29 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
 
     const openAttachment = useCallback((attachment: Attachment) => {
         if (isAudioAttachment(attachment)) {
+            const requestId = audioLoadRequestRef.current + 1;
+            audioLoadRequestRef.current = requestId;
             setAudioAttachment(attachment);
             setAudioError(null);
             void resolveAudioBlobSource(attachment).then((blobUrl) => {
+                if (audioLoadRequestRef.current !== requestId) {
+                    if (blobUrl) URL.revokeObjectURL(blobUrl);
+                    return;
+                }
                 if (blobUrl) {
-                    if (audioObjectUrl) {
-                        URL.revokeObjectURL(audioObjectUrl);
+                    if (audioObjectUrlRef.current) {
+                        URL.revokeObjectURL(audioObjectUrlRef.current);
                     }
-                    setAudioObjectUrl(blobUrl);
+                    audioObjectUrlRef.current = blobUrl;
                     setAudioSource(blobUrl);
                 } else {
+                    if (audioObjectUrlRef.current) {
+                        URL.revokeObjectURL(audioObjectUrlRef.current);
+                        audioObjectUrlRef.current = null;
+                    }
                     setAudioSource(resolveAttachmentSource(attachment.uri));
                 }
             });
-            setAudioError(null);
             return;
         }
         if (isTextAttachment(attachment)) {
@@ -212,7 +223,17 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
             return;
         }
         void openExternal(attachment.uri);
-    }, [audioObjectUrl, loadTextAttachment, openExternal, resolveAudioBlobSource, t]);
+    }, [loadTextAttachment, openExternal, resolveAudioBlobSource, t]);
+
+    useEffect(() => {
+        return () => {
+            audioLoadRequestRef.current += 1;
+            if (audioObjectUrlRef.current) {
+                URL.revokeObjectURL(audioObjectUrlRef.current);
+                audioObjectUrlRef.current = null;
+            }
+        };
+    }, []);
 
     const addFileAttachment = useCallback(async () => {
         if (!isTauriRuntime()) {

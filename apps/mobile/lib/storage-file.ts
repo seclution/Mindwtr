@@ -16,6 +16,7 @@ interface PickResult extends AppData {
 const SYNC_FILE_NAME = 'data.json';
 const LEGACY_SYNC_FILE_NAME = 'mindwtr-sync.json';
 const READONLY_FOLDER_MESSAGE = 'Selected folder is read-only. Please choose a writable folder or make it available offline.';
+const IOS_TEMP_INBOX_PATTERN = /\/tmp\/[^/\s]*-Inbox\//i;
 const syncUriResolutionCache = new Map<string, string>();
 
 const isReadOnlyError = (error: unknown): boolean => {
@@ -36,6 +37,15 @@ const normalizeDirectoryUri = (uri: string): string => uri.replace(/\/+$/, '');
 
 const buildSyncFileUri = (directoryUri: string, fileName = SYNC_FILE_NAME): string =>
     `${normalizeDirectoryUri(directoryUri)}/${fileName}`;
+
+const emptyPickResult = (fileUri: string): PickResult => ({
+    tasks: [],
+    projects: [],
+    sections: [],
+    areas: [],
+    settings: {},
+    __fileUri: fileUri,
+});
 
 const decodeUriSafe = (value: string): string => {
     try {
@@ -106,6 +116,8 @@ const buildTreeDocumentUri = (context: SafContext, documentId: string): string =
     const documentIdEncoded = encodeURIComponent(documentId);
     return `${context.prefix}/tree/${context.treeIdEncoded}/document/${documentIdEncoded}`;
 };
+
+const isIosTemporaryInboxUri = (uri: string): boolean => IOS_TEMP_INBOX_PATTERN.test(uri);
 
 const listDirectoryForSyncFile = async (directoryUri: string): Promise<string | null> => {
     if (!StorageAccessFramework?.readDirectoryAsync) return null;
@@ -333,11 +345,59 @@ const assertIosDirectoryWritable = async (
     }
 };
 
+const assertIosFileWritable = async (fileUri: string): Promise<void> => {
+    let existingContent: string | null = null;
+    try {
+        existingContent = await readFileText(fileUri);
+    } catch {
+        existingContent = null;
+    }
+
+    try {
+        writeWithModernFileApi(fileUri, existingContent ?? '{}');
+    } catch (error) {
+        if (isReadOnlyError(error)) {
+            throw new Error(READONLY_FOLDER_MESSAGE);
+        }
+        throw error;
+    }
+};
+
 const pickAndParseIosSyncFolder = async (): Promise<PickResult | null> => {
+    const pickFolderFromExistingFile = async (): Promise<PickResult | null> => {
+        const result = await DocumentPicker.getDocumentAsync({
+            type: 'application/json',
+            copyToCacheDirectory: false,
+        });
+        if (result.canceled) return null;
+        const pickedFileUri = result.assets[0]?.uri;
+        if (!pickedFileUri) return null;
+
+        if (isIosTemporaryInboxUri(pickedFileUri)) {
+            throw new Error('Selected iOS sync file is in a temporary Inbox location and is read-only. Re-select a folder in Settings -> Data & Sync.');
+        }
+
+        await assertIosFileWritable(pickedFileUri);
+
+        const pickedContent = await readFileText(pickedFileUri);
+        if (pickedContent) {
+            try {
+                const data = parseAppData(pickedContent);
+                return { ...data, __fileUri: pickedFileUri };
+            } catch {
+                throw new Error('Selected JSON file is not a Mindwtr backup. Please select a Mindwtr backup JSON file in the target folder.');
+            }
+        }
+
+        return emptyPickResult(pickedFileUri);
+    };
+
     try {
         const directory = await ExpoDirectory.pickDirectoryAsync();
         const directoryUri = directory?.uri;
-        if (!directoryUri) return null;
+        if (!directoryUri) {
+            return await pickFolderFromExistingFile();
+        }
 
         await assertIosDirectoryWritable(directoryUri);
 
@@ -353,23 +413,18 @@ const pickAndParseIosSyncFolder = async (): Promise<PickResult | null> => {
             }
         }
 
-        if (!fileContent) {
-            return {
-                tasks: [],
-                projects: [],
-                sections: [],
-                areas: [],
-                settings: {},
-                __fileUri: primaryFileUri,
-            };
-        }
+        if (!fileContent) return emptyPickResult(primaryFileUri);
         const data = parseAppData(fileContent);
         return { ...data, __fileUri: fileUri };
     } catch (error) {
         if (isPickerCanceledError(error)) {
-            return null;
+            return await pickFolderFromExistingFile();
         }
-        throw error;
+        void logWarn('iOS folder picker failed; falling back to file-based folder selection', {
+            scope: 'sync',
+            extra: { operation: 'import' },
+        });
+        return await pickFolderFromExistingFile();
     }
 };
 
@@ -401,16 +456,7 @@ export const pickAndParseSyncFolder = async (): Promise<PickResult | null> => {
         if (fileContent === null) {
             fileContent = await readFileText(fileUri);
         }
-        if (!fileContent) {
-            return {
-                tasks: [],
-                projects: [],
-                sections: [],
-                areas: [],
-                settings: {},
-                __fileUri: fileUri,
-            };
-        }
+        if (!fileContent) return emptyPickResult(fileUri);
         const data = parseAppData(fileContent);
         return { ...data, __fileUri: fileUri };
     } catch (error) {

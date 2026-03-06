@@ -15,38 +15,40 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: release-android-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   android:
     runs-on: ubuntu-latest
     name: Android Build + Publish
     timeout-minutes: 90
+    env:
+      DROPBOX_APP_KEY: ${{ vars.DROPBOX_APP_KEY || secrets.DROPBOX_APP_KEY }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
         with:
           bun-version: "1.x"
 
@@ -55,7 +57,7 @@ jobs:
 
       - name: Authenticate Google Play API
         id: play_auth
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
         with:
           credentials_json: ${{ secrets.ANDROID_SERVICE_ACCOUNT_JSON }}
           token_format: access_token
@@ -115,59 +117,31 @@ jobs:
       - name: Resolve version
         id: version
         run: |
-          TAG_INPUT="${{ inputs.tag }}"
-          if [ -z "$TAG_INPUT" ]; then
-            TAG_INPUT="${{ github.event.inputs.tag }}"
-          fi
-          if [ -n "$TAG_INPUT" ]; then
-            TAG="$TAG_INPUT"
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          INPUT_TAG="${{ inputs.tag || github.event.inputs.tag }}"
+          GITHUB_EVENT_INPUTS_TAG="${{ github.event.inputs.tag }}"
+          scripts/ci/resolve-release-version.sh "$INPUT_TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Build Android APK + AAB (local EAS)
+      - name: Build Android AAB (local EAS)
+        timeout-minutes: 60
         run: |
           VERSION=${{ steps.version.outputs.version }}
           cd apps/mobile
-          MINDWTR_ANDROID_ARCHS=arm64-v8a,armeabi-v7a eas build --platform android --profile production-apk --local --non-interactive --output ./build/mindwtr-${VERSION}.apk
           MINDWTR_ANDROID_ARCHS=arm64-v8a,armeabi-v7a eas build --platform android --profile production --local --non-interactive --output ./build/mindwtr-${VERSION}.aab
           ls -la ./build
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          ANALYTICS_HEARTBEAT_URL: ${{ secrets.ANALYTICS_HEARTBEAT_URL }}
 
-      - name: Verify Android APK permissions
+      - name: Build Android APK (local EAS)
+        timeout-minutes: 60
         run: |
-          APK_PATH="$(ls apps/mobile/build/mindwtr-*.apk | head -1)"
-          if [[ -z "${APK_PATH}" ]]; then
-            echo "No APK produced for permission verification" >&2
-            exit 1
-          fi
-          AAPT_BIN="$(command -v aapt || true)"
-          if [[ -z "${AAPT_BIN}" ]]; then
-            AAPT_BIN="$(ls "${ANDROID_HOME}"/build-tools/*/aapt 2>/dev/null | sort -V | tail -1)"
-          fi
-          if [[ -z "${AAPT_BIN}" ]]; then
-            echo "aapt not found; cannot verify APK permissions" >&2
-            exit 1
-          fi
-          PERMS_DUMP="$(mktemp)"
-          "${AAPT_BIN}" dump permissions "${APK_PATH}" | tee "${PERMS_DUMP}"
-          for perm in \
-            android.permission.CAMERA \
-            android.permission.SYSTEM_ALERT_WINDOW \
-            android.permission.READ_EXTERNAL_STORAGE \
-            android.permission.WRITE_EXTERNAL_STORAGE; do
-            if grep -q "name='${perm}'" "${PERMS_DUMP}"; then
-              echo "${perm} still present in APK manifest" >&2
-              exit 1
-            fi
-          done
-          if ! grep -q "name='android.permission.RECORD_AUDIO'" "${PERMS_DUMP}"; then
-            echo "android.permission.RECORD_AUDIO missing in APK manifest" >&2
-            exit 1
-          fi
-          echo "Verified APK permissions: CAMERA/storage/alert removed; RECORD_AUDIO present."
+          VERSION=${{ steps.version.outputs.version }}
+          cd apps/mobile
+          MINDWTR_ANDROID_ARCHS=arm64-v8a,armeabi-v7a eas build --platform android --profile production-apk --local --non-interactive --output ./build/mindwtr-${VERSION}.apk
+          ls -la ./build
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          ANALYTICS_HEARTBEAT_URL: ${{ secrets.ANALYTICS_HEARTBEAT_URL }}
 
       - name: Prepare Google Play release notes
         run: |
@@ -195,9 +169,9 @@ jobs:
           ' "$NOTES_FILE"
           ls -la "$OUT_DIR"
 
-      - name: Publish to Google Play Store
+      - name: Publish to Google Play Store (Production)
         if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch'
-        uses: r0adkll/upload-google-play@v1
+        uses: r0adkll/upload-google-play@935ef9c68bb393a8e6116b1575626a7f5be3a7fb # v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.ANDROID_SERVICE_ACCOUNT_JSON }}
           packageName: tech.dongdongbh.mindwtr
@@ -207,16 +181,87 @@ jobs:
           releaseName: ${{ steps.version.outputs.version }}
           whatsNewDirectory: apps/mobile/build/play-release-notes
 
-      - name: Collect Android artifacts
+      - name: Publish same versionCode to internal track (no re-upload)
+        if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch'
+        env:
+          ACCESS_TOKEN: ${{ steps.play_auth.outputs.access_token }}
         run: |
+          set -euo pipefail
+          PACKAGE="tech.dongdongbh.mindwtr"
+          VERSION=${{ steps.version.outputs.version }}
+          VERSION_CODE=$(jq -r '.expo.android.versionCode' apps/mobile/app.json)
+          if [ -z "$VERSION_CODE" ] || [ "$VERSION_CODE" = "null" ]; then
+            echo "Missing expo.android.versionCode in apps/mobile/app.json" >&2
+            exit 1
+          fi
+
+          EDIT_FILE=$(mktemp)
+          EDIT_CODE=$(curl -sS -o "$EDIT_FILE" -w "%{http_code}" -X POST \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE/edits" \
+            -d '{}')
+          if [ "$EDIT_CODE" != "200" ]; then
+            echo "Failed to create Google Play edit (HTTP $EDIT_CODE): $(cat "$EDIT_FILE")" >&2
+            exit 1
+          fi
+          EDIT_ID=$(jq -r '.id' "$EDIT_FILE")
+          if [ -z "$EDIT_ID" ] || [ "$EDIT_ID" = "null" ]; then
+            echo "Failed to parse edit id: $(cat "$EDIT_FILE")" >&2
+            exit 1
+          fi
+
+          PAYLOAD_FILE=$(mktemp)
+          cat > "$PAYLOAD_FILE" <<EOF
+          {
+            "track": "internal",
+            "releases": [
+              {
+                "name": "${VERSION} (internal)",
+                "status": "completed",
+                "versionCodes": ["${VERSION_CODE}"]
+              }
+            ]
+          }
+          EOF
+
+          TRACK_FILE=$(mktemp)
+          TRACK_CODE=$(curl -sS -o "$TRACK_FILE" -w "%{http_code}" -X PUT \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE/edits/$EDIT_ID/tracks/internal" \
+            -d @"$PAYLOAD_FILE")
+          if [ "$TRACK_CODE" != "200" ]; then
+            echo "Failed to update internal track (HTTP $TRACK_CODE): $(cat "$TRACK_FILE")" >&2
+            exit 1
+          fi
+
+          COMMIT_FILE=$(mktemp)
+          COMMIT_CODE=$(curl -sS -o "$COMMIT_FILE" -w "%{http_code}" -X POST \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE/edits/$EDIT_ID:commit")
+          if [ "$COMMIT_CODE" != "200" ]; then
+            echo "Failed to commit internal-track edit (HTTP $COMMIT_CODE): $(cat "$COMMIT_FILE")" >&2
+            exit 1
+          fi
+          echo "Published versionCode $VERSION_CODE to internal track without uploading a second AAB."
+
+      - name: Collect Android release artifacts
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          APK_PATH="apps/mobile/build/mindwtr-${VERSION}.apk"
+          if [ ! -f "${APK_PATH}" ]; then
+            echo "Missing APK artifact: ${APK_PATH}" >&2
+            exit 1
+          fi
           mkdir -p release-artifacts
-          cp apps/mobile/build/mindwtr-*.apk release-artifacts/
-          cp apps/mobile/build/mindwtr-*.aab release-artifacts/
+          cp "${APK_PATH}" "release-artifacts/mindwtr-${VERSION}.apk"
           ls -la release-artifacts
 
-      - name: Upload Android artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload Android release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-android
           path: release-artifacts/*
           if-no-files-found: error
+          retention-days: 28

@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Link2, Paperclip } from 'lucide-react';
 import type { Attachment, Project } from '@mindwtr/core';
 import { Markdown } from '../../Markdown';
 import { AttachmentProgressIndicator } from '../../AttachmentProgressIndicator';
+import { getAttachmentDisplayTitle } from '../../../lib/attachment-utils';
 
 type ProjectNotesSectionProps = {
     project: Project;
@@ -118,28 +119,32 @@ export function ProjectNotesSection({
                             <div className="text-xs text-muted-foreground">{t('common.none')}</div>
                         ) : (
                             <div className="space-y-1.5">
-                                {visibleAttachments.map((attachment) => (
-                                    <div key={attachment.id} className="flex items-center justify-between gap-2 text-xs rounded-md border border-border/60 bg-muted/20 px-2 py-1.5">
-                                        <div className="min-w-0 flex-1">
+                                {visibleAttachments.map((attachment) => {
+                                    const displayTitle = getAttachmentDisplayTitle(attachment);
+                                    const fullTitle = attachment.kind === 'link' ? attachment.uri : attachment.title;
+                                    return (
+                                        <div key={attachment.id} className="flex items-center justify-between gap-2 text-xs rounded-md border border-border/60 bg-muted/20 px-2 py-1.5">
+                                            <div className="min-w-0 flex-1">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => onOpenAttachment(attachment)}
+                                                    className="truncate text-primary hover:underline"
+                                                    title={fullTitle || displayTitle}
+                                                >
+                                                    {displayTitle}
+                                                </button>
+                                                <AttachmentProgressIndicator attachmentId={attachment.id} className="mt-1" />
+                                            </div>
                                             <button
                                                 type="button"
-                                                onClick={() => onOpenAttachment(attachment)}
-                                                className="truncate text-primary hover:underline"
-                                                title={attachment.title}
+                                                onClick={() => onRemoveAttachment(attachment.id)}
+                                                className="text-muted-foreground hover:text-foreground text-[11px]"
                                             >
-                                                {attachment.title}
+                                                {t('attachments.remove')}
                                             </button>
-                                            <AttachmentProgressIndicator attachmentId={attachment.id} className="mt-1" />
                                         </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => onRemoveAttachment(attachment.id)}
-                                            className="text-muted-foreground hover:text-foreground text-[11px]"
-                                        >
-                                            {t('attachments.remove')}
-                                        </button>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         )}
                     </div>

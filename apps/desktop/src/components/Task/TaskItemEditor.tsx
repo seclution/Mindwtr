@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, type FormEvent, type ReactNode } from 'react';
 import { Loader2, Sparkles } from 'lucide-react';
-import { hasTimeComponent, safeFormatDate, safeParseDate, resolveTextDirection, type Area, type ClarifyResponse, type Project, type Section, type TaskEditorFieldId, type TextDirection, type TimeEstimate } from '@mindwtr/core';
+import { hasTimeComponent, safeFormatDate, safeParseDate, resolveAutoTextDirection, type Area, type ClarifyResponse, type Project, type Section, type TaskEditorFieldId, type TimeEstimate } from '@mindwtr/core';
 import { AreaSelector } from '../ui/AreaSelector';
 import { ProjectSelector } from '../ui/ProjectSelector';
 import { SectionSelector } from '../ui/SectionSelector';
 import { TaskInput } from './TaskInput';
+import { normalizeDateInputValue } from './task-item-helpers';
 
 interface TaskItemEditorProps {
     t: (key: string) => string;
@@ -61,7 +62,7 @@ interface TaskItemEditorProps {
     renderField: (fieldId: TaskEditorFieldId) => ReactNode;
     editLocation: string;
     setEditLocation: (value: string) => void;
-    editTextDirection: TextDirection | undefined;
+    language: string;
     inputContexts: string[];
     onDuplicateTask: () => void;
     onCancel: () => void;
@@ -119,7 +120,7 @@ export function TaskItemEditor({
     renderField,
     editLocation,
     setEditLocation,
-    editTextDirection,
+    language,
     inputContexts,
     onDuplicateTask,
     onCancel,
@@ -129,18 +130,19 @@ export function TaskItemEditor({
     const dueParsed = editDueDate ? safeParseDate(editDueDate) : null;
     const dueDateValue = dueParsed ? safeFormatDate(dueParsed, 'yyyy-MM-dd') : '';
     const dueTimeValue = dueHasTime && dueParsed ? safeFormatDate(dueParsed, 'HH:mm') : '';
-    const titleDirection = resolveTextDirection(editTitle, editTextDirection);
+    const titleDirection = resolveAutoTextDirection(editTitle, language);
 
     const handleDueDateChange = (value: string) => {
-        if (!value) {
+        const normalizedDate = normalizeDateInputValue(value);
+        if (!normalizedDate) {
             setEditDueDate('');
             return;
         }
         if (dueHasTime && dueTimeValue) {
-            setEditDueDate(`${value}T${dueTimeValue}`);
+            setEditDueDate(`${normalizedDate}T${dueTimeValue}`);
             return;
         }
-        setEditDueDate(value);
+        setEditDueDate(normalizedDate);
     };
 
     const handleDueTimeChange = (value: string) => {
@@ -239,7 +241,7 @@ export function TaskItemEditor({
                                         }}
                                         disabled={isAIWorking}
                                         aria-busy={isAIWorking}
-                                        className="w-full text-left text-xs px-3 py-2 hover:bg-muted/60 transition-colors disabled:opacity-60 flex items-center gap-2"
+                                        className="w-full text-left text-xs px-3 py-2 hover:bg-muted/60 transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
                                     >
                                         {isAIWorking && <Loader2 className="w-3 h-3 animate-spin" />}
                                         {t('taskEdit.aiClarify')}
@@ -252,7 +254,7 @@ export function TaskItemEditor({
                                         }}
                                         disabled={isAIWorking}
                                         aria-busy={isAIWorking}
-                                        className="w-full text-left text-xs px-3 py-2 hover:bg-muted/60 transition-colors disabled:opacity-60 flex items-center gap-2"
+                                        className="w-full text-left text-xs px-3 py-2 hover:bg-muted/60 transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
                                     >
                                         {isAIWorking && <Loader2 className="w-3 h-3 animate-spin" />}
                                         {t('taskEdit.aiBreakdown')}
@@ -360,6 +362,9 @@ export function TaskItemEditor({
                             onCreateProject={onCreateProject}
                             placeholder={t('taskEdit.noProjectOption')}
                             noProjectLabel={t('taskEdit.noProjectOption')}
+                            searchPlaceholder={t('projects.search')}
+                            noMatchesLabel={t('common.noMatches')}
+                            createProjectLabel={t('projects.create')}
                             className="w-full"
                         />
                     </div>
@@ -374,6 +379,9 @@ export function TaskItemEditor({
                             onCreateSection={onCreateSection}
                             placeholder={t('taskEdit.noSectionOption')}
                             noSectionLabel={t('taskEdit.noSectionOption')}
+                            searchPlaceholder={t('sections.search')}
+                            noMatchesLabel={t('common.noMatches')}
+                            createSectionLabel={t('projects.addSection')}
                             className="w-full"
                         />
                     </div>
@@ -388,6 +396,9 @@ export function TaskItemEditor({
                             onCreateArea={onCreateArea}
                             placeholder={t('taskEdit.noAreaOption')}
                             noAreaLabel={t('taskEdit.noAreaOption')}
+                            searchPlaceholder={t('areas.search')}
+                            noMatchesLabel={t('common.noMatches')}
+                            createAreaLabel={t('areas.create')}
                             className="w-full"
                         />
                     </div>

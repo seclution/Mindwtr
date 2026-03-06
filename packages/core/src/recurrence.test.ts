@@ -47,6 +47,24 @@ describe('recurrence', () => {
         expect(next?.dueDate).toBe('2025-01-06T14:00:00.000Z');
     });
 
+    it('keeps dueDate unset for startTime-only recurring tasks', () => {
+        const task: Task = {
+            id: 't2-start-only',
+            title: 'Read a book',
+            status: 'done',
+            tags: [],
+            contexts: [],
+            startTime: '2025-01-01T09:00:00.000Z',
+            recurrence: { rule: 'daily', strategy: 'strict' },
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+        };
+
+        const next = createNextRecurringTask(task, '2025-01-01T12:00:00.000Z', 'done');
+        expect(next?.startTime).toBe('2025-01-02T09:00:00.000Z');
+        expect(next?.dueDate).toBeUndefined();
+    });
+
     it('respects daily interval for strict recurrence', () => {
         const task: Task = {
             id: 't2b',
@@ -62,6 +80,7 @@ describe('recurrence', () => {
 
         const next = createNextRecurringTask(task, '2025-01-05T14:00:00.000Z', 'done');
         expect(next?.dueDate).toBe('2025-01-04T09:00:00.000Z');
+        expect(next?.startTime).toBe('2025-01-04T09:00:00.000Z');
     });
 
     it('respects daily interval for fluid recurrence', () => {
@@ -79,6 +98,25 @@ describe('recurrence', () => {
 
         const next = createNextRecurringTask(task, '2025-01-05T14:00:00.000Z', 'done');
         expect(next?.dueDate).toBe('2025-01-08T14:00:00.000Z');
+        expect(next?.startTime).toBe('2025-01-08T14:00:00.000Z');
+    });
+
+    it('defers unscheduled fluid recurrence from completion date', () => {
+        const task: Task = {
+            id: 't2d',
+            title: 'Unscheduled recurring task',
+            status: 'next',
+            tags: [],
+            contexts: [],
+            recurrence: { rule: 'daily', strategy: 'fluid', rrule: 'FREQ=DAILY;INTERVAL=3' },
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+        };
+
+        const next = createNextRecurringTask(task, '2025-01-05T14:00:00.000Z', 'next');
+        expect(next?.dueDate).toBeUndefined();
+        expect(next?.startTime).toBe('2025-01-08T14:00:00.000Z');
+        expect(next?.status).toBe('next');
     });
 
     it('falls back to weekly interval when BYDAY is empty', () => {
@@ -234,5 +272,43 @@ describe('recurrence', () => {
 
         const next = createNextRecurringTask(task, '2024-11-02T10:00:00.000Z', 'done');
         expect(next?.dueDate).toBe('2024-11-03T09:30');
+    });
+
+    it('keeps section assignment for recurring project tasks', () => {
+        const task: Task = {
+            id: 't11',
+            title: 'Section recurring',
+            status: 'done',
+            tags: [],
+            contexts: [],
+            dueDate: '2025-01-01T09:00:00.000Z',
+            recurrence: 'daily',
+            projectId: 'project-1',
+            sectionId: 'section-1',
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+        };
+
+        const next = createNextRecurringTask(task, '2025-01-01T10:00:00.000Z', 'done');
+        expect(next?.projectId).toBe('project-1');
+        expect(next?.sectionId).toBe('section-1');
+    });
+
+    it('keeps area assignment for recurring area tasks', () => {
+        const task: Task = {
+            id: 't12',
+            title: 'Area recurring',
+            status: 'done',
+            tags: [],
+            contexts: [],
+            dueDate: '2025-01-01T09:00:00.000Z',
+            recurrence: 'daily',
+            areaId: 'area-1',
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+        };
+
+        const next = createNextRecurringTask(task, '2025-01-01T10:00:00.000Z', 'done');
+        expect(next?.areaId).toBe('area-1');
     });
 });

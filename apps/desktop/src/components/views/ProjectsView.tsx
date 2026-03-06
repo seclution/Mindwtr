@@ -15,6 +15,7 @@ import { AreaManagerModal } from './projects/AreaManagerModal';
 import { ProjectNotesSection } from './projects/ProjectNotesSection';
 import { ProjectDetailsHeader } from './projects/ProjectDetailsHeader';
 import { ProjectDetailsFields } from './projects/ProjectDetailsFields';
+import { TaskItem } from '../TaskItem';
 import {
     DEFAULT_AREA_COLOR,
     getProjectColor,
@@ -32,38 +33,46 @@ import { useAreaSidebarState } from './projects/useAreaSidebarState';
 import { useProjectAttachmentActions } from './projects/useProjectAttachmentActions';
 import { SectionDropZone, getSectionContainerId, getSectionIdFromContainer, NO_SECTION_CONTAINER } from './projects/section-dnd';
 import { useProjectSectionActions } from './projects/useProjectSectionActions';
+import { useProjectsViewStore } from './projects/useProjectsViewStore';
 
 export function ProjectsView() {
     const perf = usePerformanceMonitor('ProjectsView');
-    const projects = useTaskStore((state) => state.projects);
-    const tasks = useTaskStore((state) => state.tasks);
-    const sections = useTaskStore((state) => state.sections);
-    const areas = useTaskStore((state) => state.areas);
-    const addArea = useTaskStore((state) => state.addArea);
-    const updateArea = useTaskStore((state) => state.updateArea);
-    const deleteArea = useTaskStore((state) => state.deleteArea);
-    const reorderAreas = useTaskStore((state) => state.reorderAreas);
-    const reorderProjects = useTaskStore((state) => state.reorderProjects);
-    const reorderProjectTasks = useTaskStore((state) => state.reorderProjectTasks);
-    const addProject = useTaskStore((state) => state.addProject);
-    const updateProject = useTaskStore((state) => state.updateProject);
-    const deleteProject = useTaskStore((state) => state.deleteProject);
-    const duplicateProject = useTaskStore((state) => state.duplicateProject);
-    const updateTask = useTaskStore((state) => state.updateTask);
-    const addSection = useTaskStore((state) => state.addSection);
-    const updateSection = useTaskStore((state) => state.updateSection);
-    const deleteSection = useTaskStore((state) => state.deleteSection);
-    const addTask = useTaskStore((state) => state.addTask);
-    const toggleProjectFocus = useTaskStore((state) => state.toggleProjectFocus);
-    const allTasks = useTaskStore((state) => state._allTasks);
-    const highlightTaskId = useTaskStore((state) => state.highlightTaskId);
-    const setHighlightTask = useTaskStore((state) => state.setHighlightTask);
-    const settings = useTaskStore((state) => state.settings);
-    const getDerivedState = useTaskStore((state) => state.getDerivedState);
-    const { allContexts } = getDerivedState();
+    const {
+        projects,
+        tasks,
+        sections,
+        areas,
+        addArea,
+        updateArea,
+        deleteArea,
+        reorderAreas,
+        reorderProjects,
+        reorderProjectTasks,
+        addProject,
+        updateProject,
+        deleteProject,
+        duplicateProject,
+        updateTask,
+        addSection,
+        updateSection,
+        deleteSection,
+        addTask,
+        toggleProjectFocus,
+        allTasks,
+        highlightTaskId,
+        setHighlightTask,
+        settings,
+        getDerivedState,
+    } = useProjectsViewStore();
+    const { allContexts, allTags } = getDerivedState();
+    const allTokens = useMemo(
+        () => Array.from(new Set([...allContexts, ...allTags])).sort(),
+        [allContexts, allTags],
+    );
     const { t } = useLanguage();
     const selectedProjectId = useUiStore((state) => state.projectView.selectedProjectId);
     const setProjectView = useUiStore((state) => state.setProjectView);
+    const showToast = useUiStore((state) => state.showToast);
     const setSelectedProjectId = useCallback(
         (value: string | null) => setProjectView({ selectedProjectId: value }),
         [setProjectView]
@@ -76,7 +85,7 @@ export function ProjectsView() {
     const [collapsedAreas, setCollapsedAreas] = useState<Record<string, boolean>>({});
     const [showAreaManager, setShowAreaManager] = useState(false);
     const [newAreaName, setNewAreaName] = useState('');
-    const [newAreaColor, setNewAreaColor] = useState('#94a3b8');
+    const [newAreaColor, setNewAreaColor] = useState(DEFAULT_AREA_COLOR);
     const [showQuickAreaPrompt, setShowQuickAreaPrompt] = useState(false);
     const [pendingAreaAssignProjectId, setPendingAreaAssignProjectId] = useState<string | null>(null);
     const [showSectionPrompt, setShowSectionPrompt] = useState(false);
@@ -87,10 +96,12 @@ export function ProjectsView() {
     const [sectionTaskDraft, setSectionTaskDraft] = useState('');
     const [sectionTaskTargetId, setSectionTaskTargetId] = useState<string | null>(null);
     const [tagDraft, setTagDraft] = useState('');
+    const [searchQuery, setSearchQuery] = useState('');
     const [editProjectTitle, setEditProjectTitle] = useState('');
     const [projectTaskTitle, setProjectTaskTitle] = useState('');
     const [isCreatingProject, setIsCreatingProject] = useState(false);
     const [isProjectDeleting, setIsProjectDeleting] = useState(false);
+    const [isAreaCreating, setIsAreaCreating] = useState(false);
     const ALL_AREAS = AREA_FILTER_ALL;
     const NO_AREA = AREA_FILTER_NONE;
     const ALL_TAGS = '__all__';
@@ -148,7 +159,13 @@ export function ProjectsView() {
             return acc;
         }, {} as Record<string, Task[]>);
         tasks.forEach(task => {
-            if (task.projectId && !task.deletedAt && task.status !== 'done' && task.status !== 'reference') {
+            if (
+                task.projectId
+                && !task.deletedAt
+                && task.status !== 'done'
+                && task.status !== 'reference'
+                && task.status !== 'archived'
+            ) {
                 if (map[task.projectId]) {
                     map[task.projectId].push(task);
                 }
@@ -233,17 +250,21 @@ export function ProjectsView() {
             const areaColor = resolvedAreaId ? areaById.get(resolvedAreaId)?.color : undefined;
             await addProject(
                 newProjectTitle,
-                areaColor || '#94a3b8',
+                areaColor || DEFAULT_AREA_COLOR,
                 resolvedAreaId ? { areaId: resolvedAreaId } : undefined
             );
             setNewProjectTitle('');
             setIsCreating(false);
+        } catch (error) {
+            reportError('Failed to create project', error);
+            showToast(t('projects.createFailed') || 'Failed to create project', 'error');
         } finally {
             setIsCreatingProject(false);
         }
     };
 
     const selectedProject = projects.find(p => p.id === selectedProjectId);
+    const normalizedSearchQuery = searchQuery.trim().toLowerCase();
 
     const {
         handleAddSection,
@@ -278,19 +299,31 @@ export function ProjectsView() {
     }, [selectedProject?.id, selectedProject?.title]);
     const projectAllTasks = useMemo(() => {
         if (!selectedProjectId) return [];
-        return allTasks.filter((task) => !task.deletedAt && task.projectId === selectedProjectId);
-    }, [allTasks, selectedProjectId]);
+        return allTasks.filter((task) => {
+            if (task.deletedAt || task.projectId !== selectedProjectId) return false;
+            if (normalizedSearchQuery && !task.title.toLowerCase().includes(normalizedSearchQuery)) return false;
+            return true;
+        });
+    }, [allTasks, normalizedSearchQuery, selectedProjectId]);
     const projectTasks = useMemo(() => (
         projectAllTasks.filter((task) => task.status !== 'done' && task.status !== 'reference' && task.status !== 'archived')
     ), [projectAllTasks]);
 
     const sortProjectTasks = useCallback((items: Task[]) => {
         const sorted = [...items];
-        const hasOrder = sorted.some((task) => Number.isFinite(task.orderNum));
+        const hasOrder = sorted.some((task) => Number.isFinite(task.order) || Number.isFinite(task.orderNum));
         sorted.sort((a, b) => {
             if (hasOrder) {
-                const aOrder = Number.isFinite(a.orderNum) ? (a.orderNum as number) : Number.POSITIVE_INFINITY;
-                const bOrder = Number.isFinite(b.orderNum) ? (b.orderNum as number) : Number.POSITIVE_INFINITY;
+                const aOrder = Number.isFinite(a.order)
+                    ? (a.order as number)
+                    : Number.isFinite(a.orderNum)
+                        ? (a.orderNum as number)
+                        : Number.POSITIVE_INFINITY;
+                const bOrder = Number.isFinite(b.order)
+                    ? (b.order as number)
+                    : Number.isFinite(b.orderNum)
+                        ? (b.orderNum as number)
+                        : Number.POSITIVE_INFINITY;
                 if (aOrder !== bOrder) return aOrder - bOrder;
             }
             return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
@@ -351,9 +384,30 @@ export function ProjectsView() {
         return combined;
     }, [orderedProjectTasks, projectSections.length, sectionTaskGroups.sections, sectionTaskGroups.unsectioned]);
 
+    const projectReferenceTasks = useMemo(() => {
+        if (!selectedProject) return [] as Task[];
+
+        const projectTagSet = new Set((selectedProject.tagIds || []).map((tag) => String(tag).toLowerCase()));
+        const isProjectTagMatch = (task: Task) => {
+            if (projectTagSet.size === 0) return false;
+            const taskTags = task.tags || [];
+            return taskTags.some((tag) => projectTagSet.has(String(tag).toLowerCase()));
+        };
+
+        const references = allTasks.filter((task) => {
+            if (task.deletedAt) return false;
+            if (task.status !== 'reference') return false;
+            if (normalizedSearchQuery && !task.title.toLowerCase().includes(normalizedSearchQuery)) return false;
+            if (task.projectId === selectedProject.id) return true;
+            return isProjectTagMatch(task);
+        });
+
+        return sortProjectTasks(references);
+    }, [allTasks, normalizedSearchQuery, selectedProject, sortProjectTasks]);
+
     useEffect(() => {
         if (!highlightTaskId) return;
-        const exists = orderedProjectTaskList.some((task) => task.id === highlightTaskId);
+        const exists = [...orderedProjectTaskList, ...projectReferenceTasks].some((task) => task.id === highlightTaskId);
         if (!exists) return;
         const el = document.querySelector(`[data-task-id="${highlightTaskId}"]`) as HTMLElement | null;
         if (el) {
@@ -361,7 +415,7 @@ export function ProjectsView() {
         }
         const timer = window.setTimeout(() => setHighlightTask(null), 4000);
         return () => window.clearTimeout(timer);
-    }, [highlightTaskId, orderedProjectTaskList, setHighlightTask]);
+    }, [highlightTaskId, orderedProjectTaskList, projectReferenceTasks, setHighlightTask]);
 
     const { taskIdsByContainer, taskIdToContainer } = useMemo(() => {
         const idsByContainer = new Map<string, string[]>();
@@ -585,9 +639,10 @@ export function ProjectsView() {
     const projectProgress = useMemo(() => {
         if (!selectedProjectId) return null;
         const doneCount = projectAllTasks.filter((task) => task.status === 'done').length;
-        const remainingCount = projectAllTasks.length - doneCount;
-        return { doneCount, remainingCount, total: projectAllTasks.length };
-    }, [projectAllTasks, selectedProjectId]);
+        const remainingCount = projectTasks.length;
+        const total = doneCount + remainingCount;
+        return { doneCount, remainingCount, total };
+    }, [projectAllTasks, projectTasks, selectedProjectId]);
 
     const handleCommitProjectTitle = () => {
         if (!selectedProject) return;
@@ -608,37 +663,48 @@ export function ProjectsView() {
 
     const handleArchiveProject = async () => {
         if (!selectedProject) return;
-        const confirmed = isTauriRuntime()
-            ? await import('@tauri-apps/plugin-dialog').then(({ confirm }) =>
-                confirm(t('projects.archiveConfirm'), {
-                    title: t('projects.title'),
-                    kind: 'warning',
-                }),
-            )
-            : window.confirm(t('projects.archiveConfirm'));
-        if (confirmed) {
-            updateProject(selectedProject.id, { status: 'archived' });
+        try {
+            const confirmed = isTauriRuntime()
+                ? await import('@tauri-apps/plugin-dialog').then(({ confirm }) =>
+                    confirm(t('projects.archiveConfirm'), {
+                        title: t('projects.title'),
+                        kind: 'warning',
+                    }),
+                )
+                : window.confirm(t('projects.archiveConfirm'));
+            if (confirmed) {
+                await Promise.resolve(updateProject(selectedProject.id, { status: 'archived' }));
+            }
+        } catch (error) {
+            reportError('Failed to archive project', error);
+            showToast(t('projects.archiveFailed') || 'Failed to archive project', 'error');
         }
     };
 
     const handleDeleteProject = async () => {
         if (!selectedProject) return;
-        const confirmed = isTauriRuntime()
-            ? await import('@tauri-apps/plugin-dialog').then(({ confirm }) =>
-                confirm(t('projects.deleteConfirm'), {
-                    title: t('projects.title'),
-                    kind: 'warning',
-                }),
-            )
-            : window.confirm(t('projects.deleteConfirm'));
-        if (confirmed) {
-            setIsProjectDeleting(true);
-            try {
-                await Promise.resolve(deleteProject(selectedProject.id));
-                setSelectedProjectId(null);
-            } finally {
-                setIsProjectDeleting(false);
+        try {
+            const confirmed = isTauriRuntime()
+                ? await import('@tauri-apps/plugin-dialog').then(({ confirm }) =>
+                    confirm(t('projects.deleteConfirm'), {
+                        title: t('projects.title'),
+                        kind: 'warning',
+                    }),
+                )
+                : window.confirm(t('projects.deleteConfirm'));
+            if (confirmed) {
+                setIsProjectDeleting(true);
+                try {
+                    await Promise.resolve(deleteProject(selectedProject.id));
+                    setSelectedProjectId(null);
+                } finally {
+                    setIsProjectDeleting(false);
+                }
             }
+        } catch (error) {
+            reportError('Failed to delete project', error);
+            showToast(t('projects.deleteFailed') || 'Failed to delete project', 'error');
+            setIsProjectDeleting(false);
         }
     };
     const resolveValidationMessage = (error?: string) => {
@@ -684,14 +750,18 @@ export function ProjectsView() {
     const handleAddTaskForProject = useCallback(
         async (value: string, sectionId?: string | null) => {
             if (!selectedProject) return;
-            const { title: parsedTitle, props, projectTitle } = parseQuickAdd(value, projects, new Date(), areas);
+            const { title: parsedTitle, props, projectTitle, invalidDateCommands } = parseQuickAdd(value, projects, new Date(), areas);
+            if (invalidDateCommands && invalidDateCommands.length > 0) {
+                showToast(`Invalid date command: ${invalidDateCommands.join(', ')}`, 'error');
+                return;
+            }
             const finalTitle = (parsedTitle || value).trim();
             if (!finalTitle) return;
             const initialProps: Partial<Task> = { projectId: selectedProject.id, status: 'next', ...props };
             if (!props.status) initialProps.status = 'next';
             if (!props.projectId) initialProps.projectId = selectedProject.id;
             if (!initialProps.projectId && projectTitle) {
-                const created = await addProject(projectTitle, '#94a3b8');
+                const created = await addProject(projectTitle, DEFAULT_AREA_COLOR);
                 if (!created) return;
                 initialProps.projectId = created.id;
             }
@@ -700,9 +770,14 @@ export function ProjectsView() {
             } else {
                 initialProps.sectionId = undefined;
             }
-            await addTask(finalTitle, initialProps);
+            try {
+                await addTask(finalTitle, initialProps);
+            } catch (error) {
+                reportError('Failed to add task to project', error);
+                showToast(t('projects.addTaskFailed') || 'Failed to add task', 'error');
+            }
         },
-        [addProject, addTask, projects, selectedProject]
+        [addProject, addTask, areas, projects, selectedProject, showToast, t]
     );
 
     return (
@@ -745,8 +820,23 @@ export function ProjectsView() {
                     {/* Project Details & Tasks */}
                     <div className="flex-1 min-w-0 h-full flex">
                         <div className="flex flex-col h-full min-h-0 w-full max-w-[1100px] rounded-2xl border border-border/70 bg-card/40">
+                            <div className="px-4 py-3 sm:px-5 border-b border-border/60">
+                                <input
+                                    type="text"
+                                    data-view-filter-input
+                                    placeholder={t('common.search')}
+                                    value={searchQuery}
+                                    onChange={(event) => setSearchQuery(event.target.value)}
+                                    className="w-full text-sm px-3 py-2 rounded border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                />
+                            </div>
                             {selectedProject ? (
                                 <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 sm:px-5 space-y-4">
+                                    {(isCreatingProject || isProjectDeleting || isAreaCreating) && (
+                                        <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                                            {t('common.loading') || 'Loading...'}
+                                        </div>
+                                    )}
                                     <ProjectDetailsHeader
                                         project={selectedProject}
                                         projectColor={getProjectColorForTask(selectedProject)}
@@ -756,7 +846,12 @@ export function ProjectsView() {
                                         onResetTitle={handleResetProjectTitle}
                                         onDuplicate={() => handleDuplicateProject(selectedProject.id)}
                                         onArchive={handleArchiveProject}
-                                        onReactivate={() => updateProject(selectedProject.id, { status: 'active' })}
+                                        onReactivate={() => {
+                                            Promise.resolve(updateProject(selectedProject.id, { status: 'active' })).catch((error) => {
+                                                reportError('Failed to reactivate project', error);
+                                                showToast(t('projects.reactivateFailed') || 'Failed to reactivate project', 'error');
+                                            });
+                                        }}
                                         onDelete={handleDeleteProject}
                                         isDeleting={isProjectDeleting}
                                         projectProgress={projectProgress}
@@ -823,9 +918,9 @@ export function ProjectsView() {
                                             setProjectTaskTitle('');
                                         }}
                                         projects={projects}
-                                        contexts={allContexts}
+                                        contexts={allTokens}
                                         onCreateProject={async (title) => {
-                                            const created = await addProject(title, '#94a3b8');
+                                            const created = await addProject(title, DEFAULT_AREA_COLOR);
                                             return created?.id ?? null;
                                         }}
                                     />
@@ -838,6 +933,7 @@ export function ProjectsView() {
                                             <button
                                                 type="button"
                                                 onClick={handleAddSection}
+                                                aria-label={t('projects.addSection')}
                                                 className="inline-flex items-center gap-2 text-xs px-2.5 py-1.5 rounded-md border border-border bg-muted/40 hover:bg-muted transition-colors"
                                             >
                                                 <Plus className="h-3.5 w-3.5" />
@@ -846,6 +942,27 @@ export function ProjectsView() {
                                         </div>
                                         {tasksContent}
                                     </div>
+
+                                    {projectReferenceTasks.length > 0 && (
+                                        <div className="pb-2">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                                                    {t('status.reference')} ({projectReferenceTasks.length})
+                                                </div>
+                                            </div>
+                                            <div className="rounded-xl border border-border/70 bg-background/30 divide-y divide-border/30">
+                                                {projectReferenceTasks.map((task) => (
+                                                    <TaskItem
+                                                        key={`project-reference-${task.id}`}
+                                                        task={task}
+                                                        project={selectedProject}
+                                                        enableDoubleClickEdit
+                                                        showProjectBadgeInActions={false}
+                                                    />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             ) : (
                                 <div className="flex-1 flex items-center justify-center text-muted-foreground p-6">
@@ -873,13 +990,18 @@ export function ProjectsView() {
                         onCreateArea={async () => {
                             const name = newAreaName.trim();
                             if (!name) return;
+                            setIsAreaCreating(true);
                             try {
                                 await addArea(name, { color: newAreaColor });
                                 setNewAreaName('');
                             } catch (error) {
                                 reportError('Failed to create area', error);
+                                showToast(t('projects.createAreaFailed') || 'Failed to create area', 'error');
+                            } finally {
+                                setIsAreaCreating(false);
                             }
                         }}
+                        isCreatingArea={isAreaCreating}
                         onSortByName={sortAreasByName}
                         onSortByColor={sortAreasByColor}
                         onClose={() => setShowAreaManager(false)}
@@ -940,7 +1062,7 @@ export function ProjectsView() {
                 <PromptModal
                     isOpen={showLinkPrompt}
                     title={t('attachments.addLink')}
-                    description={t('attachments.linkPlaceholder')}
+                    description={t('attachments.linkInputHint')}
                     placeholder={t('attachments.linkPlaceholder')}
                     defaultValue=""
                     confirmLabel={t('common.save')}
@@ -979,17 +1101,25 @@ export function ProjectsView() {
                     onConfirm={async (value) => {
                         const name = value.trim();
                         if (!name) return;
-                        await addArea(name, { color: newAreaColor });
-                        const state = useTaskStore.getState();
-                        const matching = [...state.areas]
-                            .filter((area) => area.name.trim().toLowerCase() === name.toLowerCase())
-                            .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
-                        const created = matching[0];
-                        if (created && pendingAreaAssignProjectId) {
-                            updateProject(pendingAreaAssignProjectId, { areaId: created.id });
+                        setIsAreaCreating(true);
+                        try {
+                            await addArea(name, { color: newAreaColor });
+                            const state = useTaskStore.getState();
+                            const matching = [...state.areas]
+                                .filter((area) => area.name.trim().toLowerCase() === name.toLowerCase())
+                                .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+                            const created = matching[0];
+                            if (created && pendingAreaAssignProjectId) {
+                                await Promise.resolve(updateProject(pendingAreaAssignProjectId, { areaId: created.id }));
+                            }
+                        } catch (error) {
+                            reportError('Failed to create quick area', error);
+                            showToast(t('projects.createAreaFailed') || 'Failed to create area', 'error');
+                        } finally {
+                            setIsAreaCreating(false);
+                            setShowQuickAreaPrompt(false);
+                            setPendingAreaAssignProjectId(null);
                         }
-                        setShowQuickAreaPrompt(false);
-                        setPendingAreaAssignProjectId(null);
                     }}
                 />
             </div>

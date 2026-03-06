@@ -32,6 +32,8 @@
 * [[Data and Sync]]
 * [[Sync Algorithm]]
 * [[Cloud Sync]]
+* [[Dropbox Sync]]
+* [[Cloud Deployment]]
 * [[Local API]]
 * [[MCP Server]]
 * [[Web App PWA]]
@@ -48,8 +50,9 @@
 * [[Architecture]]
 * [[Core API]]
 * [[Deployment Guide]]
+* [[Testing Strategy]]
 * [[Performance Guide]]
-* [[Contributing]]
+* [Contributing (Repository Guide)](https://github.com/dongdongbh/Mindwtr/blob/main/docs/CONTRIBUTING.md)
 
 ---
 

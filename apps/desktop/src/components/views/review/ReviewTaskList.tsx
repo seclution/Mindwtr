@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Project, Task } from '@mindwtr/core';
 import { TaskItem } from '../../TaskItem';
@@ -8,7 +8,9 @@ type ReviewTaskListProps = {
     projectMap: Record<string, Project>;
     selectionMode: boolean;
     multiSelectedIds: Set<string>;
+    highlightTaskId?: string | null;
     onToggleSelect: (taskId: string) => void;
+    emptyMessage?: string;
     t: (key: string) => string;
 };
 
@@ -17,17 +19,11 @@ export function ReviewTaskList({
     projectMap,
     selectionMode,
     multiSelectedIds,
+    highlightTaskId,
     onToggleSelect,
+    emptyMessage,
     t,
 }: ReviewTaskListProps) {
-    if (tasks.length === 0) {
-        return (
-            <div className="text-center py-12 text-muted-foreground">
-                <p>{t('review.noTasks')}</p>
-            </div>
-        );
-    }
-
     const shouldVirtualize = tasks.length > 100;
     const parentRef = useRef<HTMLDivElement>(null);
     const rowVirtualizer = useVirtualizer({
@@ -36,6 +32,40 @@ export function ReviewTaskList({
         estimateSize: () => 120,
         overscan: 6,
     });
+
+    useEffect(() => {
+        if (!highlightTaskId) return;
+        const index = tasks.findIndex((task) => task.id === highlightTaskId);
+        if (index < 0) return;
+        if (shouldVirtualize && parentRef.current) {
+            rowVirtualizer.scrollToIndex(index, { align: 'start' });
+        }
+        const scrollToHighlightedTask = () => {
+            const target = document.querySelector(`[data-task-id="${highlightTaskId}"]`) as HTMLElement | null;
+            if (target && typeof (target as any).scrollIntoView === 'function') {
+                target.scrollIntoView({ block: 'start' });
+            }
+        };
+        scrollToHighlightedTask();
+        if (typeof window.requestAnimationFrame === 'function') {
+            const raf = window.requestAnimationFrame(scrollToHighlightedTask);
+            return () => {
+                if (typeof window.cancelAnimationFrame === 'function') {
+                    window.cancelAnimationFrame(raf);
+                }
+            };
+        }
+        const timeout = window.setTimeout(scrollToHighlightedTask, 0);
+        return () => window.clearTimeout(timeout);
+    }, [highlightTaskId, tasks, shouldVirtualize, rowVirtualizer]);
+
+    if (tasks.length === 0) {
+        return (
+            <div className="text-center py-12 text-muted-foreground">
+                <p>{emptyMessage ?? t('review.noTasks')}</p>
+            </div>
+        );
+    }
 
     if (!shouldVirtualize) {
         return (

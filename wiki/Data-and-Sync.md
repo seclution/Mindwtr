@@ -39,12 +39,24 @@ Data is stored in a local SQLite database, with a JSON sync/backup file:
 
 ## Sync Backends
 
-Mindwtr supports three sync backends:
+Mindwtr directly supports four sync backends:
+
+- **File Sync**: a user-selected folder/file (`data.json` + `attachments/`)
+- **WebDAV**: any compatible WebDAV endpoint
+- **Mindwtr Cloud (Self-Hosted)**: your own `apps/cloud` endpoint
+- **Dropbox OAuth Sync**: direct Dropbox App Folder sync in supported builds
+
+### Direct vs indirect provider support
+
+- **Directly supported providers/protocols**: WebDAV servers, the Mindwtr self-hosted endpoint, and Dropbox OAuth (supported builds).
+- **Indirectly supported providers**: iCloud Drive, Google Drive, OneDrive, Syncthing, network shares, and Dropbox via File Sync.
+- **Important**: iCloud is not a native backend in Mindwtr. It can work through **File Sync** when your OS/file picker gives Mindwtr a writable folder.
 
 **Quick guidance:**
 - **Syncthing**: device-to-device file sync. Best on the same LAN/subnet. For remote sync, use a Syncthing relay or a mesh VPN (Nebula/Tailscale).
 - **WebDAV**: use a provider that supports WebDAV (e.g., Nextcloud, ownCloud, Fastmail, self-hosted).
-- **Dropbox/Google Drive**: no native WebDAV; on Android, use a bridge app to keep a local folder synced for file sync.
+- **Dropbox**: use native Dropbox sync (supported builds) or File Sync.
+- **Google Drive/OneDrive/iCloud Drive**: use File Sync (and Android bridge apps when needed).
 
 ## Sync Recommendations
 
@@ -62,6 +74,23 @@ Sync via a shared JSON file with any folder-based sync service:
 - OneDrive
 - iCloud Drive
 - Any network folder
+
+#### iCloud Drive as File Sync (macOS + iOS)
+
+iCloud Drive works with Mindwtr through **File Sync** (not a native iCloud backend yet).
+
+Recommended setup:
+1. On macOS, create a folder like `iCloud Drive/Mindwtr`.
+2. In Mindwtr desktop, set **Sync Backend = File** and pick that folder.
+3. Export once to create `data.json` and `attachments/`.
+4. Wait for iCloud Drive to finish uploading.
+5. On iOS, in Mindwtr mobile **Settings → Data & Sync → Select Folder**, choose the same iCloud Drive folder in Files.
+   - If a provider is greyed out in the iOS folder picker, select any JSON file inside the target folder. Mindwtr will still use that folder for `data.json` and `attachments/`.
+
+Important:
+- Sync both `data.json` **and** `attachments/`. Attachments are part of sync data.
+- Do not move only `data.json` without `attachments/`, or attachment metadata/files can drift.
+- If iCloud Optimize Storage offloads files, let Files re-download before running a manual sync.
 
 #### Syncthing Notes (Recommended Setup)
 
@@ -86,9 +115,11 @@ Syncthing creates duplicate folders when both devices create or modify the same 
 **Important:** Don’t sync `~/.local/share/mindwtr` directly. Mobile storage is sandboxed. Use the file sync folder + `data.json` instead.
 If you already synced the app data directory, switch to a dedicated sync folder and re-select it in Settings.
 
-#### Dropbox / Google Drive on Android (File Sync)
+#### Google Drive on Android (File Sync) and Dropbox File-Sync Fallback
 
-Dropbox and Google Drive do **not** provide WebDAV. If you want to use them with file sync on Android, you need a bridge app that keeps a local folder in sync (so Mindwtr can read/write `data.json` directly).
+Google Drive does **not** provide WebDAV. If you want to use Google Drive with file sync on Android, you need a bridge app that keeps a local folder in sync (so Mindwtr can read/write `data.json` directly).
+
+Dropbox users on Android can use native Dropbox sync in supported builds. If you prefer file sync, the same bridge-app approach also works for Dropbox.
 
 Examples:
 - **Dropsync** (Dropbox)
@@ -116,7 +147,7 @@ Sync directly to a WebDAV server:
 
 - Nextcloud
 - ownCloud
-- Box.com
+- Fastmail
 - Any WebDAV-compatible server
 
 ### 3. Mindwtr Cloud (Self-Hosted)
@@ -126,6 +157,17 @@ For advanced users, Mindwtr includes a simple sync server (`apps/cloud`) that ca
 - **Protocol**: Simple REST API (GET/PUT)
 - **Auth**: Bearer token (mapped to a specific data file on the server)
 - **Deployment**: Node.js/Bun
+- **Docker setup**: [[Docker Deployment]]
+- **Operations guide**: [[Cloud Deployment]]
+
+### 4. Dropbox OAuth Sync
+
+Mindwtr also supports direct Dropbox sync in supported desktop/mobile builds.
+
+- **Scope**: Dropbox App Folder (`/Apps/Mindwtr/`)
+- **Synced data**: `data.json` and `attachments/*`
+- **Auth**: OAuth 2.0 + PKCE
+- **Guide**: [[Dropbox Sync]]
 
 ---
 
@@ -151,6 +193,7 @@ Available options include:
 - **AI settings** (models/providers)
 
 > API keys and local model paths are never synced.
+> Settings conflict resolution is group-based. If two devices edit different fields in the same settings group at nearly the same time, the newer group update can overwrite the older one.
 
 ### Merge Strategy
 
@@ -199,6 +242,8 @@ Mindwtr will automatically sync on startup and when data changes.
    - **Password** — Your WebDAV password
 4. Click **Save WebDAV**
 
+> **Linux note:** If your desktop session does not provide a Secret Service keyring (for example `org.freedesktop.secrets` is unavailable), Mindwtr falls back to local secrets storage in `~/.config/mindwtr/secrets.toml`.
+
 > **Tip:** For Nextcloud, the URL format is:
 > `https://your-server.com/remote.php/dav/files/USERNAME/path/to/folder`
 >
@@ -207,6 +252,8 @@ Mindwtr will automatically sync on startup and when data changes.
 ## Mobile Sync Setup
 
 Mobile sync requires manually selecting a sync folder due to Android/iOS storage restrictions.
+
+On iOS, some cloud providers may not expose folder selection in Files. In that case, select any JSON file inside the target sync folder; Mindwtr will resolve and use the folder path for sync.
 
 ### 1. Export Your Data First
 

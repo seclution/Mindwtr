@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
     createAIProvider,
+    DEFAULT_AREA_COLOR,
     getStaleItems,
     isDueForReview,
     safeFormatDate,
@@ -14,19 +15,24 @@ import {
     type TaskStatus,
     type AIProviderId,
 } from '@mindwtr/core';
-import { Archive, ArrowRight, Calendar, Check, CheckSquare, ChevronLeft, Layers, RefreshCw, Sparkles, X, type LucideIcon } from 'lucide-react';
+import { Archive, ArrowRight, Calendar, Check, CheckSquare, ChevronLeft, Layers, MapPin, RefreshCw, Sparkles, X, type LucideIcon } from 'lucide-react';
 
 import { TaskItem } from '../../TaskItem';
+import { PromptModal } from '../../PromptModal';
 import { cn } from '../../../lib/utils';
 import { useLanguage } from '../../../contexts/language-context';
-import { buildAIConfig, loadAIKey } from '../../../lib/ai-config';
+import { buildAIConfig, isAIKeyRequired, loadAIKey } from '../../../lib/ai-config';
 import { fetchExternalCalendarEvents } from '../../../lib/external-calendar-events';
 
-type ReviewStep = 'intro' | 'inbox' | 'ai' | 'calendar' | 'waiting' | 'projects' | 'someday' | 'completed';
+type ReviewStep = 'inbox' | 'ai' | 'calendar' | 'waiting' | 'contexts' | 'projects' | 'someday' | 'completed';
 type CalendarReviewEntry = {
     task: Task;
     date: Date;
     kind: 'due' | 'start';
+};
+type ContextReviewGroup = {
+    context: string;
+    tasks: Task[];
 };
 type ExternalCalendarDaySummary = {
     dayStart: Date;
@@ -39,7 +45,10 @@ type WeeklyReviewGuideModalProps = {
 };
 
 export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps) {
-    const [currentStep, setCurrentStep] = useState<ReviewStep>('intro');
+    const [currentStep, setCurrentStep] = useState<ReviewStep>('inbox');
+    const [expandedExternalDays, setExpandedExternalDays] = useState<Set<string>>(new Set());
+    const [expandedContextGroups, setExpandedContextGroups] = useState<Set<string>>(new Set());
+    const [projectTaskPrompt, setProjectTaskPrompt] = useState<{ projectId: string; projectTitle: string } | null>(null);
     const { tasks, projects, areas, settings, batchUpdateTasks } = useTaskStore(
         (state) => ({
             tasks: state.tasks,
@@ -50,6 +59,7 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
         }),
         shallow
     );
+    const addTask = useTaskStore((state) => state.addTask);
     const areaById = useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
     const { t } = useLanguage();
     const [aiSuggestions, setAiSuggestions] = useState<ReviewSuggestion[]>([]);
@@ -62,6 +72,7 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
     const [externalCalendarError, setExternalCalendarError] = useState<string | null>(null);
 
     const aiEnabled = settings?.ai?.enabled === true;
+    const includeContextStep = settings?.gtd?.weeklyReview?.includeContextStep !== false;
     const aiProvider = (settings?.ai?.provider ?? 'openai') as AIProviderId;
     const staleItems = useMemo(() => getStaleItems(tasks, projects), [tasks, projects]);
     const staleItemTitleMap = useMemo(() => {
@@ -116,17 +127,36 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
             if (dayEvents.length > 0) {
                 summaries.push({
                     dayStart,
-                    events: dayEvents.slice(0, 2),
+                    events: dayEvents,
                     totalCount: dayEvents.length,
                 });
             }
         }
         return summaries;
     }, [externalCalendarEvents]);
+    const contextReviewGroups = useMemo<ContextReviewGroup[]>(() => {
+        const groups = new Map<string, Task[]>();
+        tasks.forEach((task) => {
+            if (task.deletedAt) return;
+            if (task.status === 'done' || task.status === 'archived' || task.status === 'reference') return;
+            (task.contexts ?? []).forEach((contextValue) => {
+                const normalized = contextValue.trim();
+                if (!normalized) return;
+                const existing = groups.get(normalized) ?? [];
+                existing.push(task);
+                groups.set(normalized, existing);
+            });
+        });
+        return Array.from(groups.entries())
+            .map(([context, contextTasks]) => ({
+                context,
+                tasks: contextTasks.sort((a, b) => a.title.localeCompare(b.title)),
+            }))
+            .sort((a, b) => (b.tasks.length - a.tasks.length) || a.context.localeCompare(b.context));
+    }, [tasks]);
 
     const steps = useMemo<{ id: ReviewStep; title: string; description: string; icon: LucideIcon }[]>(() => {
         const list: { id: ReviewStep; title: string; description: string; icon: LucideIcon }[] = [
-            { id: 'intro', title: t('review.title'), description: t('review.intro'), icon: RefreshCw },
             { id: 'inbox', title: t('review.inboxStep'), description: t('review.inboxStepDesc'), icon: CheckSquare },
         ];
         if (aiEnabled) {
@@ -135,12 +165,17 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
         list.push(
             { id: 'calendar', title: t('review.calendarStep'), description: t('review.calendarStepDesc'), icon: Calendar },
             { id: 'waiting', title: t('review.waitingStep'), description: t('review.waitingStepDesc'), icon: ArrowRight },
+        );
+        if (includeContextStep) {
+            list.push({ id: 'contexts', title: t('review.contexts'), description: t('review.contextsStepDesc'), icon: MapPin });
+        }
+        list.push(
             { id: 'projects', title: t('review.projectsStep'), description: t('review.projectsStepDesc'), icon: Layers },
             { id: 'someday', title: t('review.somedayStep'), description: t('review.somedayStepDesc'), icon: Archive },
             { id: 'completed', title: t('review.allDone'), description: t('review.allDoneDesc'), icon: Check },
         );
         return list;
-    }, [aiEnabled, t]);
+    }, [aiEnabled, includeContextStep, t]);
 
     const currentStepIndex = steps.findIndex((step) => step.id === currentStep);
     const safeStepIndex = currentStepIndex >= 0 ? currentStepIndex : 0;
@@ -236,7 +271,7 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
             return;
         }
         const apiKey = await loadAIKey(aiProvider);
-        if (!apiKey) {
+        if (isAIKeyRequired(settings) && !apiKey) {
             setAiError(t('ai.missingKeyBody'));
             return;
         }
@@ -283,6 +318,36 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
         await batchUpdateTasks(updates);
     };
 
+    const openQuickAdd = (initialProps?: Partial<Task>) => {
+        window.dispatchEvent(new CustomEvent('mindwtr:quick-add', {
+            detail: { initialProps: initialProps ?? {} },
+        }));
+    };
+
+    const toggleExternalDayExpanded = (dayKey: string) => {
+        setExpandedExternalDays((prev) => {
+            const next = new Set(prev);
+            if (next.has(dayKey)) {
+                next.delete(dayKey);
+            } else {
+                next.add(dayKey);
+            }
+            return next;
+        });
+    };
+
+    const toggleContextGroupExpanded = (contextKey: string) => {
+        setExpandedContextGroups((prev) => {
+            const next = new Set(prev);
+            if (next.has(contextKey)) {
+                next.delete(contextKey);
+            } else {
+                next.add(contextKey);
+            }
+            return next;
+        });
+    };
+
     const renderCalendarList = (items: CalendarReviewEntry[]) => {
         if (items.length === 0) {
             return <div className="text-sm text-muted-foreground">{t('calendar.noTasks')}</div>;
@@ -296,7 +361,7 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
                             <div className="text-xs text-muted-foreground">
                                 {(entry.kind === 'due' ? t('taskEdit.dueDateLabel') : t('review.startTime'))}
                                 {' / '}
-                                {safeFormatDate(entry.date, 'MMM d, HH:mm')}
+                                {safeFormatDate(entry.date, 'Pp')}
                             </div>
                         </div>
                     </div>
@@ -318,11 +383,17 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
             <div className="space-y-2">
                 {days.map((day) => (
                     <div key={day.dayStart.toISOString()} className="rounded-md border border-border/70 p-2.5">
+                        {(() => {
+                            const dayKey = day.dayStart.toISOString();
+                            const isExpanded = expandedExternalDays.has(dayKey);
+                            const visibleEvents = isExpanded ? day.events : day.events.slice(0, 2);
+                            return (
+                                <>
                         <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                            {safeFormatDate(day.dayStart, 'EEE, MMM d')} · {day.totalCount} {t('calendar.events')}
+                            {safeFormatDate(day.dayStart, 'EEEE, PP')} · {day.totalCount} {t('calendar.events')}
                         </div>
                         <div className="mt-1.5 space-y-1">
-                            {day.events.map((event) => {
+                            {visibleEvents.map((event) => {
                                 const start = safeParseDate(event.start);
                                 const timeLabel = event.allDay || !start ? t('calendar.allDay') : safeFormatDate(start, 'HH:mm');
                                 return (
@@ -332,12 +403,21 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
                                     </div>
                                 );
                             })}
-                            {day.totalCount > day.events.length && (
-                                <div className="text-xs text-muted-foreground">
-                                    +{day.totalCount - day.events.length} {t('common.more').toLowerCase()}
-                                </div>
+                            {day.totalCount > 2 && (
+                                <button
+                                    type="button"
+                                    onClick={() => toggleExternalDayExpanded(dayKey)}
+                                    className="text-xs text-primary hover:text-primary/80 font-medium"
+                                >
+                                    {isExpanded
+                                        ? t('common.less')
+                                        : `+${day.totalCount - visibleEvents.length} ${t('common.more').toLowerCase()}`}
+                                </button>
                             )}
                         </div>
+                                </>
+                            );
+                        })()}
                     </div>
                 ))}
             </div>
@@ -346,25 +426,6 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
 
     const renderStepContent = () => {
         switch (currentStep) {
-            case 'intro':
-                return (
-                    <div className="text-center space-y-6 py-12">
-                        <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-6">
-                            <RefreshCw className="w-10 h-10 text-primary" />
-                        </div>
-                        <h2 className="text-3xl font-bold">{t('review.timeFor')}</h2>
-                        <p className="text-muted-foreground text-lg max-w-md mx-auto">
-                            {t('review.timeForDesc')}
-                        </p>
-                        <button
-                            onClick={nextStep}
-                            className="bg-primary text-primary-foreground px-8 py-3 rounded-lg text-lg font-medium hover:bg-primary/90 transition-colors"
-                        >
-                            {t('review.startReview')}
-                        </button>
-                    </div>
-                );
-
             case 'inbox': {
                 const inboxTasks = tasks.filter((task) => task.status === 'inbox');
                 return (
@@ -394,6 +455,15 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
             case 'calendar':
                 return (
                     <div className="space-y-6">
+                        <div className="flex justify-end">
+                            <button
+                                type="button"
+                                onClick={() => openQuickAdd({ status: 'inbox' })}
+                                className="px-3 py-1.5 rounded-md border border-border text-sm text-foreground hover:bg-muted/40 transition-colors"
+                            >
+                                {t('calendar.addTask')}
+                            </button>
+                        </div>
                         <div className="space-y-2">
                             <h3 className="font-semibold text-muted-foreground uppercase text-xs tracking-wider">
                                 {t('calendar.events')}
@@ -450,6 +520,52 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
                     </div>
                 );
             }
+            case 'contexts': {
+                return (
+                    <div className="space-y-4">
+                        <p className="text-muted-foreground">{t('review.contextsStepDesc')}</p>
+                        {contextReviewGroups.length === 0 ? (
+                            <div className="text-center py-12 text-muted-foreground">
+                                <p>{t('review.contextsEmpty')}</p>
+                            </div>
+                        ) : (
+                            contextReviewGroups.map((group) => (
+                                <div key={group.context} className="border border-border rounded-lg p-4 space-y-2">
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="font-semibold">{group.context}</h3>
+                                        <span className="text-xs text-muted-foreground">{group.tasks.length}</span>
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        {(() => {
+                                            const contextKey = group.context;
+                                            const isExpanded = expandedContextGroups.has(contextKey);
+                                            const visibleTasks = isExpanded ? group.tasks : group.tasks.slice(0, 4);
+                                            return (
+                                                <>
+                                                    {visibleTasks.map((task) => (
+                                                        <TaskItem key={`${group.context}-${task.id}`} task={task} showProjectBadgeInActions={false} />
+                                                    ))}
+                                                    {group.tasks.length > 4 && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => toggleContextGroupExpanded(contextKey)}
+                                                            className="text-xs text-primary hover:text-primary/80 font-medium"
+                                                        >
+                                                            {isExpanded
+                                                                ? t('common.less')
+                                                                : `+${group.tasks.length - visibleTasks.length} ${t('common.more').toLowerCase()}`}
+                                                        </button>
+                                                    )}
+                                                </>
+                                            );
+                                        })()}
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                );
+            }
 
             case 'ai': {
                 return (
@@ -460,7 +576,7 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
                             </div>
                             <button
                                 onClick={runAiAnalysis}
-                                className="bg-primary text-primary-foreground px-3 py-1.5 rounded-md text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+                                className="bg-primary text-primary-foreground px-3 py-1.5 rounded-md text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                 disabled={aiLoading}
                             >
                                 {aiLoading ? t('review.aiRunning') : t('review.aiRun')}
@@ -518,7 +634,7 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
                                 <div className="flex justify-end">
                                     <button
                                         onClick={applyAiSuggestions}
-                                        className="bg-primary text-primary-foreground px-4 py-2 rounded-md text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+                                        className="bg-primary text-primary-foreground px-4 py-2 rounded-md text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                         disabled={aiSelectedIds.size === 0}
                                     >
                                         {t('review.aiApply')} ({aiSelectedIds.size})
@@ -545,14 +661,24 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
 
                                 return (
                                     <div key={project.id} className="border border-border rounded-lg p-4">
-                                        <div className="flex items-center justify-between mb-3">
+                                        <div className="flex items-center justify-between gap-3 mb-3">
                                             <div className="flex items-center gap-2">
-                                                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: (project.areaId ? areaById.get(project.areaId)?.color : undefined) || '#94a3b8' }} />
+                                                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: (project.areaId ? areaById.get(project.areaId)?.color : undefined) || DEFAULT_AREA_COLOR }} />
                                                 <h3 className="font-semibold">{project.title}</h3>
                                             </div>
-                                            <div className={cn("text-xs px-2 py-1 rounded-full", hasNextAction ? "bg-green-500/10 text-green-600" : "bg-red-500/10 text-red-600")}
-                                            >
-                                                {hasNextAction ? t('review.hasNextAction') : t('review.needsAction')}
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setProjectTaskPrompt({ projectId: project.id, projectTitle: project.title })}
+                                                    className="px-2.5 py-1 rounded-md border border-border text-xs text-foreground hover:bg-muted/40 transition-colors"
+                                                >
+                                                    {t('projects.addTask')}
+                                                </button>
+                                                <div
+                                                    className={cn("text-xs px-2 py-1 rounded-full", hasNextAction ? "bg-green-500/10 text-green-600" : "bg-red-500/10 text-red-600")}
+                                                >
+                                                    {hasNextAction ? t('review.hasNextAction') : t('review.needsAction')}
+                                                </div>
                                             </div>
                                         </div>
                                         <div className="space-y-2 pl-5">
@@ -686,7 +812,7 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
                         {renderStepContent()}
                     </div>
 
-                    {currentStep !== 'intro' && currentStep !== 'completed' && (
+                    {currentStep !== 'completed' && (
                         <div className="flex justify-between items-center pt-3.5 border-t border-border mt-5">
                             <button
                                 onClick={prevStep}
@@ -704,6 +830,25 @@ export function WeeklyReviewGuideModal({ onClose }: WeeklyReviewGuideModalProps)
                     )}
                 </div>
             </div>
+            <PromptModal
+                isOpen={Boolean(projectTaskPrompt)}
+                title={t('projects.addTask')}
+                description={projectTaskPrompt ? `${projectTaskPrompt.projectTitle}` : undefined}
+                placeholder={t('nav.addTask')}
+                defaultValue=""
+                confirmLabel={t('common.add')}
+                cancelLabel={t('common.cancel')}
+                onCancel={() => setProjectTaskPrompt(null)}
+                onConfirm={(value) => {
+                    const trimmed = value.trim();
+                    const targetProject = projectTaskPrompt;
+                    if (!trimmed || !targetProject) return;
+                    void (async () => {
+                        await addTask(trimmed, { projectId: targetProject.projectId, status: 'next' });
+                        setProjectTaskPrompt(null);
+                    })();
+                }}
+            />
         </div>
     );
 }

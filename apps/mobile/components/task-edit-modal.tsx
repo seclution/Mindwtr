@@ -25,9 +25,14 @@ import {
     safeFormatDate,
     safeParseDate,
     safeParseDueDate,
-    resolveTextDirection,
+    resolveAutoTextDirection,
+    getAttachmentDisplayTitle,
+    normalizeLinkAttachmentInput,
     validateAttachmentForUpload,
     parseQuickAdd,
+    DEFAULT_PROJECT_COLOR,
+    getLocalizedWeekdayButtons,
+    getLocalizedWeekdayLabels,
 } from '@mindwtr/core';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -38,9 +43,8 @@ import { Paths } from 'expo-file-system';
 import { useLanguage } from '../contexts/language-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { MarkdownText } from './markdown-text';
-import { buildAIConfig, loadAIKey } from '../lib/ai-config';
+import { buildAIConfig, isAIKeyRequired, loadAIKey } from '../lib/ai-config';
 import { ensureAttachmentAvailable, persistAttachmentLocally } from '../lib/attachment-sync';
-import { logError, logWarn } from '../lib/app-log';
 import { AIResponseModal, type AIResponseAction } from './ai-response-modal';
 import { styles } from './task-edit/task-edit-modal.styles';
 import { TaskEditViewTab } from './task-edit/TaskEditViewTab';
@@ -51,11 +55,13 @@ import { TaskEditProjectPicker } from './task-edit/TaskEditProjectPicker';
 import { TaskEditAreaPicker } from './task-edit/TaskEditAreaPicker';
 import { TaskEditSectionPicker } from './task-edit/TaskEditSectionPicker';
 import {
+    TaskEditAudioModal,
+    TaskEditImagePreviewModal,
+    TaskEditLinkModal,
+} from './task-edit/TaskEditOverlayModals';
+import {
     MAX_SUGGESTED_TAGS,
-    MAX_VISIBLE_SUGGESTIONS,
     WEEKDAY_ORDER,
-    WEEKDAY_BUTTONS,
-    MONTHLY_WEEKDAY_LABELS,
     getRecurrenceRuleValue,
     getRecurrenceStrategyValue,
     buildRecurrenceValue,
@@ -64,11 +70,22 @@ import {
 } from './task-edit/recurrence-utils';
 import { useTaskEditCopilot } from './task-edit/use-task-edit-copilot';
 import {
+    DEFAULT_CONTEXT_SUGGESTIONS,
+    DEFAULT_TASK_EDITOR_ORDER,
+    DEFAULT_TASK_EDITOR_VISIBLE,
+    getInitialWindowWidth,
+    isReleasedAudioPlayerError,
+    isValidLinkUri,
+    logTaskError,
+    logTaskWarn,
+    STATUS_OPTIONS,
+} from './task-edit/task-edit-modal.utils';
+import {
     applyMarkdownChecklistToTask,
-    getActiveTokenQuery,
     parseTokenList,
     replaceTrailingToken,
 } from './task-edit/task-edit-token-utils';
+import { useTaskTokenSuggestions } from './task-edit/use-task-token-suggestions';
 
 
 interface TaskEditModalProps {
@@ -80,77 +97,17 @@ interface TaskEditModalProps {
     defaultTab?: 'task' | 'view';
 }
 
-const STATUS_OPTIONS: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'reference', 'done'];
-const formatError = (error: unknown) => (error instanceof Error ? error.message : String(error));
-const buildTaskExtra = (message?: string, error?: unknown): Record<string, string> | undefined => {
-    const extra: Record<string, string> = {};
-    if (message) extra.message = message;
-    if (error) extra.error = formatError(error);
-    return Object.keys(extra).length ? extra : undefined;
-};
-const logTaskWarn = (message: string, error?: unknown) => {
-    void logWarn(message, { scope: 'task', extra: buildTaskExtra(undefined, error) });
-};
-const logTaskError = (message: string, error?: unknown) => {
-    const err = error instanceof Error ? error : new Error(message);
-    void logError(err, { scope: 'task', extra: buildTaskExtra(message, error) });
-};
-const isReleasedAudioPlayerError = (error: unknown): boolean => {
-    const message = formatError(error).toLowerCase();
-    return (
-        message.includes('already released')
-        || message.includes('cannot use shared object')
-        || message.includes('cannot be cast to type expo.modules.audio.audioplayer')
-    );
-};
-const STATUS_LABEL_FALLBACKS: Record<TaskStatus, string> = {
-    inbox: 'Inbox',
-    next: 'Next',
-    waiting: 'Waiting',
-    someday: 'Someday',
-    reference: 'Reference',
-    done: 'Done',
-    archived: 'Archived',
-};
-const QUICK_TOKEN_LIMIT = 6;
-
-const DEFAULT_TASK_EDITOR_ORDER: TaskEditorFieldId[] = [
-    'status',
-    'project',
-    'section',
-    'area',
-    'priority',
-    'contexts',
-    'description',
-    'textDirection',
-    'tags',
-    'timeEstimate',
-    'recurrence',
-    'startTime',
-    'dueDate',
-    'reviewAt',
-    'attachments',
-    'checklist',
-];
-const DEFAULT_TASK_EDITOR_VISIBLE: TaskEditorFieldId[] = [
-    'status',
-    'project',
-    'section',
-    'area',
-    'description',
-    'textDirection',
-    'checklist',
-    'contexts',
-    'dueDate',
-    'priority',
-    'timeEstimate',
-];
-
-
-
 type TaskEditTab = 'task' | 'view';
 
-export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, defaultTab }: TaskEditModalProps) {
+const getOrdinalTranslationKey = (value: '1' | '2' | '3' | '4' | '-1'): 'first' | 'second' | 'third' | 'fourth' | 'last' => {
+    if (value === '-1') return 'last';
+    if (value === '1') return 'first';
+    if (value === '2') return 'second';
+    if (value === '3') return 'third';
+    return 'fourth';
+};
+
+function TaskEditModalInner({ visible, task, onClose, onSave, onFocusMode, defaultTab }: TaskEditModalProps) {
     const {
         tasks,
         projects,
@@ -164,7 +121,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         addArea,
         deleteTask,
     } = useTaskStore();
-    const { t } = useLanguage();
+    const { t, language } = useLanguage();
     const tc = useThemeColors();
     const prioritiesEnabled = settings.features?.priorities === true;
     const timeEstimatesEnabled = settings.features?.timeEstimates === true;
@@ -202,6 +159,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
     const [isTagInputFocused, setIsTagInputFocused] = useState(false);
     const [linkModalVisible, setLinkModalVisible] = useState(false);
     const [audioModalVisible, setAudioModalVisible] = useState(false);
+    const [imagePreviewAttachment, setImagePreviewAttachment] = useState<Attachment | null>(null);
     const [audioAttachment, setAudioAttachment] = useState<Attachment | null>(null);
     const [audioLoading, setAudioLoading] = useState(false);
     const audioPlayer = useAudioPlayer(null, { updateInterval: 500 });
@@ -211,7 +169,16 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
     const [showProjectPicker, setShowProjectPicker] = useState(false);
     const [showSectionPicker, setShowSectionPicker] = useState(false);
     const [linkInput, setLinkInput] = useState('');
+    const [linkInputTouched, setLinkInputTouched] = useState(false);
     const [customWeekdays, setCustomWeekdays] = useState<RecurrenceWeekday[]>([]);
+    const recurrenceWeekdayButtons = useMemo(
+        () => getLocalizedWeekdayButtons(language, 'narrow'),
+        [language]
+    );
+    const recurrenceWeekdayLabels = useMemo(
+        () => getLocalizedWeekdayLabels(language, 'long'),
+        [language]
+    );
     const [isAIWorking, setIsAIWorking] = useState(false);
     const [aiModal, setAiModal] = useState<{ title: string; message?: string; actions: AIResponseAction[] } | null>(null);
     const aiEnabled = settings.ai?.enabled === true;
@@ -231,8 +198,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
             .map(([tag]) => tag);
 
         // Add default tags if we don't have enough history
-        const defaults = ['@home', '@work', '@errands', '@computer', '@phone'];
-        const unique = new Set([...sorted, ...defaults]);
+        const unique = new Set([...sorted, ...DEFAULT_CONTEXT_SUGGESTIONS]);
 
         return Array.from(unique).slice(0, MAX_SUGGESTED_TAGS);
     }, [tasks]);
@@ -269,66 +235,25 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         setEditedTask,
     });
 
-    const contextSuggestionPool = useMemo(() => {
-        const taskContexts = tasks.flatMap((item) => item.contexts || []);
-        return Array.from(new Set([...(editedTask.contexts ?? []), ...taskContexts]))
-            .filter((item): item is string => Boolean(item?.startsWith('@')));
-    }, [editedTask.contexts, tasks]);
-    const tagSuggestionPool = useMemo(() => {
-        const taskTags = tasks.flatMap((item) => item.tags || []);
-        return Array.from(new Set([...(editedTask.tags ?? []), ...taskTags]))
-            .filter((item): item is string => Boolean(item?.startsWith('#')));
-    }, [editedTask.tags, tasks]);
-
-    const contextTokenQuery = useMemo(
-        () => getActiveTokenQuery(contextInputDraft, '@'),
-        [contextInputDraft]
-    );
-    const tagTokenQuery = useMemo(
-        () => getActiveTokenQuery(tagInputDraft, '#'),
-        [tagInputDraft]
-    );
-    const contextTokenSuggestions = useMemo(() => {
-        if (!contextTokenQuery) return [];
-        const selected = new Set(parseTokenList(contextInputDraft, '@'));
-        return contextSuggestionPool
-            .filter((token) => token.slice(1).toLowerCase().includes(contextTokenQuery))
-            .filter((token) => !selected.has(token))
-            .slice(0, MAX_VISIBLE_SUGGESTIONS);
-    }, [contextInputDraft, contextSuggestionPool, contextTokenQuery]);
-    const tagTokenSuggestions = useMemo(() => {
-        if (!tagTokenQuery) return [];
-        const selected = new Set(parseTokenList(tagInputDraft, '#'));
-        return tagSuggestionPool
-            .filter((token) => token.slice(1).toLowerCase().includes(tagTokenQuery))
-            .filter((token) => !selected.has(token))
-            .slice(0, MAX_VISIBLE_SUGGESTIONS);
-    }, [tagInputDraft, tagSuggestionPool, tagTokenQuery]);
-    const frequentContextSuggestions = useMemo(
-        () => suggestedTags.slice(0, QUICK_TOKEN_LIMIT),
-        [suggestedTags]
-    );
-    const frequentTagSuggestions = useMemo(() => {
-        const counts = new Map<string, number>();
-        tasks.forEach((item) => {
-            item.tags?.forEach((tag) => {
-                if (!tag?.startsWith('#')) return;
-                counts.set(tag, (counts.get(tag) || 0) + 1);
-            });
-        });
-        const sorted = Array.from(counts.entries())
-            .sort((a, b) => b[1] - a[1])
-            .map(([tag]) => tag);
-        return Array.from(new Set([...sorted, ...PRESET_TAGS])).slice(0, QUICK_TOKEN_LIMIT);
-    }, [tasks]);
-    const selectedContextTokens = useMemo(
-        () => new Set(parseTokenList(contextInputDraft, '@')),
-        [contextInputDraft]
-    );
-    const selectedTagTokens = useMemo(
-        () => new Set(parseTokenList(tagInputDraft, '#')),
-        [tagInputDraft]
-    );
+    const {
+        contextSuggestionPool,
+        tagSuggestionPool,
+        contextTokenQuery,
+        tagTokenQuery,
+        contextTokenSuggestions,
+        tagTokenSuggestions,
+        frequentContextSuggestions,
+        frequentTagSuggestions,
+        selectedContextTokens,
+        selectedTagTokens,
+    } = useTaskTokenSuggestions({
+        tasks,
+        editedContexts: editedTask.contexts,
+        editedTags: editedTask.tags,
+        contextInputDraft,
+        tagInputDraft,
+        suggestedContexts: suggestedTags,
+    });
 
     const resolveInitialTab = (target?: TaskEditTab, currentTask?: Task | null): TaskEditTab => {
         if (target) return target;
@@ -511,13 +436,17 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
             descriptionDebounceRef.current = null;
         }
         const rawTitle = String(titleDraftRef.current ?? '');
-        const { title: parsedTitle, props: parsedProps, projectTitle } = parseQuickAdd(rawTitle, projects, new Date(), areas);
+        const { title: parsedTitle, props: parsedProps, projectTitle, invalidDateCommands } = parseQuickAdd(rawTitle, projects, new Date(), areas);
+        if (invalidDateCommands && invalidDateCommands.length > 0) {
+            Alert.alert(t('common.notice'), `Invalid date command: ${invalidDateCommands.join(', ')}`);
+            return;
+        }
         const existingProjectId = editedTask.projectId ?? task?.projectId;
         const hasProjectCommand = Boolean(parsedProps.projectId || projectTitle);
         let resolvedProjectId = parsedProps.projectId;
         if (!resolvedProjectId && projectTitle) {
             try {
-                const created = await addProject(projectTitle, '#94a3b8');
+                const created = await addProject(projectTitle, DEFAULT_PROJECT_COLOR);
                 resolvedProjectId = created?.id;
             } catch (error) {
                 logTaskError('Failed to create project from quick add', error);
@@ -547,7 +476,9 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         };
         updates.checklist = applyMarkdownChecklistToTask(resolvedDescription, updates.checklist);
         if (parsedProps.status) updates.status = parsedProps.status;
+        if (parsedProps.startTime) updates.startTime = parsedProps.startTime;
         if (parsedProps.dueDate) updates.dueDate = parsedProps.dueDate;
+        if (parsedProps.reviewAt) updates.reviewAt = parsedProps.reviewAt;
         if (hasProjectCommand && resolvedProjectId && resolvedProjectId !== existingProjectId) {
             updates.projectId = resolvedProjectId;
             updates.sectionId = undefined;
@@ -782,21 +713,35 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
     };
 
     const confirmAddLink = () => {
-        const url = linkInput.trim();
-        if (!url) return;
+        if (!linkInput.trim()) {
+            setLinkInputTouched(true);
+            return;
+        }
+        const normalized = normalizeLinkAttachmentInput(linkInput);
+        if (!normalized.uri || !isValidLinkUri(normalized.uri)) {
+            Alert.alert(t('attachments.title'), t('attachments.invalidLink'));
+            return;
+        }
         const now = new Date().toISOString();
         const attachment: Attachment = {
             id: generateUUID(),
-            kind: 'link',
-            title: url,
-            uri: url,
+            kind: normalized.kind,
+            title: normalized.title,
+            uri: normalized.uri,
             createdAt: now,
             updatedAt: now,
         };
         setEditedTask((prev) => ({ ...prev, attachments: [...(prev.attachments || []), attachment] }));
         setLinkInput('');
+        setLinkInputTouched(false);
         setLinkModalVisible(false);
     };
+
+    const closeLinkModal = useCallback(() => {
+        setLinkModalVisible(false);
+        setLinkInput('');
+        setLinkInputTouched(false);
+    }, []);
 
     const isAudioAttachment = (attachment: Attachment) => {
         const mime = attachment.mimeType?.toLowerCase();
@@ -892,6 +837,10 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         void unloadAudio();
     }, [unloadAudio]);
 
+    const closeImagePreview = useCallback(() => {
+        setImagePreviewAttachment(null);
+    }, []);
+
     const toggleAudioPlayback = useCallback(async () => {
         if (!audioStatus?.isLoaded || !audioLoadedRef.current) return;
         try {
@@ -969,6 +918,10 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
             openAudioAttachment(resolved).catch((error) => logTaskError('Failed to open audio attachment', error));
             return;
         }
+        if (isImageAttachment(resolved)) {
+            setImagePreviewAttachment(resolved);
+            return;
+        }
         const available = await Sharing.isAvailableAsync().catch((error) => {
             logTaskWarn('[Sharing] availability check failed', error);
             return false;
@@ -986,19 +939,12 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         return /\.(png|jpg|jpeg|gif|webp|heic|heif)$/i.test(attachment.uri);
     };
 
-    const formatAudioTimestamp = (millis?: number) => {
-        if (!millis || millis < 0) return '0:00';
-        const totalSeconds = Math.floor(millis / 1000);
-        const minutes = Math.floor(totalSeconds / 60);
-        const seconds = totalSeconds % 60;
-        return `${minutes}:${String(seconds).padStart(2, '0')}`;
-    };
-
     useEffect(() => {
         if (!visible) {
             closeAudioModal();
+            closeImagePreview();
         }
-    }, [closeAudioModal, visible]);
+    }, [closeAudioModal, closeImagePreview, visible]);
 
     useEffect(() => {
         if (!audioStatus?.isLoaded) {
@@ -1237,10 +1183,6 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                 return Boolean(contextInputDraft.trim());
             case 'description':
                 return Boolean(descriptionDraft.trim());
-            case 'textDirection': {
-                const direction = editedTask.textDirection ?? task?.textDirection;
-                return direction !== undefined && direction !== 'auto';
-            }
             case 'tags':
                 return Boolean(tagInputDraft.trim());
             case 'timeEstimate':
@@ -1274,7 +1216,6 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         editedTask.sectionId,
         editedTask.startTime,
         editedTask.status,
-        editedTask.textDirection,
         editedTask.timeEstimate,
         prioritiesEnabled,
         tagInputDraft,
@@ -1288,7 +1229,6 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         task?.sectionId,
         task?.startTime,
         task?.status,
-        task?.textDirection,
         task?.timeEstimate,
         timeEstimatesEnabled,
         visibleAttachments.length,
@@ -1317,7 +1257,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         [filterVisibleFields, orderFields]
     );
     const detailsFields = useMemo(
-        () => filterVisibleFields(orderFields(['description', 'textDirection', 'checklist', 'attachments'])),
+        () => filterVisibleFields(orderFields(['description', 'checklist', 'attachments'])),
         [filterVisibleFields, orderFields]
     );
 
@@ -1477,9 +1417,14 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         setEditTab(mode);
     }, []);
 
-    const [containerWidth, setContainerWidth] = useState(0);
+    const [containerWidth, setContainerWidth] = useState(getInitialWindowWidth);
     const scrollX = useRef(new Animated.Value(0)).current;
     const scrollRef = useRef<ScrollView | null>(null);
+    const [scrollTaskFormToEnd, setScrollTaskFormToEnd] = useState<((targetInput?: number | string) => void) | null>(null);
+    const registerScrollTaskFormToEnd = useCallback((handler: ((targetInput?: number | string) => void) | null) => {
+        setScrollTaskFormToEnd(() => handler);
+    }, []);
+    const lastFocusedInputRef = useRef<number | string | undefined>(undefined);
 
     const scrollToTab = useCallback((mode: TaskEditTab, animated = true) => {
         if (!containerWidth) return;
@@ -1494,15 +1439,51 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         }
         node?.getNode?.()?.scrollTo?.({ x, animated });
     }, [containerWidth]);
-    const swipeStartX = useRef(0);
-    const swipeThreshold = containerWidth ? Math.max(32, containerWidth * 0.1) : 32;
+    const alignPagerToActiveTab = useCallback(() => {
+        if (!visible || !containerWidth) return;
+        requestAnimationFrame(() => {
+            scrollToTab(editTab, false);
+        });
+    }, [containerWidth, editTab, scrollToTab, visible]);
+    useEffect(() => {
+        if (!visible || !containerWidth) return;
+        scrollToTab(editTab, false);
+    }, [containerWidth, scrollToTab, task?.id, visible]);
 
     useEffect(() => {
         if (!visible || !containerWidth) return;
-        const targetX = editTab === 'task' ? 0 : containerWidth;
-        scrollX.setValue(targetX);
-        scrollToTab(editTab, false);
-    }, [containerWidth, editTab, scrollToTab, task?.id, visible, scrollX]);
+        const alignmentTimer = setTimeout(() => {
+            scrollToTab(editTab, false);
+        }, 90);
+        return () => clearTimeout(alignmentTimer);
+    }, [containerWidth, scrollToTab, task?.id, visible]);
+
+    useEffect(() => {
+        if (!visible) return;
+        if (typeof Keyboard?.addListener !== 'function') return;
+        const handleKeyboardShow = () => {
+            alignPagerToActiveTab();
+            if (lastFocusedInputRef.current !== undefined) {
+                scrollTaskFormToEnd?.(lastFocusedInputRef.current);
+            }
+        };
+        const handleKeyboardHide = () => {
+            alignPagerToActiveTab();
+        };
+        const showListener = Keyboard.addListener('keyboardDidShow', handleKeyboardShow);
+        const hideListener = Keyboard.addListener('keyboardDidHide', handleKeyboardHide);
+        return () => {
+            showListener.remove();
+            hideListener.remove();
+        };
+    }, [alignPagerToActiveTab, scrollTaskFormToEnd, visible]);
+
+    const handleInputFocus = useCallback((targetInput?: number | string) => {
+        lastFocusedInputRef.current = targetInput;
+        setTimeout(() => {
+            scrollTaskFormToEnd?.(targetInput);
+        }, 140);
+    }, [scrollTaskFormToEnd]);
 
     const handleTabPress = (mode: TaskEditTab) => {
         setModeTab(mode);
@@ -1578,7 +1559,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         }
         const provider = (settings.ai?.provider ?? 'openai') as AIProviderId;
         const apiKey = await loadAIKey(provider);
-        if (!apiKey) {
+        if (isAIKeyRequired(settings) && !apiKey) {
             Alert.alert(t('ai.missingKeyTitle'), t('ai.missingKeyBody'));
             return null;
         }
@@ -1702,9 +1683,8 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
     };
 
     const inputStyle = { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text };
-    const textDirectionValue = (editedTask.textDirection ?? 'auto') as Task['textDirection'] | 'auto';
     const combinedText = `${titleDraft ?? ''}\n${descriptionDraft ?? ''}`.trim();
-    const resolvedDirection = resolveTextDirection(combinedText, textDirectionValue);
+    const resolvedDirection = resolveAutoTextDirection(combinedText, language);
     const textDirectionStyle = {
         writingDirection: resolvedDirection,
         textAlign: resolvedDirection === 'rtl' ? 'right' : 'left',
@@ -1720,7 +1700,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
     const getStatusLabel = (status: TaskStatus) => {
         const key = `status.${status}` as const;
         const translated = t(key);
-        return translated === key ? STATUS_LABEL_FALLBACKS[status] : translated;
+        return translated === key ? status : translated;
     };
     const getQuickTokenChipStyle = (active: boolean) => ([
         styles.quickTokenChip,
@@ -1899,7 +1879,10 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                             style={[styles.input, inputStyle]}
                             value={contextInputDraft}
                             onChangeText={updateContextInput}
-                            onFocus={() => setIsContextInputFocused(true)}
+                            onFocus={(event) => {
+                                setIsContextInputFocused(true);
+                                handleInputFocus(event.nativeEvent.target);
+                            }}
                             onBlur={commitContextDraft}
                             onSubmitEditing={() => {
                                 commitContextDraft();
@@ -1910,6 +1893,8 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                             placeholder={t('taskEdit.contextsPlaceholder')}
                             autoCapitalize="none"
                             placeholderTextColor={tc.secondaryText}
+                            accessibilityLabel={t('taskEdit.contextsLabel')}
+                            accessibilityHint={t('taskEdit.contextsPlaceholder')}
                         />
                         {contextTokenSuggestions.length > 0 && (
                             <View style={[styles.tokenSuggestionsMenu, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
@@ -1953,7 +1938,10 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                             style={[styles.input, inputStyle]}
                             value={tagInputDraft}
                             onChangeText={updateTagInput}
-                            onFocus={() => setIsTagInputFocused(true)}
+                            onFocus={(event) => {
+                                setIsTagInputFocused(true);
+                                handleInputFocus(event.nativeEvent.target);
+                            }}
                             onBlur={commitTagDraft}
                             onSubmitEditing={() => {
                                 commitTagDraft();
@@ -1964,6 +1952,8 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                             placeholder={t('taskEdit.tagsPlaceholder')}
                             autoCapitalize="none"
                             placeholderTextColor={tc.secondaryText}
+                            accessibilityLabel={t('taskEdit.tagsLabel')}
+                            accessibilityHint={t('taskEdit.tagsPlaceholder')}
                         />
                         {tagTokenSuggestions.length > 0 && (
                             <View style={[styles.tokenSuggestionsMenu, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
@@ -2078,7 +2068,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                         </View>
                         {recurrenceRuleValue === 'weekly' && (
                             <View style={[styles.weekdayRow, { marginTop: 10 }]}>
-                                {WEEKDAY_BUTTONS.map((day) => {
+                                {recurrenceWeekdayButtons.map((day) => {
                                     const active = customWeekdays.includes(day.key);
                                     return (
                                         <TouchableOpacity
@@ -2131,6 +2121,8 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                     }}
                                     keyboardType="number-pad"
                                     style={[styles.customInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
+                                    accessibilityLabel={t('recurrence.repeatEvery')}
+                                    accessibilityHint={t('recurrence.dayUnit')}
                                 />
                                 <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.dayUnit')}</Text>
                             </View>
@@ -2294,35 +2286,6 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                         {renderInlineIOSDatePicker(['review'])}
                     </View>
                 );
-            case 'textDirection':
-                return (
-                    <View style={styles.formGroup}>
-                        <Text style={[styles.label, { color: tc.secondaryText }]}>{t('taskEdit.textDirectionLabel')}</Text>
-                        <View style={styles.statusContainer}>
-                            {([
-                                { value: 'auto', label: t('taskEdit.textDirection.auto') },
-                                { value: 'ltr', label: t('taskEdit.textDirection.ltr') },
-                                { value: 'rtl', label: t('taskEdit.textDirection.rtl') },
-                            ] as const).map((option) => {
-                                const isActive = (editedTask.textDirection ?? 'auto') === option.value;
-                                return (
-                                    <TouchableOpacity
-                                        key={option.value}
-                                        style={getStatusChipStyle(isActive)}
-                                        onPress={() => {
-                                            setEditedTask((prev) => ({
-                                                ...prev,
-                                                textDirection: option.value,
-                                            }));
-                                        }}
-                                    >
-                                        <Text style={getStatusTextStyle(isActive)}>{option.label}</Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </View>
-                    </View>
-                );
             case 'description':
                 return (
                     <View style={styles.formGroup}>
@@ -2342,6 +2305,9 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                             <TextInput
                                 style={[styles.input, styles.textArea, inputStyle, textDirectionStyle]}
                                 value={descriptionDraft}
+                                onFocus={(event) => {
+                                    handleInputFocus(event.nativeEvent.target);
+                                }}
                                 onChangeText={(text) => {
                                     setDescriptionDraft(text);
                                     descriptionDraftRef.current = text;
@@ -2356,6 +2322,8 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                 placeholder={t('taskEdit.descriptionPlaceholder')}
                                 multiline
                                 placeholderTextColor={tc.secondaryText}
+                                accessibilityLabel={t('taskEdit.descriptionLabel')}
+                                accessibilityHint={t('taskEdit.descriptionPlaceholder')}
                             />
                         )}
                     </View>
@@ -2379,7 +2347,10 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                     <Text style={[styles.smallButtonText, { color: tc.tint }]}>{t('attachments.addPhoto')}</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
-                                    onPress={() => setLinkModalVisible(true)}
+                                    onPress={() => {
+                                        setLinkInputTouched(false);
+                                        setLinkModalVisible(true);
+                                    }}
                                     style={[styles.smallButton, { backgroundColor: tc.cardBg, borderColor: tc.border }]}
                                 >
                                     <Text style={[styles.smallButtonText, { color: tc.tint }]}>{t('attachments.addLink')}</Text>
@@ -2391,6 +2362,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                         ) : (
                             <View style={[styles.attachmentsList, { borderColor: tc.border, backgroundColor: tc.cardBg }]}>
                                 {visibleAttachments.map((attachment) => {
+                                    const displayTitle = getAttachmentDisplayTitle(attachment);
                                     const isMissing = attachment.kind === 'file'
                                         && (!attachment.uri || attachment.localStatus === 'missing');
                                     const canDownload = isMissing && Boolean(attachment.cloudKey);
@@ -2403,7 +2375,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                                 disabled={isDownloading}
                                             >
                                                 <Text style={[styles.attachmentTitle, { color: tc.tint }]} numberOfLines={1}>
-                                                    {attachment.title}
+                                                    {displayTitle}
                                                 </Text>
                                             </TouchableOpacity>
                                             {isDownloading ? (
@@ -2461,6 +2433,9 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                             item.isCompleted && styles.completedText,
                                         ]}
                                         value={item.title}
+                                        onFocus={(event) => {
+                                            handleInputFocus(event.nativeEvent.target);
+                                        }}
                                         onChangeText={(text) => {
                                             const newChecklist = (editedTask.checklist || []).map((item, i) =>
                                                 i === index ? { ...item, title: text } : item
@@ -2469,6 +2444,8 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                         }}
                                         placeholder={t('taskEdit.itemNamePlaceholder')}
                                         placeholderTextColor={tc.secondaryText}
+                                        accessibilityLabel={`${t('taskEdit.checklist')} ${index + 1}`}
+                                        accessibilityHint={t('taskEdit.itemNamePlaceholder')}
                                     />
                                     <TouchableOpacity
                                         onPress={() => {
@@ -2550,37 +2527,21 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
 
                 <View
                     style={styles.tabContent}
-                    onLayout={(event) => setContainerWidth(event.nativeEvent.layout.width)}
+                    onLayout={(event) => {
+                        const nextWidth = Math.round(event.nativeEvent.layout.width);
+                        if (nextWidth > 0 && nextWidth !== containerWidth) {
+                            setContainerWidth(nextWidth);
+                        }
+                    }}
                 >
                     <Animated.ScrollView
                         ref={scrollRef}
                         horizontal
                         pagingEnabled
                         scrollEnabled
-                        snapToInterval={containerWidth || 1}
-                        snapToAlignment="start"
-                        decelerationRate="fast"
-                        disableIntervalMomentum
                         scrollEventThrottle={16}
                         showsHorizontalScrollIndicator={false}
                         directionalLockEnabled
-                        onScrollBeginDrag={(event) => {
-                            swipeStartX.current = event.nativeEvent.contentOffset.x;
-                        }}
-                        onScrollEndDrag={(event) => {
-                            if (!containerWidth) return;
-                            const velocityX = event.nativeEvent.velocity?.x ?? 0;
-                            if (Math.abs(velocityX) > 0.05) return;
-                            const offsetX = event.nativeEvent.contentOffset.x;
-                            const deltaX = offsetX - swipeStartX.current;
-                            if (Math.abs(deltaX) >= swipeThreshold) {
-                                const target = deltaX > 0 ? 'view' : 'task';
-                                scrollToTab(target);
-                                setModeTab(target);
-                                return;
-                            }
-                            scrollToTab(editTab);
-                        }}
                         onScroll={Animated.event(
                             [{ nativeEvent: { contentOffset: { x: scrollX } } }],
                             { useNativeDriver: true }
@@ -2588,7 +2549,12 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                         onMomentumScrollEnd={(event) => {
                             if (!containerWidth) return;
                             const offsetX = event.nativeEvent.contentOffset.x;
-                            setModeTab(offsetX >= containerWidth * 0.5 ? 'view' : 'task');
+                            const target = offsetX >= containerWidth * 0.5 ? 'view' : 'task';
+                            setModeTab(target);
+                            const targetX = target === 'task' ? 0 : containerWidth;
+                            if (Math.abs(offsetX - targetX) > 1) {
+                                scrollToTab(target, false);
+                            }
                         }}
                     >
                         <TaskEditFormTab
@@ -2623,6 +2589,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                             textDirectionStyle={textDirectionStyle}
                             titleDraft={titleDraft}
                             onTitleDraftChange={handleTitleDraftChange}
+                            registerScrollToEnd={registerScrollTaskFormToEnd}
                         />
                         <View style={[styles.tabPage, { width: containerWidth || '100%' }]}>
                             <TaskEditViewTab
@@ -2652,81 +2619,39 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                     </Animated.ScrollView>
                 </View>
 
-                <Modal
+                <TaskEditLinkModal
                     visible={linkModalVisible}
-                    transparent
-                    animationType="fade"
-                    onRequestClose={() => setLinkModalVisible(false)}
-                >
-                    <View style={styles.overlay}>
-                        <View style={[styles.modalCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
-                            <Text style={[styles.modalTitle, { color: tc.text }]}>{t('attachments.addLink')}</Text>
-                            <TextInput
-                                value={linkInput}
-                                onChangeText={setLinkInput}
-                                placeholder={t('attachments.linkPlaceholder')}
-                                placeholderTextColor={tc.secondaryText}
-                                style={[styles.modalInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
-                                autoCapitalize="none"
-                                autoCorrect={false}
-                            />
-                            <View style={styles.modalButtons}>
-                                <TouchableOpacity
-                                    onPress={() => {
-                                        setLinkModalVisible(false);
-                                        setLinkInput('');
-                                    }}
-                                    style={styles.modalButton}
-                                >
-                                    <Text style={[styles.modalButtonText, { color: tc.secondaryText }]}>{t('common.cancel')}</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    onPress={confirmAddLink}
-                                    disabled={!linkInput.trim()}
-                                    style={[styles.modalButton, !linkInput.trim() && styles.modalButtonDisabled]}
-                                >
-                                    <Text style={[styles.modalButtonText, { color: tc.tint }]}>{t('common.save')}</Text>
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-                    </View>
-                </Modal>
-                <Modal
+                    t={t}
+                    tc={tc}
+                    linkInput={linkInput}
+                    linkInputTouched={linkInputTouched}
+                    onChangeLinkInput={(text) => {
+                        setLinkInput(text);
+                        setLinkInputTouched(true);
+                    }}
+                    onBlurLinkInput={() => setLinkInputTouched(true)}
+                    onClose={closeLinkModal}
+                    onSave={confirmAddLink}
+                />
+                <TaskEditAudioModal
                     visible={audioModalVisible}
-                    transparent
-                    animationType="fade"
-                    onRequestClose={closeAudioModal}
-                >
-                    <Pressable style={styles.overlay} onPress={closeAudioModal}>
-                        <Pressable
-                            style={[styles.modalCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}
-                            onPress={(event) => event.stopPropagation()}
-                        >
-                            <Text style={[styles.modalTitle, { color: tc.text }]}>
-                                {audioAttachment?.title || t('quickAdd.audioNoteTitle')}
-                            </Text>
-                            <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>
-                                {audioStatus?.isLoaded
-                                    ? `${formatAudioTimestamp(audioStatus.currentTime * 1000)} / ${formatAudioTimestamp(audioStatus.duration * 1000)}`
-                                    : t('audio.loading')}
-                            </Text>
-                            <View style={styles.modalButtons}>
-                                <TouchableOpacity
-                                    onPress={toggleAudioPlayback}
-                                    disabled={audioLoading || !audioStatus?.isLoaded}
-                                    style={[styles.modalButton, (audioLoading || !audioStatus?.isLoaded) && styles.modalButtonDisabled]}
-                                >
-                                    <Text style={[styles.modalButtonText, { color: tc.tint }]}>
-                                        {audioStatus?.isLoaded && audioStatus.playing ? t('common.pause') : t('common.play')}
-                                    </Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={closeAudioModal} style={styles.modalButton}>
-                                    <Text style={[styles.modalButtonText, { color: tc.secondaryText }]}>{t('common.close')}</Text>
-                                </TouchableOpacity>
-                            </View>
-                        </Pressable>
-                    </Pressable>
-                </Modal>
+                    t={t}
+                    tc={tc}
+                    audioTitle={audioAttachment?.title}
+                    audioStatus={audioStatus}
+                    audioLoading={audioLoading}
+                    onTogglePlayback={() => {
+                        void toggleAudioPlayback();
+                    }}
+                    onClose={closeAudioModal}
+                />
+                <TaskEditImagePreviewModal
+                    visible={Boolean(imagePreviewAttachment)}
+                    t={t}
+                    tc={tc}
+                    imagePreviewAttachment={imagePreviewAttachment}
+                    onClose={closeImagePreview}
+                />
                 <Modal
                     visible={customRecurrenceVisible}
                     transparent
@@ -2749,6 +2674,8 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                     }}
                                     keyboardType="number-pad"
                                     style={[styles.customInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
+                                    accessibilityLabel={t('recurrence.repeatEvery')}
+                                    accessibilityHint={t('recurrence.monthUnit')}
                                 />
                                 <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.monthUnit')}</Text>
                             </View>
@@ -2769,16 +2696,16 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                     >
                                         <Text style={getStatusTextStyle(customMode === 'nth')}>
                                             {t('recurrence.onNthWeekday')
-                                                .replace('{ordinal}', t(`recurrence.ordinal.${customOrdinal === '-1' ? 'last' : customOrdinal === '1' ? 'first' : customOrdinal === '2' ? 'second' : customOrdinal === '3' ? 'third' : 'fourth'}`))
-                                                .replace('{weekday}', MONTHLY_WEEKDAY_LABELS[customWeekday] ?? customWeekday)}
+                                                .replace('{ordinal}', t(`recurrence.ordinal.${getOrdinalTranslationKey(customOrdinal)}`))
+                                                .replace('{weekday}', recurrenceWeekdayLabels[customWeekday] ?? customWeekday)}
                                         </Text>
                                     </TouchableOpacity>
                                 </View>
                                 {customMode === 'nth' && (
                                     <>
                                         <View style={[styles.weekdayRow, { marginTop: 10, flexWrap: 'wrap' }]}>
-                                        {(['1', '2', '3', '4', '-1'] as const).map((value) => {
-                                            const label = value === '-1' ? 'Last' : `${value}${value === '1' ? 'st' : value === '2' ? 'nd' : value === '3' ? 'rd' : 'th'}`;
+                                            {(['1', '2', '3', '4', '-1'] as const).map((value) => {
+                                                const label = t(`recurrence.ordinal.${getOrdinalTranslationKey(value)}`);
                                                 return (
                                                     <TouchableOpacity
                                                         key={value}
@@ -2791,13 +2718,13 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                                         ]}
                                                         onPress={() => setCustomOrdinal(value)}
                                                     >
-                                                    <Text style={[styles.weekdayButtonText, { color: tc.text }]}>{label}</Text>
-                                                </TouchableOpacity>
-                                            );
-                                        })}
+                                                        <Text style={[styles.weekdayButtonText, { color: tc.text }]}>{label}</Text>
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
                                         </View>
                                         <View style={[styles.weekdayRow, { marginTop: 10 }]}>
-                                            {WEEKDAY_BUTTONS.map((day) => {
+                                            {recurrenceWeekdayButtons.map((day) => {
                                                 const active = customWeekday === day.key;
                                                 return (
                                                     <TouchableOpacity
@@ -2835,6 +2762,8 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                                             }}
                                             keyboardType="number-pad"
                                             style={[styles.customInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
+                                            accessibilityLabel={t('recurrence.onDayOfMonth').replace('{day}', '')}
+                                            accessibilityHint={t('recurrence.monthlyOnDay')}
                                         />
                                     </View>
                                 )}
@@ -2871,7 +2800,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                             sectionId: projectId && prev.projectId === projectId ? prev.sectionId : undefined,
                         }));
                     }}
-                    onCreateProject={(title) => addProject(title, '#94a3b8')}
+                    onCreateProject={(title) => addProject(title, DEFAULT_PROJECT_COLOR)}
                 />
 
                 <TaskEditSectionPicker
@@ -2896,7 +2825,7 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
                     onSelectArea={(areaId) => {
                         setEditedTask(prev => ({ ...prev, areaId, projectId: undefined, sectionId: undefined }));
                     }}
-                    onCreateArea={(name) => addArea(name, { color: '#94a3b8' })}
+                    onCreateArea={(name) => addArea(name, { color: DEFAULT_PROJECT_COLOR })}
                 />
 
                 {aiModal && (
@@ -2912,3 +2841,80 @@ export function TaskEditModal({ visible, task, onClose, onSave, onFocusMode, def
         </Modal>
     );
 }
+
+type TaskEditModalErrorBoundaryProps = {
+    visible: boolean;
+    resetKey: string;
+    onClose: () => void;
+    children: React.ReactNode;
+};
+
+type TaskEditModalErrorBoundaryState = {
+    hasError: boolean;
+};
+
+class TaskEditModalErrorBoundary extends React.Component<TaskEditModalErrorBoundaryProps, TaskEditModalErrorBoundaryState> {
+    state: TaskEditModalErrorBoundaryState = { hasError: false };
+
+    static getDerivedStateFromError(): TaskEditModalErrorBoundaryState {
+        return { hasError: true };
+    }
+
+    componentDidCatch(error: unknown) {
+        logTaskError('Task edit modal render failed', error);
+    }
+
+    componentDidUpdate(prevProps: TaskEditModalErrorBoundaryProps) {
+        if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+            this.setState({ hasError: false });
+        }
+    }
+
+    render() {
+        if (!this.state.hasError) return this.props.children;
+
+        return (
+            <Modal
+                visible={this.props.visible}
+                transparent
+                animationType="fade"
+                onRequestClose={this.props.onClose}
+            >
+                <SafeAreaView style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 16 }}>
+                    <View style={[styles.modalCard, { backgroundColor: '#111827', borderColor: '#334155' }]}>
+                        <Text style={[styles.modalTitle, { color: '#F8FAFC' }]}>Something went wrong</Text>
+                        <Text style={{ color: '#CBD5E1', marginBottom: 14 }}>The editor encountered an error and was safely closed.</Text>
+                        <TouchableOpacity style={styles.modalButton} onPress={this.props.onClose}>
+                            <Text style={[styles.modalButtonText, { color: '#93C5FD' }]}>Close</Text>
+                        </TouchableOpacity>
+                    </View>
+                </SafeAreaView>
+            </Modal>
+        );
+    }
+}
+
+const areTaskEditModalPropsEqual = (prev: TaskEditModalProps, next: TaskEditModalProps): boolean => (
+    prev.visible === next.visible
+    && prev.task === next.task
+    && prev.onClose === next.onClose
+    && prev.onSave === next.onSave
+    && prev.onFocusMode === next.onFocusMode
+    && prev.defaultTab === next.defaultTab
+);
+
+const TaskEditModalWithBoundary = (props: TaskEditModalProps) => {
+    const resetKey = `${props.visible ? 'open' : 'closed'}:${props.task?.id ?? 'new'}`;
+    return (
+        <TaskEditModalErrorBoundary
+            visible={props.visible}
+            resetKey={resetKey}
+            onClose={props.onClose}
+        >
+            <TaskEditModalInner {...props} />
+        </TaskEditModalErrorBoundary>
+    );
+};
+
+export const TaskEditModal = React.memo(TaskEditModalWithBoundary, areTaskEditModalPropsEqual);
+TaskEditModal.displayName = 'TaskEditModal';

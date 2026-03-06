@@ -1,5 +1,6 @@
 import React from 'react';
 import { Image, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { getAttachmentDisplayTitle } from '@mindwtr/core';
 import type {
   Attachment,
   Area,
@@ -89,13 +90,6 @@ export function TaskEditViewTab({
   const description = String(mergedTask.description || '').trim();
   const area = areas.find((a) => a.id === mergedTask.areaId);
   const checklist = mergedTask.checklist || [];
-  const textDirectionValue = mergedTask.textDirection ?? 'auto';
-  const textDirectionLabel =
-    textDirectionValue === 'rtl'
-      ? t('taskEdit.textDirection.rtl')
-      : textDirectionValue === 'ltr'
-        ? t('taskEdit.textDirection.ltr')
-        : t('taskEdit.textDirection.auto');
 
   const statusLabel = mergedTask.status ? (t(`status.${mergedTask.status}`) || mergedTask.status) : undefined;
   const isReference = mergedTask.status === 'reference';
@@ -125,7 +119,6 @@ export function TaskEditViewTab({
       {!isReference ? renderViewRow(t('taskEdit.dueDateLabel'), mergedTask.dueDate ? formatDueDate(mergedTask.dueDate) : undefined) : null}
       {!isReference ? renderViewRow(t('taskEdit.reviewDateLabel'), mergedTask.reviewAt ? formatDate(mergedTask.reviewAt) : undefined) : null}
       {!isReference && timeEstimatesEnabled ? renderViewRow(t('taskEdit.timeEstimateLabel'), timeEstimateLabel) : null}
-      {mergedTask.textDirection ? renderViewRow(t('taskEdit.textDirectionLabel'), textDirectionLabel) : null}
       {mergedTask.contexts?.length ? (
         <View style={styles.viewSection}>
           <Text style={[styles.viewLabel, { color: tc.secondaryText }]}>{t('taskEdit.contextsLabel')}</Text>
@@ -195,7 +188,7 @@ export function TaskEditViewTab({
                   return (
                     <View>
                       <Text style={[styles.viewAttachmentText, { color: tc.text }]} numberOfLines={2}>
-                        {attachment.title}
+                        {getAttachmentDisplayTitle(attachment)}
                       </Text>
                       {isDownloading ? (
                         <Text style={[styles.viewAttachmentSubtext, { color: tc.secondaryText }]}>

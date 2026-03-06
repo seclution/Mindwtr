@@ -1,10 +1,15 @@
-import { Calendar as CalendarIcon, Tag, Trash2, ArrowRight, Repeat, Check, Clock, Timer, Paperclip, RotateCcw, Copy, MapPin, Hourglass, BookOpen, Star } from 'lucide-react';
-import type { Area, Attachment, Project, Task, TaskStatus, RecurrenceRule, RecurrenceStrategy } from '@mindwtr/core';
-import { getChecklistProgress, getTaskAgeLabel, getTaskStaleness, getTaskUrgency, hasTimeComponent, safeFormatDate, stripMarkdown, resolveTaskTextDirection } from '@mindwtr/core';
+import { Calendar as CalendarIcon, Tag, Trash2, ArrowRight, Repeat, Check, Clock, Timer, Paperclip, RotateCcw, Copy, MapPin, Hourglass, BookOpen, PauseCircle, Star } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import type { Area, Attachment, Project, Task, TaskStatus, RecurrenceRule, RecurrenceStrategy, Language } from '@mindwtr/core';
+import { DEFAULT_AREA_COLOR, getChecklistProgress, getTaskAgeLabel, getTaskStaleness, getTaskUrgency, hasTimeComponent, safeFormatDate, resolveTaskTextDirection } from '@mindwtr/core';
 import { cn } from '../../lib/utils';
+import { getAttachmentDisplayTitle } from '../../lib/attachment-utils';
+import { getContextColor } from '../../lib/context-color';
 import { MetadataBadge } from '../ui/MetadataBadge';
 import { AttachmentProgressIndicator } from '../AttachmentProgressIndicator';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
+import { useEffect, useRef } from 'react';
 
 interface TaskItemDisplayActions {
     onToggleSelect?: () => void;
@@ -13,6 +18,7 @@ interface TaskItemDisplayActions {
     onDelete: () => void;
     onDuplicate: () => void;
     onStatusChange: (status: TaskStatus) => void;
+    onMoveToWaitingWithPrompt?: () => void;
     onOpenProject?: (projectId: string) => void;
     openAttachment: (attachment: Attachment) => void;
     onToggleChecklistItem?: (index: number) => void;
@@ -22,11 +28,13 @@ interface TaskItemDisplayActions {
         onToggle: () => void;
         title: string;
         ariaLabel: string;
+        alwaysVisible?: boolean;
     };
 }
 
 interface TaskItemDisplayProps {
     task: Task;
+    language: Language;
     project?: Project;
     area?: Area;
     projectColor?: string;
@@ -71,6 +79,7 @@ const formatTimeEstimate = (estimate: string) => {
 
 export function TaskItemDisplay({
     task,
+    language,
     project,
     area,
     projectColor,
@@ -101,16 +110,30 @@ export function TaskItemDisplay({
         onDelete,
         onDuplicate,
         onStatusChange,
+        onMoveToWaitingWithPrompt,
         onOpenProject,
         openAttachment,
         onToggleChecklistItem,
         focusToggle,
     } = actions;
     const checklistProgress = getChecklistProgress(task);
-    const ageLabel = getTaskAgeLabel(task.createdAt);
-    const showCompactMeta = compactMetaEnabled
-        && !isViewOpen
-        && (project || area || (task.contexts?.length ?? 0) > 0);
+    const ageLabel = getTaskAgeLabel(task.createdAt, language);
+    const showCompactMeta = compactMetaEnabled && !isViewOpen;
+    const showAgeBadge = task.status !== 'done' && Boolean(ageLabel);
+    const hasMetadata = Boolean(
+        project
+        || area
+        || task.startTime
+        || task.dueDate
+        || task.location
+        || recurrenceRule
+        || (prioritiesEnabled && task.priority)
+        || (task.contexts?.length ?? 0) > 0
+        || task.tags.length > 0
+        || checklistProgress
+        || showAgeBadge
+        || (timeEstimatesEnabled && task.timeEstimate)
+    );
     const resolvedDirection = resolveTaskTextDirection(task);
     const isRtl = resolvedDirection === 'rtl';
     const hoverHintText = showHoverHint
@@ -121,6 +144,48 @@ export function TaskItemDisplay({
                 : hint;
         })()
         : '';
+    const moveToWaitingWithDueLabel = (() => {
+        const label = t('task.moveToWaitingWithDue');
+        return label === 'task.moveToWaitingWithDue' ? 'Move to Waiting and set due date' : label;
+    })();
+    const clickTimerRef = useRef<number | null>(null);
+    const clearClickTimer = () => {
+        if (clickTimerRef.current !== null) {
+            window.clearTimeout(clickTimerRef.current);
+            clickTimerRef.current = null;
+        }
+    };
+    useEffect(() => {
+        return () => {
+            clearClickTimer();
+        };
+    }, []);
+    const handleTitleClick = (event: MouseEvent<HTMLButtonElement>) => {
+        if (selectionMode) {
+            onToggleSelect?.();
+            return;
+        }
+        // Keyboard activation should not be delayed.
+        if (event.detail === 0) {
+            onToggleView();
+            return;
+        }
+        if (!readOnly && event.detail >= 2) {
+            clearClickTimer();
+            onEdit();
+            return;
+        }
+        clearClickTimer();
+        clickTimerRef.current = window.setTimeout(() => {
+            onToggleView();
+            clickTimerRef.current = null;
+        }, 180);
+    };
+    const handleTitleDoubleClick = () => {
+        if (selectionMode || readOnly) return;
+        clearClickTimer();
+        onEdit();
+    };
     const handleProjectClick = (event: MouseEvent<HTMLSpanElement>, projectId: string) => {
         event.stopPropagation();
         onOpenProject?.(projectId);
@@ -139,7 +204,7 @@ export function TaskItemDisplay({
                 <MetadataBadge
                     variant="project"
                     label={project.title}
-                    dotColor={projectColor || '#94a3b8'}
+                    dotColor={projectColor || DEFAULT_AREA_COLOR}
                 />
             );
         }
@@ -155,7 +220,7 @@ export function TaskItemDisplay({
                 <MetadataBadge
                     variant="project"
                     label={project.title}
-                    dotColor={projectColor || '#94a3b8'}
+                    dotColor={projectColor || DEFAULT_AREA_COLOR}
                 />
             </span>
         );
@@ -167,6 +232,112 @@ export function TaskItemDisplay({
         && task.status !== 'done'
         && task.status !== 'archived'
         && task.status !== 'reference';
+    const renderMetadataRow = (className?: string) => (
+        <div className={cn("flex flex-wrap items-center text-xs", className)}>
+            {renderProjectBadge()}
+            {!project && area && (
+                <MetadataBadge
+                    variant="project"
+                    label={area.name}
+                    dotColor={area.color || DEFAULT_AREA_COLOR}
+                />
+            )}
+            {task.startTime && (
+                <MetadataBadge
+                    variant="info"
+                    icon={ArrowRight}
+                    label={safeFormatDate(task.startTime, hasTimeComponent(task.startTime) ? 'Pp' : 'P')}
+                />
+            )}
+            {task.dueDate && (
+                <div className="flex items-center gap-2">
+                    <MetadataBadge
+                        variant="info"
+                        icon={CalendarIcon}
+                        label={safeFormatDate(task.dueDate, hasTimeComponent(task.dueDate) ? 'Pp' : 'P')}
+                        className={cn(getUrgencyColor(task), isStagnant && "text-muted-foreground/70")}
+                    />
+                    {isStagnant && (
+                        <MetadataBadge
+                            variant="age"
+                            icon={Hourglass}
+                            label={`${task.pushCount ?? 0}`}
+                        />
+                    )}
+                </div>
+            )}
+            {task.location && (
+                <MetadataBadge
+                    variant="info"
+                    icon={MapPin}
+                    label={task.location}
+                />
+            )}
+            {recurrenceRule && (
+                <MetadataBadge
+                    variant="info"
+                    icon={Repeat}
+                    label={`${t(`recurrence.${recurrenceRule}`)}${recurrenceStrategy === 'fluid' ? ` · ${t('recurrence.afterCompletionShort')}` : ''}`}
+                />
+            )}
+            {prioritiesEnabled && task.priority && (
+                <MetadataBadge
+                    variant="priority"
+                    label={t(`priority.${task.priority}`)}
+                />
+            )}
+            {task.contexts?.length > 0 && (
+                <div className="flex items-center gap-2">
+                    {task.contexts.map((ctx) => (
+                        <MetadataBadge key={ctx} variant="context" label={ctx} dotColor={getContextColor(ctx)} />
+                    ))}
+                </div>
+            )}
+            {task.tags.length > 0 && (
+                <div className="flex items-center gap-2">
+                    {task.tags.map((tag) => (
+                        <MetadataBadge key={tag} variant="tag" icon={Tag} label={tag} />
+                    ))}
+                </div>
+            )}
+            {checklistProgress && (
+                <div
+                    className="flex items-center gap-2 text-muted-foreground"
+                    title={t('checklist.progress')}
+                >
+                    <span className="font-medium">
+                        {checklistProgress.completed}/{checklistProgress.total}
+                    </span>
+                    <div className="w-16 h-1 bg-muted rounded overflow-hidden">
+                        <div
+                            className="h-full bg-primary"
+                            style={{ width: `${Math.round(checklistProgress.percent * 100)}%` }}
+                        />
+                    </div>
+                </div>
+            )}
+            {showAgeBadge && (
+                <MetadataBadge
+                    variant="age"
+                    icon={Clock}
+                    label={ageLabel!}
+                    className={cn(
+                        getTaskStaleness(task.createdAt) === 'fresh' && 'metadata-badge--age-fresh',
+                        getTaskStaleness(task.createdAt) === 'aging' && 'metadata-badge--age-aging',
+                        getTaskStaleness(task.createdAt) === 'stale' && 'metadata-badge--age-stale',
+                        getTaskStaleness(task.createdAt) === 'very-stale' && 'metadata-badge--age-very-stale'
+                    )}
+                />
+            )}
+            {timeEstimatesEnabled && task.timeEstimate && (
+                <MetadataBadge
+                    variant="estimate"
+                    icon={Timer}
+                    label={formatTimeEstimate(task.timeEstimate)}
+                />
+            )}
+        </div>
+    );
     const overlayDragHandle = actionsOverlay && !!dragHandle;
     const overlayQuickDone = actionsOverlay && showQuickDoneButton;
     const inlineLeftControls = !actionsOverlay && (showQuickDoneButton || dragHandle);
@@ -249,18 +420,8 @@ export function TaskItemDisplay({
                     />
                     <button
                         type="button"
-                        onClick={() => {
-                            if (selectionMode) {
-                                onToggleSelect?.();
-                                return;
-                            }
-                            onToggleView();
-                        }}
-                        onDoubleClick={() => {
-                            if (!selectionMode && !readOnly) {
-                                onEdit();
-                            }
-                        }}
+                        onClick={handleTitleClick}
+                        onDoubleClick={handleTitleDoubleClick}
                         className={cn(
                             "block w-full text-left rounded px-0.5 py-0.5 transition-colors focus:outline-none focus:ring-2 focus:ring-primary/40",
                             selectionMode ? "cursor-pointer" : "cursor-default",
@@ -281,43 +442,80 @@ export function TaskItemDisplay({
                         >
                             {task.title}
                         </div>
-                        {task.description && (
-                            <p
-                                className={cn(
-                                    "font-normal text-muted-foreground mt-1 w-full break-words",
-                                    dense ? "text-xs" : "text-sm",
-                                    isRtl && "text-right"
-                                )}
-                                dir={resolvedDirection}
-                            >
-                                {stripMarkdown(task.description)}
-                            </p>
-                        )}
-                        {showCompactMeta && (
-                            <div
-                                className={cn(
-                                    "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
-                                    dense ? "mt-0.5" : "mt-1",
-                                    (overlayDragHandle || overlayQuickDone) && "pl-12"
-                                )}
-                            >
-                                {renderProjectBadge()}
-                                {!project && area && (
-                                    <MetadataBadge
-                                        variant="project"
-                                        label={area.name}
-                                        dotColor={area.color || '#94a3b8'}
-                                    />
-                                )}
-                                {(task.contexts ?? []).slice(0, 3).map((ctx) => (
-                                    <MetadataBadge key={ctx} variant="context" label={ctx} />
-                                ))}
-                                {(task.contexts?.length ?? 0) > 3 && (
-                                    <span className="text-[10px] text-muted-foreground">+{(task.contexts?.length ?? 0) - 3}</span>
-                                )}
-                            </div>
-                        )}
                     </button>
+                    {task.description && (
+                        <div
+                            className={cn(
+                                "font-normal text-muted-foreground mt-1 w-full break-words",
+                                dense ? "text-xs" : "text-sm",
+                                isRtl && "text-right"
+                            )}
+                            dir={resolvedDirection}
+                        >
+                            <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                disallowedElements={['img']}
+                                components={{
+                                    a: ({ className, ...props }: any) => (
+                                        <a
+                                            className={cn("text-primary underline hover:text-primary/80", className)}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            {...props}
+                                        />
+                                    ),
+                                    ul: ({ className, ...props }: any) => (
+                                        <ul className={cn("list-disc pl-4 py-1 space-y-0.5", className)} {...props} />
+                                    ),
+                                    ol: ({ className, ...props }: any) => (
+                                        <ol className={cn("list-decimal pl-4 py-1 space-y-0.5", className)} {...props} />
+                                    ),
+                                    li: ({ className, ...props }: any) => (
+                                        <li className={cn("pl-1", className)} {...props} />
+                                    ),
+                                    p: ({ className, children, ...props }: any) => (
+                                        <p className={cn("mb-1 last:mb-0 leading-relaxed", className)} {...props}>
+                                            {children}
+                                        </p>
+                                    ),
+                                    code: ({ className, ...props }: any) => (
+                                        <code className={cn("bg-muted px-1 py-0.5 rounded text-[0.9em] font-mono", className)} {...props} />
+                                    ),
+                                    pre: ({ className, ...props }: any) => (
+                                        <pre className={cn("bg-muted p-2 rounded-md overflow-x-auto my-1", className)} {...props} />
+                                    ),
+                                    blockquote: ({ className, ...props }: any) => (
+                                        <blockquote className={cn("border-l-2 border-primary/50 pl-3 italic my-1 text-muted-foreground/80", className)} {...props} />
+                                    ),
+                                    table: ({ className, ...props }: any) => (
+                                        <div className="overflow-x-auto my-2">
+                                            <table className={cn("min-w-full divide-y divide-border", className)} {...props} />
+                                        </div>
+                                    ),
+                                    th: ({ className, ...props }: any) => (
+                                        <th className={cn("px-2 py-1 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider bg-muted/50", className)} {...props} />
+                                    ),
+                                    td: ({ className, ...props }: any) => (
+                                        <td className={cn("px-2 py-1 text-sm border-b border-border/50", className)} {...props} />
+                                    ),
+                                    // Handle task lists (GFM)
+                                    input: ({ type, ...props }: any) => {
+                                        if (type === 'checkbox') {
+                                            return <input type="checkbox" className="mr-2 accent-primary" {...props} />;
+                                        }
+                                        return <input type={type} {...props} />;
+                                    }
+                                }}
+                            >
+                                {task.description}
+                            </ReactMarkdown>
+                        </div>
+                    )}
+                    {showCompactMeta && hasMetadata && renderMetadataRow(cn(
+                        "gap-2 text-muted-foreground",
+                        dense ? "mt-0.5" : "mt-1",
+                        (overlayDragHandle || overlayQuickDone) && "pl-12"
+                    ))}
 
                     {isViewOpen && (
                         <div onClick={(e) => e.stopPropagation()}>
@@ -325,131 +523,31 @@ export function TaskItemDisplay({
                                 <div className="flex flex-wrap items-center gap-2 mt-2 text-xs text-muted-foreground">
                                     <Paperclip className="w-3 h-3" aria-hidden="true" />
                                     <span className="sr-only">{t('attachments.title') || 'Attachments'}</span>
-                                    {visibleAttachments.map((attachment) => (
-                                        <div key={attachment.id} className="flex items-center gap-2">
-                                            <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                    e.preventDefault();
-                                                    e.stopPropagation();
-                                                    openAttachment(attachment);
-                                                }}
-                                                className="truncate hover:underline"
-                                                title={attachment.title}
-                                                aria-label={`${t('attachments.open') || 'Open'}: ${attachment.title}`}
-                                            >
-                                                {attachment.title}
-                                            </button>
-                                            <AttachmentProgressIndicator attachmentId={attachment.id} />
-                                        </div>
-                                    ))}
+                                    {visibleAttachments.map((attachment) => {
+                                        const displayTitle = getAttachmentDisplayTitle(attachment);
+                                        const fullTitle = attachment.kind === 'link' ? attachment.uri : attachment.title;
+                                        return (
+                                            <div key={attachment.id} className="flex items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        openAttachment(attachment);
+                                                    }}
+                                                    className="truncate hover:underline"
+                                                    title={fullTitle || displayTitle}
+                                                    aria-label={`${t('attachments.open') || 'Open'}: ${displayTitle}`}
+                                                >
+                                                    {displayTitle}
+                                                </button>
+                                                <AttachmentProgressIndicator attachmentId={attachment.id} />
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             )}
-
-                            <div className="flex flex-wrap items-center gap-3 mt-2 text-xs">
-                                {renderProjectBadge()}
-                                {!project && area && (
-                                    <MetadataBadge
-                                        variant="project"
-                                        label={area.name}
-                                        dotColor={area.color || '#94a3b8'}
-                                    />
-                                )}
-                                {task.startTime && (
-                                    <MetadataBadge
-                                        variant="info"
-                                        icon={ArrowRight}
-                                        label={safeFormatDate(task.startTime, hasTimeComponent(task.startTime) ? 'MMM d, HH:mm' : 'MMM d')}
-                                    />
-                                )}
-                                {task.dueDate && (
-                                    <div className="flex items-center gap-2">
-                                        <MetadataBadge
-                                            variant="info"
-                                            icon={CalendarIcon}
-                                            label={safeFormatDate(task.dueDate, hasTimeComponent(task.dueDate) ? 'MMM d, HH:mm' : 'MMM d')}
-                                            className={cn(getUrgencyColor(task), isStagnant && "text-muted-foreground/70")}
-                                        />
-                                        {isStagnant && (
-                                            <MetadataBadge
-                                                variant="age"
-                                                icon={Hourglass}
-                                                label={`${task.pushCount ?? 0}`}
-                                            />
-                                        )}
-                                    </div>
-                                )}
-                                {task.location && (
-                                    <MetadataBadge
-                                        variant="info"
-                                        icon={MapPin}
-                                        label={task.location}
-                                    />
-                                )}
-                                {recurrenceRule && (
-                                    <MetadataBadge
-                                        variant="info"
-                                        icon={Repeat}
-                                        label={`${t(`recurrence.${recurrenceRule}`)}${recurrenceStrategy === 'fluid' ? ` · ${t('recurrence.afterCompletionShort')}` : ''}`}
-                                    />
-                                )}
-                                {prioritiesEnabled && task.priority && (
-                                    <MetadataBadge
-                                        variant="priority"
-                                        label={t(`priority.${task.priority}`)}
-                                    />
-                                )}
-                                {task.contexts?.length > 0 && (
-                                    <div className="flex items-center gap-2">
-                                        {task.contexts.map((ctx) => (
-                                            <MetadataBadge key={ctx} variant="context" label={ctx} />
-                                        ))}
-                                    </div>
-                                )}
-                                {task.tags.length > 0 && (
-                                    <div className="flex items-center gap-2">
-                                        {task.tags.map((tag) => (
-                                            <MetadataBadge key={tag} variant="tag" icon={Tag} label={tag} />
-                                        ))}
-                                    </div>
-                                )}
-                                {checklistProgress && (
-                                    <div
-                                        className="flex items-center gap-2 text-muted-foreground"
-                                        title={t('checklist.progress')}
-                                    >
-                                        <span className="font-medium">
-                                            {checklistProgress.completed}/{checklistProgress.total}
-                                        </span>
-                                        <div className="w-16 h-1 bg-muted rounded overflow-hidden">
-                                            <div
-                                                className="h-full bg-primary"
-                                                style={{ width: `${Math.round(checklistProgress.percent * 100)}%` }}
-                                            />
-                                        </div>
-                                    </div>
-                                )}
-                                {task.status !== 'done' && ageLabel && (
-                                    <MetadataBadge
-                                        variant="age"
-                                        icon={Clock}
-                                        label={ageLabel}
-                                        className={cn(
-                                            getTaskStaleness(task.createdAt) === 'fresh' && 'metadata-badge--age-fresh',
-                                            getTaskStaleness(task.createdAt) === 'aging' && 'metadata-badge--age-aging',
-                                            getTaskStaleness(task.createdAt) === 'stale' && 'metadata-badge--age-stale',
-                                            getTaskStaleness(task.createdAt) === 'very-stale' && 'metadata-badge--age-very-stale'
-                                        )}
-                                    />
-                                )}
-                                {timeEstimatesEnabled && task.timeEstimate && (
-                                    <MetadataBadge
-                                        variant="estimate"
-                                        icon={Timer}
-                                        label={formatTimeEstimate(task.timeEstimate)}
-                                    />
-                                )}
-                            </div>
+                            {hasMetadata && renderMetadataRow("gap-3 mt-2")}
 
                             {(task.checklist || []).length > 0 && (
                                 <div
@@ -534,6 +632,7 @@ export function TaskItemDisplay({
                             aria-label={focusToggle.ariaLabel}
                             className={cn(
                                 "p-1.5 rounded-full transition-colors",
+                                !focusToggle.alwaysVisible && "opacity-0 group-hover:opacity-100 focus:opacity-100",
                                 focusToggle.isFocused
                                     ? "text-yellow-500 hover:bg-yellow-100 dark:hover:bg-yellow-900/30"
                                     : focusToggle.canToggle
@@ -585,6 +684,17 @@ export function TaskItemDisplay({
                                     <BookOpen className="w-4 h-4" />
                                 </button>
                             )}
+                            {task.status === 'next' && onMoveToWaitingWithPrompt && (
+                                <button
+                                    type="button"
+                                    onClick={onMoveToWaitingWithPrompt}
+                                    aria-label={moveToWaitingWithDueLabel}
+                                    title={moveToWaitingWithDueLabel}
+                                    className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted/50"
+                                >
+                                    <PauseCircle className="w-4 h-4" />
+                                </button>
+                            )}
                             {showStatusSelect && (
                                 <select
                                     value={task.status}
@@ -600,6 +710,7 @@ export function TaskItemDisplay({
                                         <option value="reference">{t('status.reference')}</option>
                                     )}
                                     <option value="done">{t('status.done')}</option>
+                                    <option value="archived">{t('status.archived')}</option>
                                 </select>
                             )}
                             <button

@@ -8,9 +8,9 @@
     "macOS": {
       "signingIdentity": "Apple Distribution",
       "entitlements": "./Entitlements.mas.plist",
-      "infoPlist": "./Info.appstore.plist",
       "minimumSystemVersion": "12.0",
       "files": {
+        "Info.plist": "./Info.appstore.plist",
         "embedded.provisionprofile": "./embedded.provisionprofile"
       }
     }

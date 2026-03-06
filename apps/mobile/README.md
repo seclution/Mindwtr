@@ -12,7 +12,9 @@ React Native mobile app for the Mindwtr productivity system.
 - **Smart Tags** - Frequent and recommended context tags
 - **Quick Status** - Instant status change via status badge tap
 - **Auto-Archive** - Automatically archive completed tasks
-- **Android Widget** - Home screen focus/next widget (2x2)
+- **Android Widget** - Home screen focus/next widget (adaptive, 3x3 default)
+- **iOS Widget** - Home screen focus/next widget with quick capture
+- **iOS Quick Actions** - Long-press app icon shortcuts for Add task, Focus, Calendar
 - **AI Assistant (Optional)** - Clarify, break down, and review with BYOK AI
 - **Copilot Suggestions** - Context/tag/time hints while typing
 
@@ -230,6 +232,73 @@ gh release list
 
 Use the SDK you installed in the "Building APK Locally" section.
 
+## Android Startup Profiling
+
+Use this workflow to get repeatable startup numbers and phase-level logs.
+
+### 1. Build a release app with startup markers enabled
+
+```bash
+cd apps/mobile
+EXPO_PUBLIC_STARTUP_PROFILING=1 npx expo run:android --variant release
+```
+
+This enables JS startup markers (`[MindwtrStartup] ...`) while keeping normal builds quiet.
+If native Android files already exist, run `npx expo prebuild --clean --platform android` first so config plugins re-apply startup tracing patches.
+
+### 2. Run repeatable startup benchmark loops
+
+From repo root:
+
+```bash
+bash apps/mobile/scripts/android_startup_benchmark.sh
+```
+
+Useful variants:
+
+```bash
+# 15 cold starts
+RUNS=15 MODE=cold bash apps/mobile/scripts/android_startup_benchmark.sh
+
+# warm starts (process already cached)
+RUNS=15 MODE=warm bash apps/mobile/scripts/android_startup_benchmark.sh
+
+# custom package/activity
+PACKAGE=tech.dongdongbh.mindwtr ACTIVITY=.MainActivity bash apps/mobile/scripts/android_startup_benchmark.sh
+```
+
+Outputs are written to:
+
+```text
+apps/mobile/build/startup-benchmark/<timestamp>-<mode>/
+```
+
+Key files:
+- `summary.txt`: median/p95/min/max for `ThisTime`/`TotalTime` and startup phase durations.
+- `am_start_results.csv`: per-run launch times from `am start -W` plus `launch_state`/`sample_quality`.
+- `phase_durations.tsv`: per-phase `durationMs` extracted from startup markers.
+- `js_since_start.tsv`: per-phase `sinceJsStartMs` from JS startup markers.
+- `run-*.log`: raw filtered logcat per run.
+- `run-*-am-start.txt`: raw `am start -W` output per run (use this for missing/timeout samples).
+
+Notes:
+- On recent Android versions, `ThisTime` may be omitted; treat `TotalTime` + startup phase markers as primary.
+- Runs with `sample_quality` like `missing_total_time_wait_timeout` should be treated as unstable samples, not baseline medians.
+- If `LaunchState` is `UNKNOWN (0)` and `TotalTime` is missing, rely on `js.splash_hidden`/`js.app_ready` summaries from `js_since_start.tsv`.
+- If `sample_quality` includes `log_quota_dropped`, Android dropped process logs (`LOG_FLOWCTRL`), so missing JS markers are likely a logging artifact. Trust `TotalTime`, and re-run with fewer noisy tags if you need full marker chains.
+
+### 3. Capture Perfetto trace for deep root-cause
+
+While reproducing a slow cold start:
+
+```bash
+adb shell perfetto -o /data/misc/perfetto-traces/mindwtr-startup.pftrace -t 12s \
+  sched freq idle am wm gfx view binder_driver hal dalvik input res memory
+adb pull /data/misc/perfetto-traces/mindwtr-startup.pftrace
+```
+
+Then open https://ui.perfetto.dev and correlate `MindwtrStartup` log phases with main-thread blocking, I/O, and GC sections.
+
 ## Data Storage
 
 Tasks are stored in AsyncStorage and synced via the shared @mindwtr/core package.
@@ -279,8 +348,26 @@ Configure a sync folder in Settings to sync via:
 - Syncthing
 - Any folder-based sync service
 
+For frequent multi-device edits, WebDAV is recommended over folder sync tools.
+If you use Syncthing, prefer `Send & Receive` + `Watch for Changes`, keep scan intervals short, and run **Sync** before switching devices.
+
 ### WebDAV / Cloud
-Mindwtr also supports WebDAV and self-hosted Cloud sync backends. Configure in **Settings → Data & Sync**.
+Mindwtr also supports WebDAV and Cloud sync backends in **Settings → Data & Sync**:
+- `Self-hosted` (existing `/data` endpoint + token)
+- `Dropbox` OAuth (App Folder)
+
+#### Dropbox OAuth setup
+1. Create a Dropbox app with **Scoped access** + **App folder**.
+2. Enable scopes: `files.content.read`, `files.content.write`, `files.metadata.read`.
+3. Add redirect URI: `mindwtr://redirect`.
+4. Set env var before starting Expo:
+   - `DROPBOX_APP_KEY=<your-dropbox-app-key>`
+5. Restart app and connect in **Settings → Data & Sync → Cloud → Dropbox**.
+6. Use a development/release build for OAuth. Expo Go is not supported for Dropbox OAuth redirects.
+
+Dropbox backend syncs:
+- `/Apps/Mindwtr/data.json`
+- `/Apps/Mindwtr/attachments/*` (file attachments)
 
 ## Troubleshooting
 

@@ -1,3 +1,4 @@
-- Improved sync conflict safety and data integrity across devices.
-- Streamlined iOS inbox processing into a faster single-page workflow.
-- Improved iOS task editing and daily review headers with better safe-area handling and larger tap targets.
+- Reduced false sync conflict prompts and improved overall sync reliability.
+- Improved iOS file-sync fallback behavior for providers without folder picking.
+- Added recurrence UI translation coverage for repeat-on labels in non-English locales.
+- Hardened cloud and sync error handling for more stable daily use.

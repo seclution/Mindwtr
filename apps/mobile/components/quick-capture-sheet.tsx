@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Modal, View, Text, TextInput, TouchableOpacity, StyleSheet, Pressable, ScrollView, Switch, Platform, KeyboardAvoidingView, Keyboard } from 'react-native';
+import { Alert, Modal, View, Text, TextInput, TouchableOpacity, StyleSheet, Pressable, ScrollView, FlatList, Switch, Platform, KeyboardAvoidingView, Keyboard, useWindowDimensions } from 'react-native';
 import { CalendarDays, Folder, Flag, X, AtSign, Mic, Square } from 'lucide-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
 import { Directory, File, Paths } from 'expo-file-system';
 
-import { parseQuickAdd, safeFormatDate, safeParseDate, type Attachment, type Task, type TaskPriority, generateUUID, PRESET_CONTEXTS, useTaskStore } from '@mindwtr/core';
+import { DEFAULT_PROJECT_COLOR, parseQuickAdd, safeFormatDate, safeParseDate, type Attachment, type Task, type TaskPriority, generateUUID, PRESET_CONTEXTS, useTaskStore } from '@mindwtr/core';
 import { useLanguage } from '../contexts/language-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,30 +17,11 @@ import {
   buildCaptureExtra,
   getCaptureFileExtension,
   getCaptureMimeType,
+  normalizeContextToken,
+  parseContextQueryTokens,
 } from './quick-capture-sheet.utils';
 
 const PRIORITY_OPTIONS: TaskPriority[] = ['low', 'medium', 'high', 'urgent'];
-const normalizeContextToken = (token: string): string => {
-  const trimmed = token.trim();
-  if (!trimmed) return '';
-  const stripped = trimmed.replace(/^[@＠]+/, '');
-  if (!stripped) return '';
-  return `@${stripped}`;
-};
-const parseContextQueryTokens = (value: string): string[] => {
-  const parts = value.split(',');
-  const seen = new Set<string>();
-  const tokens: string[] = [];
-  for (const part of parts) {
-    const normalized = normalizeContextToken(part);
-    if (!normalized) continue;
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    tokens.push(normalized);
-  }
-  return tokens;
-};
 
 const logCaptureWarn = (message: string, error?: unknown) => {
   void logWarn(message, { scope: 'capture', extra: buildCaptureExtra(undefined, error) });
@@ -77,6 +58,7 @@ export function QuickCaptureSheet({
   const { t } = useLanguage();
   const tc = useThemeColors();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const inputRef = useRef<TextInput>(null);
   const contextInputRef = useRef<TextInput>(null);
   const prioritiesEnabled = settings?.features?.priorities === true;
@@ -189,7 +171,7 @@ export function QuickCaptureSheet({
       Keyboard.dismiss();
       return;
     }
-    const created = await addProject(title, '#94a3b8');
+    const created = await addProject(title, DEFAULT_PROJECT_COLOR);
     if (!created) return;
     setProjectId(created.id);
     setShowProjectPicker(false);
@@ -369,20 +351,22 @@ export function QuickCaptureSheet({
     let finalTitle = trimmed || fallbackTitle;
     let projectTitle: string | undefined;
     let parsedProps: Partial<Task> = {};
+    let invalidDateCommands: string[] | undefined;
 
     if (trimmed) {
       const parsed = parseQuickAdd(trimmed, projects, new Date(), areas);
       finalTitle = parsed.title || trimmed;
       parsedProps = parsed.props;
       projectTitle = parsed.projectTitle;
+      invalidDateCommands = parsed.invalidDateCommands;
     }
 
     const initialPropsMerged: Partial<Task> = { status: 'inbox', ...initialProps, ...parsedProps, ...extraProps };
     if (!initialPropsMerged.status) initialPropsMerged.status = 'inbox';
 
     if (!initialPropsMerged.projectId && projectTitle) {
-      const created = await addProject(projectTitle, '#94a3b8');
-      if (!created) return { title: finalTitle, props: initialPropsMerged };
+      const created = await addProject(projectTitle, DEFAULT_PROJECT_COLOR);
+      if (!created) return { title: finalTitle, props: initialPropsMerged, invalidDateCommands };
       initialPropsMerged.projectId = created.id;
     }
 
@@ -394,7 +378,7 @@ export function QuickCaptureSheet({
     if (dueDate) initialPropsMerged.dueDate = dueDate.toISOString();
     if (startTime) initialPropsMerged.startTime = startTime.toISOString();
 
-    return { title: finalTitle, props: initialPropsMerged };
+    return { title: finalTitle, props: initialPropsMerged, invalidDateCommands };
   }, [addProject, contextTags, dueDate, initialProps, prioritiesEnabled, priority, projectId, projects, startTime, value]);
 
   const applySpeechResult = useCallback(async (taskId: string, result: SpeechToTextResult) => {
@@ -481,7 +465,7 @@ export function QuickCaptureSheet({
         if (match) {
           updates.projectId = match.id;
         } else {
-          const created = await addProjectNow(trimmed, '#94a3b8');
+          const created = await addProjectNow(trimmed, DEFAULT_PROJECT_COLOR);
           if (!created) return;
           updates.projectId = created.id;
         }
@@ -521,7 +505,11 @@ export function QuickCaptureSheet({
 
   const handleSave = async () => {
     if (!value.trim()) return;
-    const { title, props } = await buildTaskProps(value.trim());
+    const { title, props, invalidDateCommands } = await buildTaskProps(value.trim());
+    if (invalidDateCommands && invalidDateCommands.length > 0) {
+      Alert.alert(t('common.notice'), `Invalid date command: ${invalidDateCommands.join(', ')}`);
+      return;
+    }
     if (!title.trim()) return;
 
     await addTask(title, props);
@@ -683,7 +671,7 @@ export function QuickCaptureSheet({
         }
         const now = new Date();
         const nowIso = now.toISOString();
-        const displayTitle = `${t('quickAdd.audioNoteTitle')} ${safeFormatDate(now, 'MMM d, HH:mm')}`;
+        const displayTitle = `${t('quickAdd.audioNoteTitle')} ${safeFormatDate(now, 'Pp')}`;
         const speech = settings.ai?.speechToText;
         const provider = speech?.provider ?? 'gemini';
         const model = speech?.model ?? (provider === 'openai' ? 'gpt-4o-transcribe' : provider === 'gemini' ? 'gemini-2.5-flash' : 'whisper-tiny');
@@ -744,10 +732,14 @@ export function QuickCaptureSheet({
         const taskId = generateUUID();
         const attachments = [...(initialProps?.attachments ?? [])];
         if (attachment) attachments.push(attachment);
-        const { title, props } = await buildTaskProps(displayTitle, {
+        const { title, props, invalidDateCommands } = await buildTaskProps(displayTitle, {
           id: taskId,
           attachments,
         });
+        if (invalidDateCommands && invalidDateCommands.length > 0) {
+          Alert.alert(t('common.notice'), `Invalid date command: ${invalidDateCommands.join(', ')}`);
+          return;
+        }
         if (!title.trim()) return;
 
         await addTask(title, props);
@@ -868,7 +860,7 @@ export function QuickCaptureSheet({
         logCaptureWarn('Audio info lookup failed', error);
       }
       const nowIso = now.toISOString();
-      const displayTitle = `${t('quickAdd.audioNoteTitle')} ${safeFormatDate(now, 'MMM d, HH:mm')}`;
+      const displayTitle = `${t('quickAdd.audioNoteTitle')} ${safeFormatDate(now, 'Pp')}`;
       const speech = settings.ai?.speechToText;
       const provider = speech?.provider ?? 'gemini';
       const model = speech?.model ?? (provider === 'openai' ? 'gpt-4o-transcribe' : provider === 'gemini' ? 'gemini-2.5-flash' : 'whisper-tiny');
@@ -932,10 +924,14 @@ export function QuickCaptureSheet({
       const taskId = generateUUID();
       const attachments = [...(initialProps?.attachments ?? [])];
       if (attachment) attachments.push(attachment);
-      const { title, props } = await buildTaskProps(displayTitle, {
+      const { title, props, invalidDateCommands } = await buildTaskProps(displayTitle, {
         id: taskId,
         attachments,
       });
+      if (invalidDateCommands && invalidDateCommands.length > 0) {
+        Alert.alert(t('common.notice'), `Invalid date command: ${invalidDateCommands.join(', ')}`);
+        return;
+      }
       if (!title.trim()) return;
 
       await addTask(title, props);
@@ -1034,12 +1030,13 @@ export function QuickCaptureSheet({
   }, [autoRecord, recording, recordingBusy, startRecording, visible]);
 
   const selectedProject = projectId ? projects.find((project) => project.id === projectId) : null;
-  const dueLabel = dueDate ? safeFormatDate(dueDate, 'MMM d') : t('taskEdit.dueDateLabel');
+  const dueLabel = dueDate ? safeFormatDate(dueDate, 'P') : t('taskEdit.dueDateLabel');
   const contextLabel = contextTags.length === 0
     ? t('taskEdit.contextsLabel')
     : `${contextTags[0].replace(/^@+/, '')}${contextTags.length > 1 ? ` +${contextTags.length - 1}` : ''}`;
   const projectLabel = selectedProject ? selectedProject.title : t('taskEdit.projectLabel');
   const priorityLabel = priority ? t(`priority.${priority}`) : t('taskEdit.priorityLabel');
+  const sheetMaxHeight = Math.max(260, windowHeight - Math.max(insets.top, 12) - 8);
   const openDueDatePicker = useCallback(() => {
     inputRef.current?.blur();
     Keyboard.dismiss();
@@ -1052,13 +1049,27 @@ export function QuickCaptureSheet({
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
-      <Pressable style={styles.backdrop} onPress={handleClose} />
+      <Pressable
+        style={styles.backdrop}
+        onPress={handleClose}
+        accessibilityRole="button"
+        accessibilityLabel={t('common.close')}
+      />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
         style={styles.keyboardAvoiding}
       >
-        <View style={[styles.sheet, { backgroundColor: tc.cardBg, paddingBottom: Math.max(20, insets.bottom + 12) }]}>
+        <View
+          style={[
+            styles.sheet,
+            {
+              backgroundColor: tc.cardBg,
+              paddingBottom: Math.max(20, insets.bottom + 12),
+              maxHeight: sheetMaxHeight,
+            },
+          ]}
+        >
           <View style={styles.headerRow}>
             <Text style={[styles.title, { color: tc.text }]}>{t('nav.addTask')}</Text>
             <TouchableOpacity onPress={handleClose} accessibilityLabel={t('common.close')}>
@@ -1125,6 +1136,8 @@ export function QuickCaptureSheet({
               style={[styles.optionChip, { backgroundColor: tc.filterBg, borderColor: tc.border }]}
               onPress={openDueDatePicker}
               onLongPress={() => setDueDate(null)}
+              accessibilityRole="button"
+              accessibilityLabel={`${t('taskEdit.dueDate')}: ${dueLabel}`}
             >
               <CalendarDays size={16} color={tc.text} />
               <Text style={[styles.optionText, { color: tc.text }]} numberOfLines={1}>{dueLabel}</Text>
@@ -1134,6 +1147,8 @@ export function QuickCaptureSheet({
               style={[styles.optionChip, { backgroundColor: tc.filterBg, borderColor: tc.border }]}
               onPress={() => setShowContextPicker(true)}
               onLongPress={() => setContextTags([])}
+              accessibilityRole="button"
+              accessibilityLabel={`${t('taskEdit.contextsLabel')}: ${contextLabel}`}
             >
               <AtSign size={16} color={tc.text} />
               <Text style={[styles.optionText, { color: tc.text }]} numberOfLines={1}>{contextLabel}</Text>
@@ -1143,6 +1158,8 @@ export function QuickCaptureSheet({
               style={[styles.optionChip, { backgroundColor: tc.filterBg, borderColor: tc.border }]}
               onPress={() => setShowProjectPicker(true)}
               onLongPress={() => setProjectId(null)}
+              accessibilityRole="button"
+              accessibilityLabel={`${t('taskEdit.project')}: ${projectLabel}`}
             >
               <Folder size={16} color={tc.text} />
               <Text style={[styles.optionText, { color: tc.text }]} numberOfLines={1}>{projectLabel}</Text>
@@ -1153,6 +1170,8 @@ export function QuickCaptureSheet({
                 style={[styles.optionChip, { backgroundColor: tc.filterBg, borderColor: tc.border }]}
                 onPress={() => setShowPriorityPicker(true)}
                 onLongPress={() => setPriority(null)}
+                accessibilityRole="button"
+                accessibilityLabel={`${t('taskEdit.priorityLabel')}: ${priorityLabel}`}
               >
                 <Flag size={16} color={tc.text} />
                 <Text style={[styles.optionText, { color: tc.text }]} numberOfLines={1}>{priorityLabel}</Text>
@@ -1167,6 +1186,7 @@ export function QuickCaptureSheet({
                 onValueChange={setAddAnother}
                 thumbColor={addAnother ? tc.tint : tc.border}
                 trackColor={{ false: tc.border, true: `${tc.tint}55` }}
+                accessibilityLabel={t('quickAdd.addAnother')}
               />
               <Text style={[styles.toggleText, { color: tc.text }]}>{t('quickAdd.addAnother')}</Text>
             </View>
@@ -1174,6 +1194,8 @@ export function QuickCaptureSheet({
               onPress={handleSave}
               style={[styles.saveButton, { backgroundColor: tc.tint, opacity: value.trim() ? 1 : 0.5 }]}
               disabled={!value.trim()}
+              accessibilityRole="button"
+              accessibilityLabel={t('common.save')}
             >
               <Text style={styles.saveText}>{t('common.save')}</Text>
             </TouchableOpacity>
@@ -1246,7 +1268,12 @@ export function QuickCaptureSheet({
         onRequestClose={() => setShowContextPicker(false)}
       >
         <View style={styles.overlay}>
-          <Pressable style={styles.overlayBackdrop} onPress={() => setShowContextPicker(false)} />
+          <Pressable
+            style={styles.overlayBackdrop}
+            onPress={() => setShowContextPicker(false)}
+            accessibilityRole="button"
+            accessibilityLabel={t('common.close')}
+          />
           <View style={[styles.pickerCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
             <Text style={[styles.pickerTitle, { color: tc.text }]}>{t('taskEdit.contextsLabel')}</Text>
             <TextInput
@@ -1265,6 +1292,8 @@ export function QuickCaptureSheet({
               <Pressable
                 onPress={addContextFromQuery}
                 style={styles.pickerRow}
+                accessibilityRole="button"
+                accessibilityLabel={`${t('common.add')}: ${parseContextQueryTokens(contextQuery).join(', ')}`}
               >
                 <Text style={[styles.pickerRowText, { color: tc.tint }]}>
                   + {parseContextQueryTokens(contextQuery).join(', ')}
@@ -1280,25 +1309,35 @@ export function QuickCaptureSheet({
                       setContextTags((prev) => prev.filter((item) => item.toLowerCase() !== token.toLowerCase()));
                     }}
                     style={[styles.selectedContextChip, { backgroundColor: tc.filterBg, borderColor: tc.border }]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${t('common.delete')}: ${token}`}
                   >
                     <Text style={[styles.selectedContextChipText, { color: tc.text }]}>{token}</Text>
                   </Pressable>
                 ))}
               </View>
             )}
-            <ScrollView style={[styles.pickerList, { borderColor: tc.border }]} contentContainerStyle={styles.pickerListContent}>
-              <Pressable
-                onPress={() => {
-                  setContextTags([]);
-                  setShowContextPicker(false);
-                }}
-                style={styles.pickerRow}
-              >
-                <Text style={[styles.pickerRowText, { color: tc.text }]}>{t('common.clear')}</Text>
-              </Pressable>
-              {filteredContexts.map((token) => (
+            <FlatList
+              style={[styles.pickerList, { borderColor: tc.border }]}
+              contentContainerStyle={styles.pickerListContent}
+              data={filteredContexts}
+              keyExtractor={(token) => token}
+              keyboardShouldPersistTaps="handled"
+              ListHeaderComponent={(
                 <Pressable
-                  key={token}
+                  onPress={() => {
+                    setContextTags([]);
+                    setShowContextPicker(false);
+                  }}
+                  style={styles.pickerRow}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('common.clear')}
+                >
+                  <Text style={[styles.pickerRowText, { color: tc.text }]}>{t('common.clear')}</Text>
+                </Pressable>
+              )}
+              renderItem={({ item: token }) => (
+                <Pressable
                   onPress={() => {
                     setContextTags((prev) => {
                       const exists = prev.some((item) => item.toLowerCase() === token.toLowerCase());
@@ -1315,13 +1354,19 @@ export function QuickCaptureSheet({
                       ? { backgroundColor: tc.filterBg, borderRadius: 8 }
                       : null,
                   ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    contextTags.some((item) => item.toLowerCase() === token.toLowerCase())
+                      ? `${t('common.delete')}: ${token}`
+                      : `${t('common.add')}: ${token}`
+                  }
                 >
                   <Text style={[styles.pickerRowText, { color: tc.text }]}>
                     {contextTags.some((item) => item.toLowerCase() === token.toLowerCase()) ? `✓ ${token}` : token}
                   </Text>
                 </Pressable>
-              ))}
-            </ScrollView>
+              )}
+            />
           </View>
         </View>
       </Modal>
@@ -1333,7 +1378,12 @@ export function QuickCaptureSheet({
         onRequestClose={() => setShowProjectPicker(false)}
       >
         <View style={styles.overlay}>
-          <Pressable style={styles.overlayBackdrop} onPress={() => setShowProjectPicker(false)} />
+          <Pressable
+            style={styles.overlayBackdrop}
+            onPress={() => setShowProjectPicker(false)}
+            accessibilityRole="button"
+            accessibilityLabel={t('common.close')}
+          />
           <View style={[styles.pickerCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>            
             <Text style={[styles.pickerTitle, { color: tc.text }]}>{t('taskEdit.projectLabel')}</Text>
             <TextInput
@@ -1354,33 +1404,45 @@ export function QuickCaptureSheet({
                   void submitProjectQuery();
                 }}
                 style={styles.pickerRow}
+                accessibilityRole="button"
+                accessibilityLabel={`${t('projects.create')}: ${projectQuery.trim()}`}
               >
                 <Text style={[styles.pickerRowText, { color: tc.tint }]}>+ {t('projects.create')} &quot;{projectQuery.trim()}&quot;</Text>
               </Pressable>
             )}
-            <ScrollView style={[styles.pickerList, { borderColor: tc.border }]} contentContainerStyle={styles.pickerListContent}>
-              <Pressable
-                onPress={() => {
-                  setProjectId(null);
-                  setShowProjectPicker(false);
-                }}
-                style={styles.pickerRow}
-              >
-                <Text style={[styles.pickerRowText, { color: tc.text }]}>{t('taskEdit.noProjectOption')}</Text>
-              </Pressable>
-              {filteredProjects.map((project) => (
+            <FlatList
+              style={[styles.pickerList, { borderColor: tc.border }]}
+              contentContainerStyle={styles.pickerListContent}
+              data={filteredProjects}
+              keyExtractor={(project) => project.id}
+              keyboardShouldPersistTaps="handled"
+              ListHeaderComponent={(
                 <Pressable
-                  key={project.id}
+                  onPress={() => {
+                    setProjectId(null);
+                    setShowProjectPicker(false);
+                  }}
+                  style={styles.pickerRow}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('taskEdit.noProjectOption')}
+                >
+                  <Text style={[styles.pickerRowText, { color: tc.text }]}>{t('taskEdit.noProjectOption')}</Text>
+                </Pressable>
+              )}
+              renderItem={({ item: project }) => (
+                <Pressable
                   onPress={() => {
                     setProjectId(project.id);
                     setShowProjectPicker(false);
                   }}
                   style={styles.pickerRow}
+                  accessibilityRole="button"
+                  accessibilityLabel={project.title}
                 >
                   <Text style={[styles.pickerRowText, { color: tc.text }]}>{project.title}</Text>
                 </Pressable>
-              ))}
-            </ScrollView>
+              )}
+            />
           </View>
         </View>
       </Modal>
@@ -1393,7 +1455,12 @@ export function QuickCaptureSheet({
           onRequestClose={() => setShowPriorityPicker(false)}
         >
           <View style={styles.overlay}>
-            <Pressable style={styles.overlayBackdrop} onPress={() => setShowPriorityPicker(false)} />
+            <Pressable
+              style={styles.overlayBackdrop}
+              onPress={() => setShowPriorityPicker(false)}
+              accessibilityRole="button"
+              accessibilityLabel={t('common.close')}
+            />
             <View style={[styles.pickerCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>            
               <Text style={[styles.pickerTitle, { color: tc.text }]}>{t('taskEdit.priorityLabel')}</Text>
               <Pressable
@@ -1402,6 +1469,8 @@ export function QuickCaptureSheet({
                   setShowPriorityPicker(false);
                 }}
                 style={styles.pickerRow}
+                accessibilityRole="button"
+                accessibilityLabel={t('common.clear')}
               >
                 <Text style={[styles.pickerRowText, { color: tc.text }]}>{t('common.clear')}</Text>
               </Pressable>
@@ -1413,6 +1482,8 @@ export function QuickCaptureSheet({
                     setShowPriorityPicker(false);
                   }}
                   style={styles.pickerRow}
+                  accessibilityRole="button"
+                  accessibilityLabel={t(`priority.${option}`)}
                 >
                   <Text style={[styles.pickerRowText, { color: tc.text }]}>{t(`priority.${option}`)}</Text>
                 </Pressable>

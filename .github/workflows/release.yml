@@ -10,65 +10,149 @@ on:
         description: 'Release tag (e.g., v0.2.3)'
         required: true
         type: string
-
-permissions:
-  contents: write
+      run_linux:
+        description: 'Run Linux release job'
+        required: false
+        type: boolean
+        default: false
+      run_macos:
+        description: 'Run macOS release job'
+        required: false
+        type: boolean
+        default: false
+      run_windows:
+        description: 'Run Windows release job'
+        required: false
+        type: boolean
+        default: false
+      run_android:
+        description: 'Run Android release job'
+        required: false
+        type: boolean
+        default: false
+      run_android_foss:
+        description: 'Run Android FOSS release job'
+        required: false
+        type: boolean
+        default: false
+      run_ios_appstore:
+        description: 'Run iOS App Store release job'
+        required: false
+        type: boolean
+        default: false
+      run_macos_appstore:
+        description: 'Run macOS App Store release job'
+        required: false
+        type: boolean
+        default: false
+      run_update_packages:
+        description: 'Run Scoop/Winget update job'
+        required: false
+        type: boolean
+        default: false
+      run_bump_official_cask:
+        description: 'Run official Homebrew cask bump job'
+        required: false
+        type: boolean
+        default: false
+      run_update_linux_repos:
+        description: 'Run Linux repo publish job'
+        required: false
+        type: boolean
+        default: false
+      run_publish_chocolatey:
+        description: 'Run Chocolatey publish job'
+        required: false
+        type: boolean
+        default: false
+      run_update_aur:
+        description: 'Run AUR binary package update job'
+        required: false
+        type: boolean
+        default: false
+      run_update_aur_source:
+        description: 'Run AUR source package update job'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   linux:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_linux }}
     uses: ./.github/workflows/release-linux.yml
     secrets: inherit
 
   macos:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_macos }}
     uses: ./.github/workflows/release-macos.yml
     secrets: inherit
 
   windows:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_windows }}
     uses: ./.github/workflows/release-windows.yml
     secrets: inherit
 
   android:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_android }}
     uses: ./.github/workflows/release-android.yml
     secrets: inherit
 
   android-foss:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_android_foss }}
     uses: ./.github/workflows/release-android-foss.yml
     secrets: inherit
 
   ios-appstore:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_ios_appstore }}
     uses: ./.github/workflows/release-ios-appstore.yml
     with:
-      upload: 'true'
-      submit_for_review: 'true'
+      upload: true
+      submit_for_review: true
       testflight_group: 'external_testing'
     secrets: inherit
 
   macos-appstore:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_macos_appstore }}
     uses: ./.github/workflows/release-macos-appstore.yml
     with:
-      upload: 'true'
-      submit_for_review: 'true'
+      upload: true
+      submit_for_review: true
       testflight_group: 'external_testing'
     secrets: inherit
 
   release:
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.run_linux && inputs.run_macos && inputs.run_windows && inputs.run_android && inputs.run_android_foss) }}
     needs: [linux, macos, windows, android, android-foss]
     runs-on: ubuntu-latest
     name: Create Release
-    timeout-minutes: 30
+    timeout-minutes: 60
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
+      - name: Validate release tag
+        id: release_version
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          GITHUB_EVENT_INPUTS_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+            echo "Invalid tag format" >&2
+            exit 1
+          fi
+          scripts/ci/resolve-release-version.sh "$INPUT_TAG" >> "$GITHUB_OUTPUT"
+
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: release-*
           path: ./release-assets
@@ -77,10 +161,64 @@ jobs:
       - name: List release assets
         run: ls -la ./release-assets/ || echo "No assets found"
 
+      - name: Validate release assets
+        run: |
+          set -euo pipefail
+          count="$(find ./release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          if [ "${count}" -eq 0 ]; then
+            echo "No release artifacts were downloaded. Aborting release creation."
+            exit 1
+          fi
+          echo "Release asset count: ${count}"
+
+          # Ensure all artifacts are non-empty and compute checksums.
+          while IFS= read -r -d '' file; do
+            if [ ! -s "$file" ]; then
+              echo "Artifact has zero size: $file" >&2
+              exit 1
+            fi
+          done < <(find ./release-assets -maxdepth 1 -type f -print0)
+
+          has_match() {
+            local pattern="$1"
+            find ./release-assets -maxdepth 1 -type f -name "$pattern" -print -quit | grep -q .
+          }
+
+          missing=0
+          if ! has_match "*.apk"; then
+            echo "Missing Android artifact (*.apk)." >&2
+            missing=1
+          fi
+          if ! has_match "*-foss.apk"; then
+            echo "Missing Android FOSS artifact (*-foss.apk)." >&2
+            missing=1
+          fi
+          if ! has_match "*.dmg"; then
+            echo "Missing macOS artifact (*.dmg)." >&2
+            missing=1
+          fi
+          if ! has_match "*.exe"; then
+            echo "Missing Windows artifact (*.exe)." >&2
+            missing=1
+          fi
+          if ! has_match "*.AppImage" && ! has_match "*.deb" && ! has_match "*.rpm" && ! has_match "*.snap"; then
+            echo "Missing Linux artifact (*.AppImage, *.deb, *.rpm, or *.snap)." >&2
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+          (
+            cd ./release-assets
+            sha256sum * > SHA256SUMS
+          )
+          echo "Generated checksum manifest at release-assets/SHA256SUMS"
+
       - name: Resolve release notes
         id: release_notes
         run: |
-          CURRENT_TAG=${GITHUB_REF#refs/tags/}
+          CURRENT_TAG="${{ steps.release_version.outputs.tag }}"
           NOTES_PATH="docs/release-notes/${CURRENT_TAG}.md"
           ALT_NOTES_PATH="docs/release-notes/${CURRENT_TAG#v}.md"
           if [ -f "$NOTES_PATH" ]; then
@@ -93,45 +231,37 @@ jobs:
             echo "body_path=$ALT_NOTES_PATH" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "No release notes file found; falling back to generated changelog."
-          echo "body_path=CHANGELOG.md" >> "$GITHUB_OUTPUT"
-
-      - name: Generate Changelog
-        id: changelog
-        if: ${{ steps.release_notes.outputs.body_path == 'CHANGELOG.md' }}
-        run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          CURRENT_TAG=${GITHUB_REF#refs/tags/}
-          echo "## What's Changed in $CURRENT_TAG" > CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          if [ -n "$PREV_TAG" ]; then
-            git log --pretty=format:"- %s" $PREV_TAG..HEAD >> CHANGELOG.md
-          else
-            git log --pretty=format:"- %s" >> CHANGELOG.md
-          fi
-          echo "" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/$PREV_TAG...$CURRENT_TAG" >> CHANGELOG.md
+          echo "Missing release notes file. Expected one of:" >&2
+          echo "  - $NOTES_PATH" >&2
+          echo "  - $ALT_NOTES_PATH" >&2
+          exit 1
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
         with:
           files: ./release-assets/*
           body_path: ${{ steps.release_notes.outputs.body_path }}
           draft: false
-          prerelease: ${{ contains(github.ref, '-') }}
+          prerelease: ${{ contains(steps.release_version.outputs.tag, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   update-packages:
     needs: release
     runs-on: ubuntu-latest
-    name: Update Homebrew/Scoop Packages
+    name: Update Scoop/Winget Packages
     timeout-minutes: 45
-    if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success'
+    permissions:
+      contents: read
+    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_update_packages && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
     steps:
+      - name: Checkout release repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: source
+
       - name: Checkout packages repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: dongdongbh/homebrew-mindwtr
           token: ${{ secrets.PACKAGES_REPO_TOKEN }}
@@ -141,11 +271,13 @@ jobs:
         id: version
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
+          GITHUB_EVENT_INPUTS_TAG: ${{ github.event.inputs.tag }}
         run: |
-          TAG="${INPUT_TAG:-${GITHUB_REF#refs/tags/}}"
-          VERSION="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+            echo "Invalid tag format" >&2
+            exit 1
+          fi
+          source/scripts/ci/resolve-release-version.sh "$INPUT_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Download release assets and compute hashes
         id: hashes
@@ -153,15 +285,11 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${{ steps.version.outputs.version }}"
 
-          URL_DMG_ARM="https://github.com/${{ github.repository }}/releases/download/${TAG}/mindwtr_${VERSION}_aarch64.dmg"
-          URL_DMG_INTEL="https://github.com/${{ github.repository }}/releases/download/${TAG}/mindwtr_${VERSION}_x64.dmg"
           URL_EXE="https://github.com/${{ github.repository }}/releases/download/${TAG}/mindwtr_${VERSION}_x64-setup.exe"
 
           echo "Waiting for release assets to become available..."
           for attempt in $(seq 1 10); do
-            if curl -fsI "$URL_DMG_ARM" >/dev/null && \
-               curl -fsI "$URL_DMG_INTEL" >/dev/null && \
-               curl -fsI "$URL_EXE" >/dev/null; then
+            if curl -fsI "$URL_EXE" >/dev/null; then
               echo "Release assets are available."
               break
             fi
@@ -172,27 +300,11 @@ jobs:
             sleep 15
           done
 
-          curl -fL -o mindwtr-arm.dmg "$URL_DMG_ARM"
-          curl -fL -o mindwtr-intel.dmg "$URL_DMG_INTEL"
           curl -fL -o mindwtr.exe "$URL_EXE"
 
-          SHA_ARM=$(sha256sum mindwtr-arm.dmg | awk '{print $1}')
-          SHA_INTEL=$(sha256sum mindwtr-intel.dmg | awk '{print $1}')
           SHA_EXE=$(sha256sum mindwtr.exe | awk '{print $1}')
 
-          echo "sha_arm=$SHA_ARM" >> "$GITHUB_OUTPUT"
-          echo "sha_intel=$SHA_INTEL" >> "$GITHUB_OUTPUT"
           echo "sha_exe=$SHA_EXE" >> "$GITHUB_OUTPUT"
-
-      - name: Update Homebrew cask
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          SHA_ARM="${{ steps.hashes.outputs.sha_arm }}"
-          SHA_INTEL="${{ steps.hashes.outputs.sha_intel }}"
-
-          FILE="packages-repo/Casks/mindwtr.rb"
-          ruby -pi -e "sub(/^  version \".*\"/, \"  version \\\"$VERSION\\\"\")" "$FILE"
-          ruby -0777 -pi -e "sub(/sha256 arm:.*?intel: \\\"[^\\\"]+\\\"/m, \"sha256 arm:   \\\"$SHA_ARM\\\",\\n         intel: \\\"$SHA_INTEL\\\"\")" "$FILE"
 
       - name: Update Scoop manifest
         run: |
@@ -227,7 +339,7 @@ jobs:
 
       - name: Checkout winget-pkgs fork
         if: steps.winget_check.outputs.exists == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: dongdongbh/winget-pkgs
           token: ${{ secrets.PACKAGES_REPO_TOKEN }}
@@ -252,15 +364,17 @@ jobs:
           PackageVersion: ${VERSION}
           InstallerLocale: en-US
           InstallerType: nullsoft
+          Scope: user
           InstallModes:
             - interactive
             - silent
+            - silentWithProgress
+          InstallerSwitches:
+            Silent: /S /CURRENTUSER
+            SilentWithProgress: /S /CURRENTUSER
           UpgradeBehavior: install
           Commands:
             - mindwtr
-          Dependencies:
-            PackageDependencies:
-              - PackageIdentifier: Microsoft.VCRedist.2015+.x64
           ProductCode: Mindwtr
           ReleaseDate: ${RELEASE_DATE}
           AppsAndFeaturesEntries:
@@ -274,6 +388,9 @@ jobs:
           ManifestType: installer
           ManifestVersion: 1.10.0
           EOF
+
+          INSTALLER_MANIFEST="$MANIFEST_DIR/dongdongbh.Mindwtr.installer.yaml"
+          test -s "$INSTALLER_MANIFEST"
 
           cat <<EOF | sed 's/^          //' > "$MANIFEST_DIR/dongdongbh.Mindwtr.locale.en-US.yaml"
           # yaml-language-server: \$schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
@@ -358,8 +475,8 @@ jobs:
           cd winget-pkgs
           git checkout -b "$BRANCH"
           git add manifests/d/dongdongbh/Mindwtr/"$VERSION"
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git config --local user.email "actions@github.com"
           git commit -m "New version: Mindwtr ${VERSION}"
           git push -u origin "$BRANCH"
           gh pr create \
@@ -372,9 +489,9 @@ jobs:
       - name: Commit and push
         run: |
           cd packages-repo
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git add Casks/mindwtr.rb bucket/mindwtr.json
+          git config --local user.name "GitHub Actions"
+          git config --local user.email "actions@github.com"
+          git add bucket/mindwtr.json
           if git diff --cached --quiet; then
             echo "No package changes to commit."
             exit 0
@@ -387,17 +504,24 @@ jobs:
     runs-on: macos-latest
     name: Bump Official Homebrew Cask
     timeout-minutes: 30
-    if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success' && !contains(github.ref, '-')
+    permissions:
+      contents: read
+    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success' && !contains(github.ref, '-')) || (github.event_name == 'workflow_dispatch' && inputs.run_bump_official_cask && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
     steps:
+      - name: Checkout release repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
       - name: Resolve release tag/version
         id: version
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
+          GITHUB_EVENT_INPUTS_TAG: ${{ github.event.inputs.tag }}
         run: |
-          TAG="${INPUT_TAG:-${GITHUB_REF#refs/tags/}}"
-          VERSION="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+            echo "Invalid tag format" >&2
+            exit 1
+          fi
+          scripts/ci/resolve-release-version.sh "$INPUT_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Wait for macOS release assets to be live
         run: |
@@ -424,8 +548,8 @@ jobs:
 
       - name: Configure git identity
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Submit Homebrew cask bump PR
         env:
@@ -437,15 +561,33 @@ jobs:
           fi
 
           VERSION="${{ steps.version.outputs.version }}"
+          run_bump_cask_pr() {
+            HOMEBREW_NO_INSTALL_FROM_API=1 brew bump-cask-pr homebrew/cask/mindwtr --version "$VERSION" --verbose --no-browse 2>&1
+          }
+
           set +e
-          OUTPUT="$(brew bump-cask-pr mindwtr --version "$VERSION" --verbose --no-browse 2>&1)"
+          OUTPUT="$(run_bump_cask_pr)"
           STATUS=$?
           set -e
           echo "$OUTPUT"
 
+          if [ "$STATUS" -ne 0 ] && echo "$OUTPUT" | grep -Fqi "Tap homebrew/cask already tapped"; then
+            echo "Homebrew cask tap conflict detected; retrying once after untap."
+            brew untap homebrew/cask >/dev/null 2>&1 || true
+            set +e
+            OUTPUT="$(run_bump_cask_pr)"
+            STATUS=$?
+            set -e
+            echo "$OUTPUT"
+          fi
+
           if [ "$STATUS" -ne 0 ]; then
             if echo "$OUTPUT" | grep -Eiq "already (at version|up[ -]?to[ -]?date)|no changes"; then
               echo "Official cask is already at version $VERSION; skipping."
+              exit 0
+            fi
+            if echo "$OUTPUT" | grep -Eiq "BrewTestBot|autobump|no_autobump"; then
+              echo "Official cask is BrewTestBot-managed; skipping manual bump."
               exit 0
             fi
             exit "$STATUS"
@@ -453,32 +595,36 @@ jobs:
 
   update-linux-repos:
     needs: release
-    if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success'
+    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_update_linux_repos && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
+    permissions:
+      contents: write
     uses: ./.github/workflows/publish-repo.yml
     secrets: inherit
     with:
-      tag: ${{ github.ref_name }}
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
   publish-chocolatey:
     needs: release
     runs-on: windows-latest
     name: Publish Chocolatey
     timeout-minutes: 45
-    if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success' && !contains(github.ref, '-')
+    permissions:
+      contents: read
+    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success' && !contains(github.ref, '-')) || (github.event_name == 'workflow_dispatch' && inputs.run_publish_chocolatey && (needs.release.result == 'success' || needs.release.result == 'skipped'))) && vars.CHOCOLATEY_PUBLISH_ENABLED == 'true' }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Resolve release tag/version
         id: version
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          if (-not $tag) { throw "Missing tag." }
-          $version = $tag.TrimStart('v')
-          if (-not $version) { throw "Failed to resolve version from tag '$tag'." }
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          "version=$version" >> $env:GITHUB_OUTPUT
+          $inputTag = "${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          $env:GITHUB_EVENT_INPUTS_TAG = "${{ github.event.inputs.tag }}"
+          $lines = & scripts/ci/resolve-release-version.ps1 -InputTag $inputTag
+          foreach ($line in $lines) {
+            $line >> $env:GITHUB_OUTPUT
+          }
 
       - name: Download Windows installer and compute SHA256
         id: installer
@@ -586,14 +732,28 @@ jobs:
     runs-on: ubuntu-latest
     name: Update AUR
     timeout-minutes: 30
-    if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success'
+    permissions:
+      contents: read
+    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_update_aur && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Resolve release version
+        id: version
+        env:
+          INPUT_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          GITHUB_EVENT_INPUTS_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+            echo "Invalid tag format" >&2
+            exit 1
+          fi
+          scripts/ci/resolve-release-version.sh "$INPUT_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Update PKGBUILD version
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION=${{ steps.version.outputs.version }}
           echo "Updating PKGBUILD to version $VERSION"
           sed -i "s/^pkgver=.*/pkgver=$VERSION/" aur/PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" aur/PKGBUILD
@@ -609,7 +769,7 @@ jobs:
         shell: bash
 
       - name: Publish to AUR
-        uses: KSXGitHub/github-actions-deploy-aur@v3
+        uses: KSXGitHub/github-actions-deploy-aur@a97f56a8425a7a7f3b8c58607f769c69b089cadb # v3
         with:
           pkgname: mindwtr-bin
           pkgbuild: ./aur/PKGBUILD
@@ -618,3 +778,191 @@ jobs:
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: Update to ${{ github.ref_name }}
           updpkgsums: true
+
+  update-aur-source:
+    needs: release
+    runs-on: ubuntu-latest
+    name: Update AUR (mindwtr)
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_update_aur_source && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
+    steps:
+      - name: Checkout release repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: source
+
+      - name: Configure SSH for AUR
+        shell: bash
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "${AUR_SSH_PRIVATE_KEY}" ]; then
+            echo "Missing AUR_SSH_PRIVATE_KEY secret."
+            exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${AUR_SSH_PRIVATE_KEY}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          cat > ~/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            HostName aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          EOF
+          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts
+
+      - name: Clone AUR repo
+        shell: bash
+        run: git clone ssh://aur@aur.archlinux.org/mindwtr.git aur-mindwtr
+
+      - name: Resolve release version
+        id: version
+        env:
+          INPUT_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          GITHUB_EVENT_INPUTS_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+            echo "Invalid tag format" >&2
+            exit 1
+          fi
+          source/scripts/ci/resolve-release-version.sh "$INPUT_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Update PKGBUILD version
+        id: pkgbuild_version
+        shell: bash
+        working-directory: aur-mindwtr
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          echo "Updating mindwtr PKGBUILD to version $VERSION"
+          CURRENT_PKGVER="$(sed -n 's/^pkgver=//p' PKGBUILD | head -n 1)"
+          if [ "$CURRENT_PKGVER" != "$VERSION" ]; then
+            sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
+            sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+            echo "pkgver_changed=true" >> "$GITHUB_OUTPUT"
+            echo "pkgver changed (${CURRENT_PKGVER} -> ${VERSION}); reset pkgrel to 1"
+          else
+            echo "pkgver_changed=false" >> "$GITHUB_OUTPUT"
+            echo "pkgver unchanged (${VERSION}); keep current pkgrel for now"
+          fi
+
+      - name: Update checksums
+        shell: bash
+        working-directory: aur-mindwtr
+        run: |
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          docker run --rm \
+            -e HOST_UID="$HOST_UID" \
+            -e HOST_GID="$HOST_GID" \
+            -v "$PWD:/aur" \
+            -w /aur \
+            archlinux:latest \
+            bash -lc '
+              set -euo pipefail
+              pacman -Sy --noconfirm --needed base-devel git pacman-contrib
+              getent group "$HOST_GID" >/dev/null 2>&1 || groupadd -g "$HOST_GID" builder
+              id -u builder >/dev/null 2>&1 || useradd -m -u "$HOST_UID" -g "$HOST_GID" builder
+              if command -v updpkgsums >/dev/null 2>&1; then
+                su builder -c "updpkgsums"
+              else
+                # Fallback path if updpkgsums is unavailable.
+                su builder -c "makepkg -g > /tmp/makepkg-sums.txt"
+                awk "
+                  /^[_[:alnum:]]*sums=\\(/ { in_sums=1; next }
+                  in_sums && /^\\)/ { in_sums=0; next }
+                  !in_sums { print }
+                " /aur/PKGBUILD > /tmp/PKGBUILD.nosums
+                {
+                  cat /tmp/PKGBUILD.nosums
+                  cat /tmp/makepkg-sums.txt
+                } > /aur/PKGBUILD
+              fi
+            '
+
+      - name: Validate source package build (clean container)
+        shell: bash
+        working-directory: aur-mindwtr
+        run: |
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          docker run --rm \
+            -e HOST_UID="$HOST_UID" \
+            -e HOST_GID="$HOST_GID" \
+            -v "$PWD:/aur" \
+            -w /aur \
+            archlinux:latest \
+            bash -lc '
+              set -euo pipefail
+              pacman -Sy --noconfirm --needed base-devel git
+              mapfile -t pkgdeps < <(bash -lc "
+                source PKGBUILD
+                printf \"%s\\n\" \"\${depends[@]}\" \"\${makedepends[@]}\" \"\${checkdepends[@]}\" \
+                  | sed -E \"s/[<>=].*$//\" \
+                  | awk \"NF\" \
+                  | sort -u
+              ")
+              if [ "${#pkgdeps[@]}" -gt 0 ]; then
+                pacman -S --noconfirm --needed "${pkgdeps[@]}"
+              fi
+              getent group "$HOST_GID" >/dev/null 2>&1 || groupadd -g "$HOST_GID" builder
+              id -u builder >/dev/null 2>&1 || useradd -m -u "$HOST_UID" -g "$HOST_GID" builder
+              chown -R builder:builder /aur
+              su builder -c "makepkg --cleanbuild --clean --nodeps --noconfirm"
+            '
+
+      - name: Bump pkgrel for checksum-only changes
+        shell: bash
+        working-directory: aur-mindwtr
+        run: |
+          if [ "${{ steps.pkgbuild_version.outputs.pkgver_changed }}" = "false" ] && ! git diff --quiet -- PKGBUILD; then
+            CURRENT_PKGREL="$(sed -n 's/^pkgrel=//p' PKGBUILD | head -n 1)"
+            if [[ "$CURRENT_PKGREL" =~ ^[0-9]+$ ]]; then
+              NEW_PKGREL="$((CURRENT_PKGREL + 1))"
+              sed -i "s/^pkgrel=.*/pkgrel=${NEW_PKGREL}/" PKGBUILD
+              echo "pkgver unchanged and checksums changed; bump pkgrel ${CURRENT_PKGREL} -> ${NEW_PKGREL}"
+            else
+              echo "::error::pkgrel is not numeric (${CURRENT_PKGREL}); cannot auto-bump."
+              exit 1
+            fi
+          fi
+
+      - name: Update .SRCINFO
+        shell: bash
+        working-directory: aur-mindwtr
+        run: |
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          docker run --rm \
+            -e HOST_UID="$HOST_UID" \
+            -e HOST_GID="$HOST_GID" \
+            -v "$PWD:/aur" \
+            -w /aur \
+            archlinux:latest \
+            bash -lc '
+              set -euo pipefail
+              pacman -Sy --noconfirm --needed base-devel git
+              getent group "$HOST_GID" >/dev/null 2>&1 || groupadd -g "$HOST_GID" builder
+              id -u builder >/dev/null 2>&1 || useradd -m -u "$HOST_UID" -g "$HOST_GID" builder
+              su builder -c "makepkg --printsrcinfo > /aur/.SRCINFO"
+            '
+
+      - name: Commit and push changes
+        shell: bash
+        working-directory: aur-mindwtr
+        env:
+          AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+          AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
+        run: |
+          if git diff --quiet -- PKGBUILD .SRCINFO; then
+            echo "No AUR source-package changes to publish."
+            exit 0
+          fi
+          git config --local user.name "${AUR_USERNAME:-mindwtr-bot}"
+          git config --local user.email "${AUR_EMAIL:-actions@github.com}"
+          git add PKGBUILD .SRCINFO
+          git commit -m "Update to ${{ steps.version.outputs.tag }}"
+          git push origin HEAD

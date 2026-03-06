@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Modal, ScrollView, TextInput, Platform, Alert, Share, ActivityIndicator, Dimensions, type TextStyle } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, ScrollView, FlatList, TextInput, Platform, Alert, Share, ActivityIndicator, Dimensions, type TextStyle } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useTaskStore, PRESET_CONTEXTS, PRESET_TAGS, createAIProvider, safeFormatDate, safeParseDate, resolveTextDirection, type Task, type AIProviderId } from '@mindwtr/core';
+import { DEFAULT_PROJECT_COLOR, useTaskStore, PRESET_CONTEXTS, PRESET_TAGS, createAIProvider, safeFormatDate, safeParseDate, resolveAutoTextDirection, type Task, type AIProviderId } from '@mindwtr/core';
 
 import { AIResponseModal, type AIResponseAction } from './ai-response-modal';
 import { useLanguage } from '../contexts/language-context';
 import { useTheme } from '../contexts/theme-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
-import { buildAIConfig, loadAIKey } from '../lib/ai-config';
+import { buildAIConfig, isAIKeyRequired, loadAIKey } from '../lib/ai-config';
 import { logWarn } from '../lib/app-log';
 import { styles } from './inbox-processing-modal.styles';
 
@@ -22,7 +22,7 @@ const MAX_TOKEN_SUGGESTIONS = 6;
 
 export function InboxProcessingModal({ visible, onClose }: InboxProcessingModalProps) {
   const { tasks, projects, areas, settings, updateTask, deleteTask, addProject } = useTaskStore();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const { isDark } = useTheme();
   const tc = useThemeColors();
   const insets = useSafeAreaInsets();
@@ -73,8 +73,8 @@ export function InboxProcessingModal({ visible, onClose }: InboxProcessingModalP
   const resolvedTitleDirection = useMemo(() => {
     if (!currentTask) return 'ltr';
     const text = (processingTitle || currentTask.title || '').trim();
-    return resolveTextDirection(text, currentTask.textDirection);
-  }, [currentTask, processingTitle]);
+    return resolveAutoTextDirection(text, language);
+  }, [currentTask, language, processingTitle]);
   const titleDirectionStyle = useMemo<TextStyle>(() => ({
     writingDirection: resolvedTitleDirection,
     textAlign: resolvedTitleDirection === 'rtl' ? 'right' : 'left',
@@ -500,7 +500,7 @@ export function InboxProcessingModal({ visible, onClose }: InboxProcessingModalP
       selectProjectEarly(existing.id);
       return;
     }
-    const created = await addProject(title, '#94a3b8');
+    const created = await addProject(title, DEFAULT_PROJECT_COLOR);
     if (!created) return;
     selectProjectEarly(created.id);
   };
@@ -524,7 +524,7 @@ export function InboxProcessingModal({ visible, onClose }: InboxProcessingModalP
       return;
     }
     const apiKey = await loadAIKey(aiProvider);
-    if (!apiKey) {
+    if (isAIKeyRequired(settings) && !apiKey) {
       Alert.alert(t('ai.errorTitle'), t('ai.missingKeyBody'));
       return;
     }
@@ -1128,19 +1128,25 @@ export function InboxProcessingModal({ visible, onClose }: InboxProcessingModalP
                             </TouchableOpacity>
                           )}
                         </View>
-                        <ScrollView style={{ maxHeight: 280 }} nestedScrollEnabled>
-                          <TouchableOpacity
-                            style={[styles.projectChip, { backgroundColor: '#10B981' }]}
-                            onPress={() => selectProjectEarly(null)}
-                          >
-                            <Text style={styles.projectChipText}>✓ {t('inbox.noProject')}</Text>
-                          </TouchableOpacity>
-                          {filteredProjects.map(proj => {
+                        <FlatList
+                          style={{ maxHeight: 280 }}
+                          data={filteredProjects}
+                          keyExtractor={(proj) => proj.id}
+                          nestedScrollEnabled
+                          keyboardShouldPersistTaps="handled"
+                          ListHeaderComponent={(
+                            <TouchableOpacity
+                              style={[styles.projectChip, { backgroundColor: '#10B981' }]}
+                              onPress={() => selectProjectEarly(null)}
+                            >
+                              <Text style={styles.projectChipText}>✓ {t('inbox.noProject')}</Text>
+                            </TouchableOpacity>
+                          )}
+                          renderItem={({ item: proj }) => {
                             const projectColor = proj.areaId ? areaById.get(proj.areaId)?.color : undefined;
                             const isSelected = selectedProjectId === proj.id;
                             return (
                               <TouchableOpacity
-                                key={proj.id}
                                 style={[
                                   styles.projectChip,
                                   isSelected
@@ -1153,8 +1159,8 @@ export function InboxProcessingModal({ visible, onClose }: InboxProcessingModalP
                                 <Text style={[styles.projectChipText, { color: tc.text }]}>{proj.title}</Text>
                               </TouchableOpacity>
                             );
-                          })}
-                        </ScrollView>
+                          }}
+                        />
                       </View>
                     </>
                   )}

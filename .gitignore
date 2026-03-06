@@ -40,9 +40,11 @@ Thumbs.db
 
 # Testing
 coverage/
+.vitest/
 
 # Mobile (Expo)
 apps/mobile/.expo/
+apps/mobile/.expo-shared/
 .expo/
 apps/mobile/android/
 apps/mobile/ios/
@@ -66,6 +68,8 @@ apps/desktop/src-tauri/embedded.provisionprofile
 
 # Lock files (using bun)
 package-lock.json
+!apps/mobile/package-lock.json
+!packages/core/package-lock.json
 yarn.lock
 
 # AUR build artifacts
@@ -73,6 +77,9 @@ aur/*.pkg.tar.zst
 aur/*.deb
 aur/pkg/
 aur/src/
+
+# Flatpak build cache
+.flatpak-builder/
 
 # Agent files
 AGENTS.md

@@ -15,6 +15,19 @@ export const ensureDeviceId = (settings: AppData['settings']): { settings: AppDa
     return { settings: { ...settings, deviceId }, deviceId, updated: true };
 };
 
+export const getReferenceTaskFieldClears = (): Partial<Task> => ({
+    status: 'reference',
+    startTime: undefined,
+    dueDate: undefined,
+    reviewAt: undefined,
+    recurrence: undefined,
+    priority: undefined,
+    timeEstimate: undefined,
+    checklist: undefined,
+    isFocusedToday: false,
+    pushCount: 0,
+});
+
 export function applyTaskUpdates(oldTask: Task, updates: Partial<Task>, now: string): { updatedTask: Task; nextRecurringTask: Task | null } {
     let normalizedUpdates = updates;
     if (Object.prototype.hasOwnProperty.call(updates, 'textDirection') && updates.textDirection === undefined) {
@@ -65,16 +78,7 @@ export function applyTaskUpdates(oldTask: Task, updates: Partial<Task>, now: str
     if (incomingStatus === 'reference') {
         finalUpdates = {
             ...finalUpdates,
-            status: incomingStatus,
-            startTime: undefined,
-            dueDate: undefined,
-            reviewAt: undefined,
-            recurrence: undefined,
-            priority: undefined,
-            timeEstimate: undefined,
-            checklist: undefined,
-            isFocusedToday: false,
-            pushCount: 0,
+            ...getReferenceTaskFieldClears(),
         };
     }
 
@@ -84,7 +88,19 @@ export function applyTaskUpdates(oldTask: Task, updates: Partial<Task>, now: str
     };
 }
 
-const isTaskVisible = (task?: Task | null) => Boolean(task && !task.deletedAt && task.status !== 'archived');
+export type TaskVisibilityOptions = {
+    includeArchived?: boolean;
+    includeDeleted?: boolean;
+};
+
+export const isTaskVisible = (task?: Task | null, options?: TaskVisibilityOptions): boolean => {
+    if (!task) return false;
+    const includeArchived = options?.includeArchived === true;
+    const includeDeleted = options?.includeDeleted === true;
+    if (!includeDeleted && task.deletedAt) return false;
+    if (!includeArchived && task.status === 'archived') return false;
+    return true;
+};
 
 export const updateVisibleTasks = (visible: Task[], previous?: Task | null, next?: Task | null): Task[] => {
     const wasVisible = isTaskVisible(previous);
@@ -110,11 +126,17 @@ export const buildSaveSnapshot = (state: SaveBaseState, overrides?: Partial<AppD
 });
 
 export const computeDerivedState = (tasks: Task[], projects: Project[]): DerivedState => {
+    const projectDerived = computeProjectDerivedState(projects);
+    const taskDerived = computeTaskDerivedState(tasks);
+
+    return {
+        ...projectDerived,
+        ...taskDerived,
+    };
+};
+
+export const computeProjectDerivedState = (projects: Project[]): Pick<DerivedState, 'projectMap' | 'sequentialProjectIds'> => {
     const projectMap = new Map<string, Project>();
-    const tasksById = new Map<string, Task>();
-    const activeTasksByStatus = new Map<TaskStatus, Task[]>();
-    const contextsSet = new Set<string>(PRESET_CONTEXTS);
-    const tagsSet = new Set<string>(PRESET_TAGS);
     const sequentialProjectIds = new Set<string>();
 
     projects.forEach((project) => {
@@ -124,23 +146,40 @@ export const computeDerivedState = (tasks: Task[], projects: Project[]): Derived
         }
     });
 
+    return {
+        projectMap,
+        sequentialProjectIds,
+    };
+};
+
+export const computeTaskDerivedState = (
+    tasks: Task[]
+): Pick<DerivedState, 'tasksById' | 'activeTasksByStatus' | 'allContexts' | 'allTags' | 'focusedCount'> => {
+    const tasksById = new Map<string, Task>();
+    const activeTasksByStatus = new Map<TaskStatus, Task[]>();
+    const contextsSet = new Set<string>(PRESET_CONTEXTS);
+    const tagsSet = new Set<string>(PRESET_TAGS);
+    let focusedCount = 0;
+
     tasks.forEach((task) => {
         tasksById.set(task.id, task);
         if (task.deletedAt) return;
         const list = activeTasksByStatus.get(task.status) ?? [];
         list.push(task);
         activeTasksByStatus.set(task.status, list);
+        if (task.isFocusedToday && task.status !== 'done' && task.status !== 'reference') {
+            focusedCount += 1;
+        }
         task.contexts?.forEach((ctx) => contextsSet.add(ctx));
         task.tags?.forEach((tag) => tagsSet.add(tag));
     });
 
     return {
-        projectMap,
         tasksById,
         activeTasksByStatus,
         allContexts: Array.from(contextsSet).sort(),
         allTags: Array.from(tagsSet).sort(),
-        sequentialProjectIds,
+        focusedCount,
     };
 };
 
@@ -203,39 +242,25 @@ export const sanitizeAppDataForStorage = (data: AppData): AppData => ({
     settings: stripSensitiveSettings(cloneSettings(data.settings)),
 });
 
-let projectOrderCacheVersion: number | null = null;
-let projectOrderCache: Map<string, number> | null = null;
+export const getTaskOrder = (task: Pick<Task, 'order' | 'orderNum'>): number | undefined => {
+    if (Number.isFinite(task.order)) return task.order as number;
+    if (Number.isFinite(task.orderNum)) return task.orderNum as number;
+    return undefined;
+};
 
 export const getNextProjectOrder = (
     projectId: string | undefined,
     tasks: Task[],
-    cacheKey?: number
+    _cacheKey?: number
 ): number | undefined => {
     if (!projectId) return undefined;
-    let cache = cacheKey !== undefined && projectOrderCacheVersion === cacheKey ? projectOrderCache : null;
-    if (!cache) {
-        cache = new Map<string, number>();
-        // Build a max-order index once per tasks array to avoid O(n) scans per project.
-        for (const task of tasks) {
-            if (!task.projectId || task.deletedAt) continue;
-            const order = Number.isFinite(task.orderNum) ? (task.orderNum as number) : -1;
-            const current = cache.get(task.projectId);
-            if (current === undefined) {
-                cache.set(task.projectId, Math.max(order, -1) + 1);
-            } else if (order >= current) {
-                cache.set(task.projectId, order + 1);
-            }
-        }
-        if (cacheKey !== undefined) {
-            projectOrderCacheVersion = cacheKey;
-            projectOrderCache = cache;
+    let maxOrder = -1;
+    for (const task of tasks) {
+        if (task.deletedAt || task.projectId !== projectId) continue;
+        const order = getTaskOrder(task) ?? -1;
+        if (order > maxOrder) {
+            maxOrder = order;
         }
     }
-    const cached = cache.get(projectId);
-    if (cached !== undefined) {
-        cache.set(projectId, cached + 1);
-        return cached;
-    }
-    cache.set(projectId, 1);
-    return 0;
+    return maxOrder + 1;
 };

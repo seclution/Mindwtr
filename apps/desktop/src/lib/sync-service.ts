@@ -4,8 +4,6 @@ import {
     Attachment,
     useTaskStore,
     MergeStats,
-    computeSha256Hex,
-    globalProgressTracker,
     findDeletedAttachmentsForFileCleanup,
     findOrphanedAttachments,
     removeOrphanedAttachmentsFromData,
@@ -29,21 +27,41 @@ import {
     normalizeWebdavUrl,
     normalizeCloudUrl,
     sanitizeAppDataForRemote,
+    areSyncPayloadsEqual,
+    assertNoPendingAttachmentUploads,
     injectExternalCalendars as injectExternalCalendarsForSync,
     persistExternalCalendars as persistExternalCalendarsForSync,
     withRetry,
+    isRetryableWebdavReadError,
+    isWebdavInvalidJsonError,
     CLOCK_SKEW_THRESHOLD_MS,
     appendSyncHistory,
     cloneAppData,
     createWebdavDownloadBackoff,
     isWebdavRateLimitedError,
     getErrorStatus,
+    LocalSyncAbort,
+    getInMemoryAppDataSnapshot,
+    shouldRunAttachmentCleanup,
+    createAbortableFetch,
+    normalizeCloudProvider,
+    type CloudProvider,
 } from '@mindwtr/core';
 import { isTauriRuntime } from './runtime';
 import { reportError } from './report-error';
 import { logInfo, logSyncError, logWarn, sanitizeLogMessage } from './app-log';
+import { useUiStore } from '../store/ui-store';
 import { ExternalCalendarService } from './external-calendar-service';
 import { webStorage } from './storage-adapter-web';
+import {
+    collectAttachmentsById,
+    getBaseSyncUrl,
+    getCloudBaseUrl,
+    normalizePendingRemoteDeletes,
+    reportProgress,
+    syncBasicRemoteAttachments,
+    validateAttachmentHash,
+} from './sync-attachments';
 import {
     ATTACHMENTS_DIR_NAME,
     buildCloudKey,
@@ -59,7 +77,37 @@ import {
     writeAttachmentFileSafely,
     writeFileSafelyAbsolute,
 } from './sync-service-utils';
+import {
+    clearAttachmentValidationFailure,
+    clearAttachmentValidationFailures,
+    getAttachmentValidationFailureAttempts,
+    handleAttachmentValidationFailure,
+    markAttachmentUnrecoverable,
+} from './sync-attachment-validation';
 import type { SyncBackend } from './sync-service-utils';
+import {
+    deleteDropboxFile,
+    downloadDropboxAppData,
+    downloadDropboxFile,
+    DropboxConflictError,
+    DropboxFileNotFoundError,
+    DropboxUnauthorizedError,
+    testDropboxAccess,
+    uploadDropboxAppData,
+    uploadDropboxFile,
+} from './dropbox-sync';
+
+export type ExternalSyncChangeResolution = 'keep-local' | 'use-external' | 'merge';
+export type { CloudProvider };
+
+export type ExternalSyncChange = {
+    at: string;
+    incomingHash: string;
+    syncPath: string;
+    hasLocalChanges: boolean;
+    localChangeAt: number;
+    lastSyncAt?: string;
+};
 
 const SYNC_BACKEND_KEY = 'mindwtr-sync-backend';
 const WEBDAV_URL_KEY = 'mindwtr-webdav-url';
@@ -67,9 +115,17 @@ const WEBDAV_USERNAME_KEY = 'mindwtr-webdav-username';
 const WEBDAV_PASSWORD_KEY = 'mindwtr-webdav-password';
 const CLOUD_URL_KEY = 'mindwtr-cloud-url';
 const CLOUD_TOKEN_KEY = 'mindwtr-cloud-token';
+const CLOUD_PROVIDER_KEY = 'mindwtr-cloud-provider';
 const SYNC_FILE_NAME = 'data.json';
 const LEGACY_SYNC_FILE_NAME = 'mindwtr-sync.json';
+const DEFAULT_DROPBOX_APP_KEY = String(import.meta.env.VITE_DROPBOX_APP_KEY || '').trim();
 const WEBDAV_ATTACHMENT_RETRY_OPTIONS = { maxAttempts: 5, baseDelayMs: 2000, maxDelayMs: 60_000 };
+const WEBDAV_READ_RETRY_OPTIONS = {
+    maxAttempts: 5,
+    baseDelayMs: 2000,
+    maxDelayMs: 30_000,
+    shouldRetry: isRetryableWebdavReadError,
+};
 const CLOUD_ATTACHMENT_RETRY_OPTIONS = { maxAttempts: 5, baseDelayMs: 2000, maxDelayMs: 60_000 };
 const WEBDAV_ATTACHMENT_MIN_INTERVAL_MS = 400;
 const WEBDAV_ATTACHMENT_COOLDOWN_MS = 60_000;
@@ -151,13 +207,6 @@ const injectExternalCalendars = async (data: AppData): Promise<AppData> =>
 const persistExternalCalendars = async (data: AppData): Promise<void> =>
     persistExternalCalendarsForSync(data, externalCalendarProvider);
 
-class LocalSyncAbort extends Error {
-    constructor() {
-        super('Local changes detected during sync');
-        this.name = 'LocalSyncAbort';
-    }
-}
-
 // Sync should start from persisted data so startup sync cannot overwrite settings with an unhydrated store snapshot.
 const readLocalDataForSync = async (): Promise<AppData> => {
     if (isTauriRuntimeEnv()) {
@@ -178,17 +227,6 @@ const readLocalDataForSync = async (): Promise<AppData> => {
         projects: [...state._allProjects],
         sections: [...state._allSections],
         areas: [...state._allAreas],
-        settings: state.settings ?? {},
-    });
-};
-
-const getInMemoryAppDataSnapshot = (): AppData => {
-    const state = useTaskStore.getState();
-    return cloneAppData({
-        tasks: state._allTasks ?? state.tasks ?? [],
-        projects: state._allProjects ?? state.projects ?? [],
-        sections: state._allSections ?? state.sections ?? [],
-        areas: state._allAreas ?? state.areas ?? [],
         settings: state.settings ?? {},
     });
 };
@@ -221,56 +259,9 @@ const cleanupAttachmentTempFiles = async (): Promise<void> => {
     }
 };
 
-const validateAttachmentHash = async (attachment: Attachment, bytes: Uint8Array): Promise<void> => {
-    const expected = attachment.fileHash;
-    if (!expected || expected.length !== 64) return;
-    const computed = await computeSha256Hex(bytes);
-    if (!computed) return;
-    if (computed.toLowerCase() !== expected.toLowerCase()) {
-        throw new Error('Integrity validation failed');
-    }
-};
-
-const reportProgress = (
-    attachmentId: string,
-    operation: 'upload' | 'download',
-    loaded: number,
-    total: number,
-    status: 'active' | 'completed' | 'failed',
-    error?: string,
-) => {
-    const percentage = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
-    globalProgressTracker.updateProgress(attachmentId, {
-        operation,
-        bytesTransferred: loaded,
-        totalBytes: total,
-        percentage,
-        status,
-        error,
-    });
-};
-
-const shouldRunAttachmentCleanup = (lastCleanupAt?: string): boolean => {
-    if (!lastCleanupAt) return true;
-    const parsed = Date.parse(lastCleanupAt);
-    if (Number.isNaN(parsed)) return true;
-    return Date.now() - parsed >= CLEANUP_INTERVAL_MS;
-};
-
-const collectAttachmentsById = (appData: AppData): Map<string, Attachment> => {
-    const attachmentsById = new Map<string, Attachment>();
-    for (const task of appData.tasks) {
-        for (const attachment of task.attachments || []) {
-            attachmentsById.set(attachment.id, attachment);
-        }
-    }
-    for (const project of appData.projects) {
-        for (const attachment of project.attachments || []) {
-            attachmentsById.set(attachment.id, attachment);
-        }
-    }
-    return attachmentsById;
-};
+type PendingRemoteAttachmentDeleteEntry = NonNullable<
+    NonNullable<AppData['settings']['attachments']>['pendingRemoteDeletes']
+>[number];
 
 const deleteAttachmentFile = async (attachment: Attachment): Promise<void> => {
     if (!attachment.uri) return;
@@ -294,12 +285,28 @@ const deleteAttachmentFile = async (attachment: Attachment): Promise<void> => {
 const cleanupOrphanedAttachments = async (appData: AppData, backend: SyncBackend): Promise<AppData> => {
     const orphaned = findOrphanedAttachments(appData);
     const deletedAttachments = findDeletedAttachmentsForFileCleanup(appData);
+    const previousPendingRemoteDeletes = normalizePendingRemoteDeletes(appData.settings.attachments?.pendingRemoteDeletes);
+    const previousPendingByCloudKey = new Map(previousPendingRemoteDeletes.map((item) => [item.cloudKey, item]));
     const cleanupTargets = new Map<string, Attachment>();
     for (const attachment of orphaned) cleanupTargets.set(attachment.id, attachment);
     for (const attachment of deletedAttachments) cleanupTargets.set(attachment.id, attachment);
+    const remoteCleanupTargets = new Map<string, { cloudKey: string; title: string }>();
+    for (const attachment of cleanupTargets.values()) {
+        if (!attachment.cloudKey) continue;
+        remoteCleanupTargets.set(attachment.cloudKey, {
+            cloudKey: attachment.cloudKey,
+            title: attachment.title || attachment.cloudKey,
+        });
+    }
+    for (const pending of previousPendingRemoteDeletes) {
+        remoteCleanupTargets.set(pending.cloudKey, {
+            cloudKey: pending.cloudKey,
+            title: pending.title || pending.cloudKey,
+        });
+    }
     const lastCleanupAt = new Date().toISOString();
 
-    if (cleanupTargets.size === 0) {
+    if (cleanupTargets.size === 0 && remoteCleanupTargets.size === 0) {
         await cleanupAttachmentTempFiles();
         return {
             ...appData,
@@ -308,6 +315,7 @@ const cleanupOrphanedAttachments = async (appData: AppData, backend: SyncBackend
                 attachments: {
                     ...appData.settings.attachments,
                     lastCleanupAt,
+                    pendingRemoteDeletes: undefined,
                 },
             },
         };
@@ -315,12 +323,20 @@ const cleanupOrphanedAttachments = async (appData: AppData, backend: SyncBackend
 
     let webdavConfig: WebDavConfig | null = null;
     let cloudConfig: CloudConfig | null = null;
+    let cloudProvider: CloudProvider = 'selfhosted';
+    let dropboxAppKey = '';
+    let dropboxAccessToken: string | null = null;
     let fileBaseDir: string | null = null;
 
     if (backend === 'webdav') {
         webdavConfig = await SyncService.getWebDavConfig();
     } else if (backend === 'cloud') {
-        cloudConfig = await SyncService.getCloudConfig();
+        cloudProvider = await SyncService.getCloudProvider();
+        if (cloudProvider === 'dropbox') {
+            dropboxAppKey = (await SyncService.getDropboxAppKey()).trim();
+        } else {
+            cloudConfig = await SyncService.getCloudConfig();
+        }
     } else if (backend === 'file') {
         const syncPath = await SyncService.getSyncPath();
         const baseDir = getFileSyncDir(syncPath, SYNC_FILE_NAME, LEGACY_SYNC_FILE_NAME);
@@ -328,40 +344,99 @@ const cleanupOrphanedAttachments = async (appData: AppData, backend: SyncBackend
     }
 
     const fetcher = await getTauriFetch();
+    const dropboxFetcher = fetcher ?? fetch;
     const webdavPassword = webdavConfig ? await resolveWebdavPassword(webdavConfig) : '';
+    const nextPendingRemoteDeletes = new Map<string, PendingRemoteAttachmentDeleteEntry>();
+    const resolveDropboxAccessToken = async (forceRefresh = false): Promise<string> => {
+        if (!dropboxAppKey) {
+            throw new Error('Dropbox app key is not configured');
+        }
+        if (!dropboxAccessToken || forceRefresh) {
+            dropboxAccessToken = await SyncService.getDropboxAccessToken(dropboxAppKey, { forceRefresh });
+        }
+        return dropboxAccessToken;
+    };
+    const deleteDropboxAttachment = async (cloudKey: string): Promise<void> => {
+        const run = async (forceRefresh: boolean) => {
+            const token = await resolveDropboxAccessToken(forceRefresh);
+            await deleteDropboxFile(token, cloudKey, dropboxFetcher);
+        };
+        try {
+            await run(false);
+        } catch (error) {
+            if (error instanceof DropboxUnauthorizedError) {
+                await run(true);
+                return;
+            }
+            throw error;
+        }
+    };
 
     for (const attachment of cleanupTargets.values()) {
         await deleteAttachmentFile(attachment);
-        if (attachment.cloudKey) {
-            try {
-                if (backend === 'webdav' && webdavConfig?.url) {
-                    const baseUrl = getBaseSyncUrl(webdavConfig.url);
-                    await webdavDeleteFile(`${baseUrl}/${attachment.cloudKey}`, {
-                        username: webdavConfig.username,
-                        password: webdavPassword,
-                        fetcher,
-                    });
-                } else if (backend === 'cloud' && cloudConfig?.url) {
-                    const baseUrl = getCloudBaseUrl(cloudConfig.url);
-                    await cloudDeleteFile(`${baseUrl}/${attachment.cloudKey}`, {
-                        token: cloudConfig.token,
-                        fetcher,
-                    });
-                } else if (backend === 'file' && fileBaseDir) {
-                    const { remove } = await import('@tauri-apps/plugin-fs');
-                    const { join } = await import('@tauri-apps/api/path');
-                    const targetPath = await join(fileBaseDir, attachment.cloudKey);
-                    await remove(targetPath);
-                }
-            } catch (error) {
-                logSyncWarning(`Failed to delete remote attachment ${attachment.title}`, error);
+    }
+
+    const canAttemptRemoteDelete = (
+        (backend === 'webdav' && !!webdavConfig?.url)
+        || (backend === 'cloud' && cloudProvider === 'selfhosted' && !!cloudConfig?.url)
+        || (backend === 'cloud' && cloudProvider === 'dropbox' && !!dropboxAppKey)
+        || (backend === 'file' && !!fileBaseDir)
+    );
+    for (const target of remoteCleanupTargets.values()) {
+        const existing = previousPendingByCloudKey.get(target.cloudKey);
+        if (!canAttemptRemoteDelete) {
+            nextPendingRemoteDeletes.set(target.cloudKey, {
+                cloudKey: target.cloudKey,
+                title: target.title,
+                attempts: existing?.attempts ?? 0,
+                lastErrorAt: existing?.lastErrorAt,
+            });
+            continue;
+        }
+        try {
+            if (backend === 'webdav' && webdavConfig?.url) {
+                const baseUrl = getBaseSyncUrl(webdavConfig.url);
+                await webdavDeleteFile(`${baseUrl}/${target.cloudKey}`, {
+                    username: webdavConfig.username,
+                    password: webdavPassword,
+                    fetcher,
+                });
+            } else if (backend === 'cloud' && cloudProvider === 'selfhosted' && cloudConfig?.url) {
+                const baseUrl = getCloudBaseUrl(cloudConfig.url);
+                await cloudDeleteFile(`${baseUrl}/${target.cloudKey}`, {
+                    token: cloudConfig.token,
+                    fetcher,
+                });
+            } else if (backend === 'cloud' && cloudProvider === 'dropbox') {
+                await deleteDropboxAttachment(target.cloudKey);
+            } else if (backend === 'file' && fileBaseDir) {
+                const { remove } = await import('@tauri-apps/plugin-fs');
+                const { join } = await import('@tauri-apps/api/path');
+                const targetPath = await join(fileBaseDir, target.cloudKey);
+                await remove(targetPath);
             }
+        } catch (error) {
+            const status = getErrorStatus(error);
+            if (status === 404 || error instanceof DropboxFileNotFoundError) {
+                logSyncInfo('Remote attachment already missing during cleanup', {
+                    cloudKey: target.cloudKey,
+                });
+                continue;
+            }
+            logSyncWarning(`Failed to delete remote attachment ${target.title}`, error);
+            nextPendingRemoteDeletes.set(target.cloudKey, {
+                cloudKey: target.cloudKey,
+                title: target.title,
+                attempts: (existing?.attempts ?? 0) + 1,
+                lastErrorAt: lastCleanupAt,
+            });
         }
     }
 
     await cleanupAttachmentTempFiles();
 
     const cleaned = orphaned.length > 0 ? removeOrphanedAttachmentsFromData(appData) : appData;
+    const pendingRemoteDeletes = Array.from(nextPendingRemoteDeletes.values());
     return {
         ...cleaned,
         settings: {
@@ -369,26 +444,10 @@ const cleanupOrphanedAttachments = async (appData: AppData, backend: SyncBackend
             attachments: {
                 ...cleaned.settings.attachments,
                 lastCleanupAt,
+                pendingRemoteDeletes: pendingRemoteDeletes.length > 0 ? pendingRemoteDeletes : undefined,
             },
         },
     };
-};
-
-const getBaseSyncUrl = (fullUrl: string): string => {
-    const trimmed = fullUrl.replace(/\/+$/, '');
-    if (trimmed.toLowerCase().endsWith('.json')) {
-        const lastSlash = trimmed.lastIndexOf('/');
-        return lastSlash >= 0 ? trimmed.slice(0, lastSlash) : trimmed;
-    }
-    return trimmed;
-};
-
-const getCloudBaseUrl = (fullUrl: string): string => {
-    const trimmed = fullUrl.replace(/\/+$/, '');
-    if (trimmed.toLowerCase().endsWith('/data')) {
-        return trimmed.slice(0, -'/data'.length);
-    }
-    return trimmed;
 };
 
 async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -397,6 +456,20 @@ async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): 
 
 type WebDavConfig = { url: string; username: string; password?: string; hasPassword?: boolean };
 type CloudConfig = { url: string; token: string };
+const DROPBOX_REDIRECT_URI_FALLBACK = 'http://127.0.0.1:53682/oauth/dropbox/callback';
+const DROPBOX_TEST_TIMEOUT_MS = 15_000;
+
+const withTimeout = async <T>(promise: Promise<T>, ms: number, message: string): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+    });
+    try {
+        return await Promise.race([promise, timeout]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+};
 
 async function getTauriFetch(): Promise<typeof fetch | undefined> {
     return syncServiceDependencies.getTauriFetch();
@@ -418,9 +491,9 @@ async function syncAttachments(
     appData: AppData,
     webDavConfig: WebDavConfig,
     baseSyncUrl: string
-): Promise<boolean> {
-    if (!isTauriRuntimeEnv()) return false;
-    if (!webDavConfig.url) return false;
+): Promise<AppData | null> {
+    if (!isTauriRuntimeEnv()) return null;
+    if (!webDavConfig.url) return null;
 
     const fetcher = await getTauriFetch();
     const { BaseDirectory, exists, mkdir, readFile, writeFile, rename, remove } = await import('@tauri-apps/plugin-fs');
@@ -574,9 +647,24 @@ async function syncAttachments(
                 const fileData = await readLocalFile(localPath);
                 const validation = await validateAttachmentForUpload(attachment, fileData.length);
                 if (!validation.valid) {
-                    logSyncWarning(`Attachment validation failed (${validation.error}) for ${attachment.title}`);
+                    const failure = handleAttachmentValidationFailure(attachment, validation.error);
+                    reportProgress(
+                        attachment.id,
+                        'upload',
+                        0,
+                        attachment.size ?? fileData.length,
+                        'failed',
+                        failure.message
+                    );
+                    if (failure.reachedLimit) {
+                        didMutate = didMutate || failure.mutated;
+                        logSyncWarning(`${failure.message}; marking attachment unrecoverable`);
+                    } else {
+                        logSyncWarning(failure.message);
+                    }
                     continue;
                 }
+                clearAttachmentValidationFailure(attachment.id);
                 reportProgress(attachment.id, 'upload', 0, fileData.length, 'active');
                 logSyncInfo('WebDAV attachment upload start', {
                     id: attachment.id,
@@ -697,16 +785,17 @@ async function syncAttachments(
             }
             const status = getErrorStatus(error);
             if (status === 404 && attachment.cloudKey) {
-                attachment.cloudKey = undefined;
                 webdavDownloadBackoff.deleteEntry(attachment.id);
-                didMutate = true;
+                if (markAttachmentUnrecoverable(attachment)) {
+                    didMutate = true;
+                }
                 logSyncInfo('Cleared missing WebDAV cloud key after 404', {
                     id: attachment.id,
                 });
             } else {
                 setWebdavDownloadBackoff(attachment.id, error);
             }
-            if (attachment.localStatus !== 'missing') {
+            if (status !== 404 && attachment.localStatus !== 'missing') {
                 attachment.localStatus = 'missing';
                 didMutate = true;
             }
@@ -725,67 +814,8 @@ async function syncAttachments(
     if (abortedByRateLimit) {
         logSyncWarning('WebDAV attachment sync aborted due to rate limiting');
     }
-    if (didMutate) {
-        appData.tasks = workingData.tasks;
-        appData.projects = workingData.projects;
-        appData.sections = workingData.sections;
-        appData.areas = workingData.areas;
-        appData.settings = workingData.settings;
-    }
     logSyncInfo('WebDAV attachment sync done', { mutated: didMutate ? 'true' : 'false' });
-    return didMutate;
-}
-
-type BasicRemoteAttachmentSyncOptions = {
-    attachmentsById: Map<string, Attachment>;
-    localFileExists: (path: string) => Promise<boolean>;
-    onUpload: (attachment: Attachment, localPath: string) => Promise<boolean>;
-    onUploadError: (attachment: Attachment, error: unknown) => void;
-    onDownload: (attachment: Attachment) => Promise<boolean>;
-    onDownloadError: (attachment: Attachment, error: unknown) => void;
-};
-
-async function syncBasicRemoteAttachments(options: BasicRemoteAttachmentSyncOptions): Promise<boolean> {
-    let didMutate = false;
-
-    for (const attachment of options.attachmentsById.values()) {
-        if (attachment.kind !== 'file') continue;
-        if (attachment.deletedAt) continue;
-
-        const rawUri = attachment.uri ? stripFileScheme(attachment.uri) : '';
-        const isHttp = /^https?:\/\//i.test(rawUri);
-        const localPath = isHttp ? '' : rawUri;
-        const hasLocalPath = Boolean(localPath);
-        const existsLocally = hasLocalPath ? await options.localFileExists(localPath) : false;
-
-        const nextStatus: Attachment['localStatus'] = existsLocally ? 'available' : 'missing';
-        if (attachment.localStatus !== nextStatus) {
-            attachment.localStatus = nextStatus;
-            didMutate = true;
-        }
-
-        if (!attachment.cloudKey && existsLocally) {
-            try {
-                if (await options.onUpload(attachment, localPath)) {
-                    didMutate = true;
-                }
-            } catch (error) {
-                options.onUploadError(attachment, error);
-            }
-        }
-
-        if (attachment.cloudKey && !existsLocally) {
-            try {
-                if (await options.onDownload(attachment)) {
-                    didMutate = true;
-                }
-            } catch (error) {
-                options.onDownloadError(attachment, error);
-            }
-        }
-    }
-
-    return didMutate;
+    return didMutate ? workingData : null;
 }
 
 async function syncCloudAttachments(
@@ -839,9 +869,23 @@ async function syncCloudAttachments(
             const fileData = await readLocalFile(localPath);
             const validation = await validateAttachmentForUpload(attachment, fileData.length);
             if (!validation.valid) {
-                logSyncWarning(`Attachment validation failed (${validation.error}) for ${attachment.title}`);
-                return false;
+                const failure = handleAttachmentValidationFailure(attachment, validation.error);
+                reportProgress(
+                    attachment.id,
+                    'upload',
+                    0,
+                    attachment.size ?? fileData.length,
+                    'failed',
+                    failure.message
+                );
+                if (failure.reachedLimit) {
+                    logSyncWarning(`${failure.message}; marking attachment unrecoverable`);
+                } else {
+                    logSyncWarning(failure.message);
+                }
+                return failure.mutated;
             }
+            clearAttachmentValidationFailure(attachment.id);
             reportProgress(attachment.id, 'upload', 0, fileData.length, 'active');
             await withRetry(
                 () => cloudPutFile(
@@ -893,6 +937,171 @@ async function syncCloudAttachments(
                     onProgress: (loaded, total) => reportProgress(attachment.id, 'download', loaded, total, 'active'),
                 })
             );
+            const bytes = fileData instanceof ArrayBuffer ? new Uint8Array(fileData) : new Uint8Array(fileData as ArrayBuffer);
+            await validateAttachmentHash(attachment, bytes);
+            const filename = attachment.cloudKey.split('/').pop() || `${attachment.id}${extractExtension(attachment.uri)}`;
+            const relativePath = `${LOCAL_ATTACHMENTS_DIR}/${filename}`;
+            await writeAttachmentFileSafely(relativePath, bytes, {
+                baseDir: BaseDirectory.Data,
+                writeFile,
+                rename,
+                remove,
+            });
+            const absolutePath = await join(baseDataDir, relativePath);
+            attachment.uri = absolutePath;
+            const statusChanged = attachment.localStatus !== 'available';
+            if (statusChanged) {
+                attachment.localStatus = 'available';
+            }
+            reportProgress(attachment.id, 'download', bytes.length, bytes.length, 'completed');
+            return statusChanged;
+        },
+        onDownloadError: (attachment, error) => {
+            reportProgress(
+                attachment.id,
+                'download',
+                0,
+                attachment.size ?? 0,
+                'failed',
+                error instanceof Error ? error.message : String(error)
+            );
+            logSyncWarning(`Failed to download attachment ${attachment.title}`, error);
+        },
+    });
+}
+
+async function syncDropboxAttachments(
+    appData: AppData,
+    resolveAccessToken: (forceRefresh?: boolean) => Promise<string>
+): Promise<boolean> {
+    if (!isTauriRuntimeEnv()) return false;
+
+    const fetcher = await getTauriFetch();
+    const dropboxFetcher = fetcher ?? fetch;
+    const { BaseDirectory, exists, mkdir, readFile, writeFile, rename, remove } = await import('@tauri-apps/plugin-fs');
+    const { dataDir, join } = await import('@tauri-apps/api/path');
+
+    try {
+        await mkdir(LOCAL_ATTACHMENTS_DIR, { baseDir: BaseDirectory.Data, recursive: true });
+    } catch (error) {
+        logSyncWarning('Failed to ensure local attachments directory', error);
+    }
+
+    const baseDataDir = await dataDir();
+    const attachmentsById = collectAttachmentsById(appData);
+
+    const withDropboxAccess = async <T>(operation: (accessToken: string) => Promise<T>): Promise<T> => {
+        try {
+            const token = await resolveAccessToken(false);
+            return await operation(token);
+        } catch (error) {
+            if (error instanceof DropboxUnauthorizedError) {
+                const refreshed = await resolveAccessToken(true);
+                return await operation(refreshed);
+            }
+            throw error;
+        }
+    };
+
+    const readLocalFile = async (path: string): Promise<Uint8Array> => {
+        if (path.startsWith(baseDataDir)) {
+            const relative = path.slice(baseDataDir.length).replace(/^[\\/]/, '');
+            return await readFile(relative, { baseDir: BaseDirectory.Data });
+        }
+        return await readFile(path);
+    };
+
+    const localFileExists = async (path: string): Promise<boolean> => {
+        try {
+            if (path.startsWith(baseDataDir)) {
+                const relative = path.slice(baseDataDir.length).replace(/^[\\/]/, '');
+                return await exists(relative, { baseDir: BaseDirectory.Data });
+            }
+            return await exists(path);
+        } catch (error) {
+            logSyncWarning('Failed to check attachment file', error);
+            return false;
+        }
+    };
+
+    return await syncBasicRemoteAttachments({
+        attachmentsById,
+        localFileExists,
+        onUpload: async (attachment, localPath) => {
+            const cloudKey = buildCloudKey(attachment);
+            const fileData = await readLocalFile(localPath);
+            const validation = await validateAttachmentForUpload(attachment, fileData.length);
+            if (!validation.valid) {
+                const failure = handleAttachmentValidationFailure(attachment, validation.error);
+                reportProgress(
+                    attachment.id,
+                    'upload',
+                    0,
+                    attachment.size ?? fileData.length,
+                    'failed',
+                    failure.message
+                );
+                if (failure.reachedLimit) {
+                    logSyncWarning(`${failure.message}; marking attachment unrecoverable`);
+                } else {
+                    logSyncWarning(failure.message);
+                }
+                return failure.mutated;
+            }
+            clearAttachmentValidationFailure(attachment.id);
+            reportProgress(attachment.id, 'upload', 0, fileData.length, 'active');
+            await withRetry(
+                () => withDropboxAccess((token) =>
+                    uploadDropboxFile(
+                        token,
+                        cloudKey,
+                        fileData,
+                        attachment.mimeType || 'application/octet-stream',
+                        dropboxFetcher
+                    )
+                ),
+                {
+                    ...CLOUD_ATTACHMENT_RETRY_OPTIONS,
+                    onRetry: (error, attempt, delayMs) => {
+                        logSyncInfo('Retrying Dropbox attachment upload', {
+                            id: attachment.id,
+                            attempt: String(attempt + 1),
+                            delayMs: String(delayMs),
+                            error: sanitizeLogMessage(error instanceof Error ? error.message : String(error)),
+                        });
+                    },
+                }
+            );
+            attachment.cloudKey = cloudKey;
+            attachment.localStatus = 'available';
+            reportProgress(attachment.id, 'upload', fileData.length, fileData.length, 'completed');
+            return true;
+        },
+        onUploadError: (attachment, error) => {
+            reportProgress(
+                attachment.id,
+                'upload',
+                0,
+                attachment.size ?? 0,
+                'failed',
+                error instanceof Error ? error.message : String(error)
+            );
+            logSyncWarning(`Failed to upload attachment ${attachment.title}`, error);
+        },
+        onDownload: async (attachment) => {
+            if (!attachment.cloudKey) return false;
+            reportProgress(attachment.id, 'download', 0, attachment.size ?? 0, 'active');
+            let fileData: ArrayBuffer;
+            try {
+                fileData = await withRetry(() =>
+                    withDropboxAccess((token) => downloadDropboxFile(token, attachment.cloudKey!, dropboxFetcher))
+                );
+            } catch (error) {
+                if (error instanceof DropboxFileNotFoundError) {
+                    return markAttachmentUnrecoverable(attachment);
+                }
+                throw error;
+            }
             const bytes = fileData instanceof ArrayBuffer ? new Uint8Array(fileData) : new Uint8Array(fileData as ArrayBuffer);
             await validateAttachmentHash(attachment, bytes);
             const filename = attachment.cloudKey.split('/').pop() || `${attachment.id}${extractExtension(attachment.uri)}`;
@@ -982,9 +1191,15 @@ async function syncFileAttachments(
             const fileData = await readLocalFile(localPath);
             const validation = await validateAttachmentForUpload(attachment, fileData.length, FILE_BACKEND_VALIDATION_CONFIG);
             if (!validation.valid) {
-                logSyncWarning(`Attachment validation failed (${validation.error}) for ${attachment.title}`);
-                return false;
+                const failure = handleAttachmentValidationFailure(attachment, validation.error);
+                if (failure.reachedLimit) {
+                    logSyncWarning(`${failure.message}; marking attachment unrecoverable`);
+                } else {
+                    logSyncWarning(failure.message);
+                }
+                return failure.mutated;
             }
+            clearAttachmentValidationFailure(attachment.id);
             const targetPath = await join(baseSyncDir, cloudKey);
             await writeFileSafelyAbsolute(targetPath, fileData, {
                 writeFile,
@@ -1050,8 +1265,11 @@ export class SyncService {
     private static fileWatcherBackend: SyncBackend | null = null;
     private static lastWrittenHash: string | null = null;
     private static lastObservedHash: string | null = null;
+    private static lastSuccessfulSyncLocalChangeAt = 0;
     private static ignoreFileEventsUntil = 0;
     private static externalSyncTimer: ReturnType<typeof setTimeout> | null = null;
+    private static pendingExternalSyncChange: ExternalSyncChange | null = null;
+    private static externalSyncChangeListeners = new Set<(change: ExternalSyncChange | null) => void>();
 
     static getSyncStatus() {
         return SyncService.syncStatus;
@@ -1061,6 +1279,25 @@ export class SyncService {
         SyncService.syncListeners.add(listener);
         listener(SyncService.syncStatus);
         return () => SyncService.syncListeners.delete(listener);
+    }
+
+    static getPendingExternalSyncChange(): ExternalSyncChange | null {
+        return SyncService.pendingExternalSyncChange;
+    }
+
+    static subscribeExternalSyncChange(listener: (change: ExternalSyncChange | null) => void): () => void {
+        SyncService.externalSyncChangeListeners.add(listener);
+        listener(SyncService.pendingExternalSyncChange);
+        return () => SyncService.externalSyncChangeListeners.delete(listener);
+    }
+
+    private static notifyExternalSyncChange() {
+        SyncService.externalSyncChangeListeners.forEach((listener) => listener(SyncService.pendingExternalSyncChange));
+    }
+
+    private static setPendingExternalSyncChange(change: ExternalSyncChange | null) {
+        SyncService.pendingExternalSyncChange = change;
+        SyncService.notifyExternalSyncChange();
     }
 
     static async resetForTests(): Promise<void> {
@@ -1081,9 +1318,13 @@ export class SyncService {
         SyncService.fileWatcherBackend = null;
         SyncService.lastWrittenHash = null;
         SyncService.lastObservedHash = null;
+        SyncService.lastSuccessfulSyncLocalChangeAt = 0;
         SyncService.ignoreFileEventsUntil = 0;
         SyncService.externalSyncTimer = null;
+        SyncService.pendingExternalSyncChange = null;
+        SyncService.externalSyncChangeListeners.clear();
         webdavDownloadBackoff.clear();
+        clearAttachmentValidationFailures();
     }
 
     private static updateSyncStatus(partial: Partial<typeof SyncService.syncStatus>) {
@@ -1135,6 +1376,22 @@ export class SyncService {
             sessionStorage.removeItem(CLOUD_TOKEN_KEY);
         }
         localStorage.removeItem(CLOUD_TOKEN_KEY);
+    }
+
+    private static getCloudProviderLocal(): CloudProvider {
+        return normalizeCloudProvider(localStorage.getItem(CLOUD_PROVIDER_KEY));
+    }
+
+    private static setCloudProviderLocal(provider: CloudProvider) {
+        localStorage.setItem(CLOUD_PROVIDER_KEY, normalizeCloudProvider(provider));
+    }
+
+    private static getDropboxAppKeyLocal(): string {
+        return DEFAULT_DROPBOX_APP_KEY;
+    }
+
+    private static setDropboxAppKeyLocal(_value: string) {
+        // Dropbox app key is provided via build env (VITE_DROPBOX_APP_KEY).
     }
 
     private static async maybeMigrateLegacyLocalStorageToConfig() {
@@ -1269,6 +1526,104 @@ export class SyncService {
         }
     }
 
+    static async getCloudProvider(): Promise<CloudProvider> {
+        return SyncService.getCloudProviderLocal();
+    }
+
+    static async setCloudProvider(provider: CloudProvider): Promise<void> {
+        SyncService.setCloudProviderLocal(provider);
+    }
+
+    static async getDropboxAppKey(): Promise<string> {
+        return SyncService.getDropboxAppKeyLocal();
+    }
+
+    static async setDropboxAppKey(value: string): Promise<void> {
+        SyncService.setDropboxAppKeyLocal(value);
+    }
+
+    static async getDropboxRedirectUri(): Promise<string> {
+        if (!isTauriRuntimeEnv()) return DROPBOX_REDIRECT_URI_FALLBACK;
+        try {
+            return await tauriInvoke<string>('get_dropbox_redirect_uri');
+        } catch {
+            return DROPBOX_REDIRECT_URI_FALLBACK;
+        }
+    }
+
+    static async isDropboxConnected(clientId: string): Promise<boolean> {
+        const normalized = clientId.trim();
+        if (!normalized) return false;
+        if (!isTauriRuntimeEnv()) return false;
+        try {
+            return await tauriInvoke<boolean>('is_dropbox_connected', { clientId: normalized });
+        } catch (error) {
+            reportError('Failed to check Dropbox connection status', error);
+            return false;
+        }
+    }
+
+    static async connectDropbox(clientId: string): Promise<void> {
+        const normalized = clientId.trim();
+        if (!normalized) {
+            throw new Error('Dropbox app key is required');
+        }
+        if (!isTauriRuntimeEnv()) {
+            throw new Error('Dropbox sync is only available in the desktop app.');
+        }
+        await tauriInvoke('connect_dropbox', { clientId: normalized });
+    }
+
+    static async disconnectDropbox(clientId: string): Promise<void> {
+        const normalized = clientId.trim();
+        if (!normalized) {
+            throw new Error('Dropbox app key is required');
+        }
+        if (!isTauriRuntimeEnv()) {
+            throw new Error('Dropbox sync is only available in the desktop app.');
+        }
+        await tauriInvoke('disconnect_dropbox', { clientId: normalized });
+    }
+
+    static async getDropboxAccessToken(clientId: string, options?: { forceRefresh?: boolean }): Promise<string> {
+        const normalized = clientId.trim();
+        if (!normalized) {
+            throw new Error('Dropbox app key is required');
+        }
+        if (!isTauriRuntimeEnv()) {
+            throw new Error('Dropbox sync is only available in the desktop app.');
+        }
+        return await tauriInvoke<string>('get_dropbox_access_token', {
+            clientId: normalized,
+            forceRefresh: options?.forceRefresh === true,
+        });
+    }
+
+    static async testDropboxConnection(clientId: string): Promise<void> {
+        const normalized = clientId.trim();
+        if (!normalized) {
+            throw new Error('Dropbox app key is required');
+        }
+        const fetcher = await getTauriFetch();
+        const runTest = async (forceRefresh: boolean) => {
+            const accessToken = await SyncService.getDropboxAccessToken(normalized, { forceRefresh });
+            await withTimeout(
+                testDropboxAccess(accessToken, fetcher ?? fetch),
+                DROPBOX_TEST_TIMEOUT_MS,
+                'Dropbox connection test timed out. Please try again.'
+            );
+        };
+        try {
+            await runTest(false);
+        } catch (error) {
+            if (error instanceof DropboxUnauthorizedError) {
+                await runTest(true);
+                return;
+            }
+            throw error;
+        }
+    }
+
     /**
      * Get the currently configured sync path from the backend
      */
@@ -1285,8 +1640,8 @@ export class SyncService {
     /**
      * Set the sync path in the backend
      */
-    static async setSyncPath(path: string): Promise<{ success: boolean; path: string }> {
-        if (!isTauriRuntimeEnv()) return { success: false, path: '' };
+    static async setSyncPath(path: string): Promise<{ success: boolean; path: string; error?: string }> {
+        if (!isTauriRuntimeEnv()) return { success: false, path: '', error: 'Desktop runtime is required for file sync.' };
         try {
             const result = await tauriInvoke<{ success: boolean; path: string }>('set_sync_path', { syncPath: path });
             if (result?.success) {
@@ -1295,7 +1650,8 @@ export class SyncService {
             return result;
         } catch (error) {
             reportError('Failed to set sync path', error);
-            return { success: false, path: '' };
+            const message = error instanceof Error ? error.message : String(error);
+            return { success: false, path: '', error: message };
         }
     }
 
@@ -1303,6 +1659,71 @@ export class SyncService {
         const hash = await hashString(toStableJson(data));
         SyncService.lastWrittenHash = hash;
         SyncService.ignoreFileEventsUntil = Date.now() + 2000;
+    }
+
+    private static hasPendingLocalChangesForExternalSync(): boolean {
+        const state = useTaskStore.getState();
+        if (!state.settings?.lastSyncAt) return false;
+        if (state.lastDataChangeAt <= 0) return false;
+        return state.lastDataChangeAt > SyncService.lastSuccessfulSyncLocalChangeAt;
+    }
+
+    static async resolveExternalSyncChange(
+        resolution: ExternalSyncChangeResolution
+    ): Promise<{ success: boolean; stats?: MergeStats; error?: string }> {
+        if (!isTauriRuntimeEnv()) return { success: false, error: 'Desktop runtime is required.' };
+        const backend = await SyncService.getSyncBackend();
+        if (backend !== 'file') return { success: false, error: 'External file conflict handling is only available for file sync.' };
+
+        const pendingChange = SyncService.pendingExternalSyncChange;
+        SyncService.setPendingExternalSyncChange(null);
+
+        try {
+            if (resolution === 'merge') {
+                return await SyncService.performSync();
+            }
+
+            if (resolution === 'keep-local') {
+                await flushPendingSave();
+                const localData = await injectExternalCalendars(await readLocalDataForSync());
+                const sanitized = sanitizeAppDataForRemote(localData);
+                await SyncService.markSyncWrite(sanitized);
+                await tauriInvoke('write_sync_file', { data: sanitized });
+                return await SyncService.performSync();
+            }
+
+            await flushPendingSave();
+            const externalData = normalizeAppData(await tauriInvoke<AppData>('read_sync_file'));
+            await tauriInvoke('save_data', { data: externalData });
+            await useTaskStore.getState().fetchData({ silent: true });
+            const now = new Date().toISOString();
+            const nextHistory = appendSyncHistory(useTaskStore.getState().settings, {
+                at: now,
+                status: 'success',
+                backend: 'file',
+                type: 'pull',
+                conflicts: 0,
+                conflictIds: [],
+                maxClockSkewMs: 0,
+                timestampAdjustments: 0,
+                details: 'external_override',
+            });
+            await useTaskStore.getState().updateSettings({
+                lastSyncAt: now,
+                lastSyncStatus: 'success',
+                lastSyncError: undefined,
+                lastSyncHistory: nextHistory,
+            });
+            SyncService.lastSuccessfulSyncLocalChangeAt = useTaskStore.getState().lastDataChangeAt;
+            if (pendingChange?.incomingHash) {
+                SyncService.lastObservedHash = pendingChange.incomingHash;
+            }
+            return { success: true };
+        } catch (error) {
+            SyncService.setPendingExternalSyncChange(pendingChange);
+            const message = error instanceof Error ? error.message : String(error);
+            return { success: false, error: message };
+        }
     }
 
     private static async handleFileChange(paths: string[]) {
@@ -1324,11 +1745,47 @@ export class SyncService {
             }
             SyncService.lastObservedHash = hash;
 
+            if (SyncService.hasPendingLocalChangesForExternalSync()) {
+                if (SyncService.externalSyncTimer) {
+                    clearTimeout(SyncService.externalSyncTimer);
+                    SyncService.externalSyncTimer = null;
+                }
+                const localState = useTaskStore.getState();
+                const syncPath = SyncService.fileWatcherPath ?? await SyncService.getSyncPath();
+                const pending = SyncService.pendingExternalSyncChange;
+                if (!pending || pending.incomingHash !== hash) {
+                    SyncService.setPendingExternalSyncChange({
+                        at: new Date().toISOString(),
+                        incomingHash: hash,
+                        syncPath,
+                        hasLocalChanges: true,
+                        localChangeAt: localState.lastDataChangeAt,
+                        lastSyncAt: localState.settings?.lastSyncAt,
+                    });
+                }
+                return;
+            }
+
             if (SyncService.externalSyncTimer) {
                 clearTimeout(SyncService.externalSyncTimer);
             }
             SyncService.externalSyncTimer = setTimeout(() => {
-                SyncService.performSync().catch((error) => reportError('Sync failed', error));
+                SyncService.performSync()
+                    .then((result) => {
+                        if (result.success) {
+                            SyncService.setPendingExternalSyncChange(null);
+                            const conflicts = (result.stats?.tasks.conflicts || 0) + (result.stats?.projects.conflicts || 0);
+                            const message = conflicts > 0
+                                ? `Data updated from sync (${conflicts} conflict${conflicts === 1 ? '' : 's'} resolved).`
+                                : 'Data updated from sync.';
+                            try {
+                                useUiStore.getState().showToast(message, 'info', 5000);
+                            } catch {
+                                // UI store may be unavailable during bootstrap/tests.
+                            }
+                        }
+                    })
+                    .catch((error) => reportError('Sync failed', error));
             }, 750);
         } catch (error) {
             logSyncWarning('Failed to process external sync change', error);
@@ -1399,6 +1856,7 @@ export class SyncService {
         SyncService.fileWatcherStop = null;
         SyncService.fileWatcherPath = null;
         SyncService.fileWatcherBackend = null;
+        SyncService.setPendingExternalSyncChange(null);
     }
 
     static async cleanupAttachmentsNow(): Promise<void> {
@@ -1408,6 +1866,28 @@ export class SyncService {
         const cleaned = await cleanupOrphanedAttachments(data, backend);
         await tauriInvoke('save_data', { data: cleaned });
         await useTaskStore.getState().fetchData({ silent: true });
+    }
+
+    static async listDataSnapshots(): Promise<string[]> {
+        if (!isTauriRuntimeEnv()) return [];
+        try {
+            return await tauriInvoke<string[]>('list_data_snapshots');
+        } catch (error) {
+            reportError('Failed to list snapshots', error);
+            return [];
+        }
+    }
+
+    static async restoreDataSnapshot(snapshotFileName: string): Promise<{ success: boolean; error?: string }> {
+        if (!isTauriRuntimeEnv()) return { success: false, error: 'Desktop runtime is required.' };
+        try {
+            await tauriInvoke<boolean>('restore_data_snapshot', { snapshotFileName });
+            await useTaskStore.getState().fetchData({ silent: true });
+            return { success: true };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return { success: false, error: message };
+        }
     }
 
     /**
@@ -1423,11 +1903,26 @@ export class SyncService {
             SyncService.updateSyncStatus({ queued: true });
             return SyncService.syncInFlight;
         }
-
+        // Consume any queued follow-up token only when this cycle has actually started.
+        SyncService.syncQueued = false;
+        let inFlightSettled = false;
+        let resolveInFlight: ((value: { success: boolean; stats?: MergeStats; error?: string }) => void) | null = null;
+        const inFlightPromise = new Promise<{ success: boolean; stats?: MergeStats; error?: string }>((resolve) => {
+            resolveInFlight = resolve;
+        });
+        const settleInFlight = (value: { success: boolean; stats?: MergeStats; error?: string }) => {
+            if (inFlightSettled) return;
+            inFlightSettled = true;
+            resolveInFlight?.(value);
+        };
+        SyncService.syncInFlight = inFlightPromise;
         let step = 'init';
         let backend: SyncBackend = 'off';
         let syncUrl: string | undefined;
         let localSnapshotChangeAt = 0;
+        let networkWentOffline = false;
+        let removeNetworkListener: (() => void) | null = null;
+        const requestAbortController = new AbortController();
 
         SyncService.updateSyncStatus({
             inFlight: true,
@@ -1443,6 +1938,18 @@ export class SyncService {
         };
 
         const runSync = async (): Promise<{ success: boolean; stats?: MergeStats; error?: string }> => {
+            const createFetchWithAbort = (baseFetch: typeof fetch): typeof fetch =>
+                createAbortableFetch(baseFetch, { baseSignal: requestAbortController.signal });
+            const ensureNetworkStillAvailable = () => {
+                if (backend !== 'cloud' && backend !== 'webdav') return;
+                if (
+                    networkWentOffline
+                    || (typeof navigator !== 'undefined' && navigator.onLine === false)
+                ) {
+                    requestAbortController.abort();
+                    throw new Error('Sync paused: offline state detected');
+                }
+            };
             // 1. Flush pending writes so disk reflects the latest state
             setStep('flush');
             await flushPendingSave();
@@ -1453,18 +1960,67 @@ export class SyncService {
             if (backend === 'off') {
                 return { success: true };
             }
-            if (
-                (backend === 'cloud' || backend === 'webdav')
-                && typeof navigator !== 'undefined'
-                && navigator.onLine === false
-            ) {
+            if ((backend === 'cloud' || backend === 'webdav') && typeof window !== 'undefined') {
+                const handleOffline = () => {
+                    networkWentOffline = true;
+                    requestAbortController.abort();
+                };
+                window.addEventListener('offline', handleOffline);
+                removeNetworkListener = () => {
+                    window.removeEventListener('offline', handleOffline);
+                    removeNetworkListener = null;
+                };
+            }
+            if (isTauriRuntimeEnv()) {
+                setStep('snapshot');
+                try {
+                    await tauriInvoke<string>('create_data_snapshot');
+                } catch (error) {
+                    logSyncWarning('Failed to create pre-sync snapshot', error);
+                }
+            }
+            if ((backend === 'cloud' || backend === 'webdav') && typeof navigator !== 'undefined' && navigator.onLine === false) {
                 throw new Error('Offline: network connection is unavailable for remote sync.');
             }
             const webdavConfig = backend === 'webdav' ? await SyncService.getWebDavConfig() : null;
-            const cloudConfig = backend === 'cloud' ? await SyncService.getCloudConfig() : null;
+            const cloudProvider = backend === 'cloud' ? await SyncService.getCloudProvider() : 'selfhosted';
+            const cloudConfig = backend === 'cloud' && cloudProvider === 'selfhosted'
+                ? await SyncService.getCloudConfig()
+                : null;
+            const dropboxAppKey = backend === 'cloud' && cloudProvider === 'dropbox'
+                ? (await SyncService.getDropboxAppKey()).trim()
+                : '';
+            if (backend === 'cloud' && cloudProvider === 'dropbox' && !dropboxAppKey) {
+                throw new Error('Dropbox app key is not configured');
+            }
+            let dropboxDataRev: string | null = null;
+            let cachedDropboxAccessToken: string | null = null;
+            const resolveDropboxAccessToken = async (forceRefresh = false): Promise<string> => {
+                if (!dropboxAppKey) {
+                    throw new Error('Dropbox app key is not configured');
+                }
+                if (!cachedDropboxAccessToken || forceRefresh) {
+                    cachedDropboxAccessToken = await SyncService.getDropboxAccessToken(dropboxAppKey, { forceRefresh });
+                }
+                return cachedDropboxAccessToken;
+            };
+            const runDropboxWithRetry = async <T>(operation: (token: string) => Promise<T>): Promise<T> => {
+                try {
+                    const token = await resolveDropboxAccessToken(false);
+                    return await operation(token);
+                } catch (error) {
+                    if (error instanceof DropboxUnauthorizedError) {
+                        const refreshed = await resolveDropboxAccessToken(true);
+                        return await operation(refreshed);
+                    }
+                    throw error;
+                }
+            };
             const syncPath = backend === 'file' ? await SyncService.getSyncPath() : '';
             const fileBaseDir = backend === 'file' ? getFileSyncDir(syncPath, SYNC_FILE_NAME, LEGACY_SYNC_FILE_NAME) : '';
             let preSyncedLocalData: AppData | null = null;
+            let remoteDataForCompare: AppData | null = null;
+            let webdavRemoteCorrupted = false;
             const ensureLocalSnapshotFresh = () => {
                 if (useTaskStore.getState().lastDataChangeAt > localSnapshotChangeAt) {
                     SyncService.syncQueued = true;
@@ -1480,18 +2036,26 @@ export class SyncService {
                     const localData = await readLocalDataForSync();
                     let preMutated = false;
                     if (backend === 'webdav' && webdavConfig?.url) {
+                        ensureNetworkStillAvailable();
                         const baseUrl = getBaseSyncUrl(webdavConfig.url);
-                        preMutated = await syncAttachments(localData, webdavConfig, baseUrl);
+                        const syncedData = await syncAttachments(localData, webdavConfig, baseUrl);
+                        preMutated = syncedData !== null;
+                        if (syncedData) {
+                            preSyncedLocalData = syncedData;
+                        }
                     } else if (backend === 'file' && fileBaseDir) {
                         preMutated = await syncFileAttachments(localData, fileBaseDir);
-                    } else if (backend === 'cloud' && cloudConfig?.url) {
+                    } else if (backend === 'cloud' && cloudProvider === 'selfhosted' && cloudConfig?.url) {
+                        ensureNetworkStillAvailable();
                         const baseUrl = getCloudBaseUrl(cloudConfig.url);
                         preMutated = await syncCloudAttachments(localData, cloudConfig, baseUrl);
+                    } else if (backend === 'cloud' && cloudProvider === 'dropbox') {
+                        ensureNetworkStillAvailable();
+                        preMutated = await syncDropboxAttachments(localData, resolveDropboxAccessToken);
                     }
                     if (preMutated) {
                         ensureLocalSnapshotFresh();
-                        await tauriInvoke('save_data', { data: localData });
-                        preSyncedLocalData = localData;
+                        preSyncedLocalData = preSyncedLocalData ?? localData;
                     }
                 } catch (error) {
                     if (error instanceof LocalSyncAbort) {
@@ -1500,6 +2064,146 @@ export class SyncService {
                     logSyncWarning('Attachment pre-sync warning', error);
                 }
             }
+
+            const readRemoteDataByBackend = async (): Promise<AppData | null> => {
+                ensureNetworkStillAvailable();
+                if (backend === 'webdav') {
+                    try {
+                        if (isTauriRuntimeEnv()) {
+                            if (!webdavConfig?.url) {
+                                throw new Error('WebDAV URL not configured');
+                            }
+                            syncUrl = webdavConfig.url;
+                            const data = await withRetry(
+                                () => tauriInvoke<AppData>('webdav_get_json'),
+                                WEBDAV_READ_RETRY_OPTIONS,
+                            );
+                            webdavRemoteCorrupted = false;
+                            remoteDataForCompare = data ?? null;
+                            return data;
+                        }
+                        if (!webdavConfig?.url) {
+                            throw new Error('WebDAV URL not configured');
+                        }
+                        const normalizedUrl = normalizeWebdavUrl(webdavConfig.url);
+                        syncUrl = normalizedUrl;
+                        const fetcher = createFetchWithAbort((await getTauriFetch()) ?? fetch);
+                        const data = await withRetry(
+                            () => webdavGetJson<AppData>(normalizedUrl, {
+                                username: webdavConfig.username,
+                                password: webdavConfig.password || '',
+                                fetcher,
+                            }),
+                            WEBDAV_READ_RETRY_OPTIONS,
+                        );
+                        webdavRemoteCorrupted = false;
+                        remoteDataForCompare = data ?? null;
+                        return data;
+                    } catch (error) {
+                        if (isWebdavInvalidJsonError(error)) {
+                            webdavRemoteCorrupted = true;
+                            remoteDataForCompare = null;
+                            logSyncWarning('WebDAV remote data.json appears corrupted; treating as missing for repair write', error);
+                            return null;
+                        }
+                        throw error;
+                    }
+                }
+                if (backend === 'cloud') {
+                    if (cloudProvider === 'selfhosted') {
+                        if (!cloudConfig?.url) {
+                            throw new Error('Self-hosted URL not configured');
+                        }
+                        const normalizedUrl = normalizeCloudUrl(cloudConfig.url);
+                        syncUrl = normalizedUrl;
+                        const fetcher = createFetchWithAbort((await getTauriFetch()) ?? fetch);
+                        const data = await cloudGetJson<AppData>(normalizedUrl, { token: cloudConfig.token, fetcher });
+                        remoteDataForCompare = data ?? null;
+                        return data;
+                    }
+                    if (!dropboxAppKey) {
+                        throw new Error('Dropbox app key is not configured');
+                    }
+                    syncUrl = 'dropbox:///Apps/Mindwtr/data.json';
+                    const fetcher = createFetchWithAbort((await getTauriFetch()) ?? fetch);
+                    const remote = await runDropboxWithRetry((token) =>
+                        downloadDropboxAppData(token, fetcher)
+                    );
+                    dropboxDataRev = remote.rev;
+                    remoteDataForCompare = remote.data ?? null;
+                    return remote.data;
+                }
+                if (!isTauriRuntimeEnv()) {
+                    throw new Error('File sync is not available in the web app.');
+                }
+                const data = await tauriInvoke<AppData>('read_sync_file');
+                remoteDataForCompare = data ?? null;
+                return data;
+            };
+
+            const writeRemoteDataByBackend = async (data: AppData): Promise<void> => {
+                ensureNetworkStillAvailable();
+                assertNoPendingAttachmentUploads(data);
+                const sanitized = sanitizeAppDataForRemote(data);
+                const remoteSanitized = remoteDataForCompare
+                    ? sanitizeAppDataForRemote(remoteDataForCompare)
+                    : null;
+                if (remoteSanitized && areSyncPayloadsEqual(remoteSanitized, sanitized)) {
+                    return;
+                }
+                if (backend === 'webdav') {
+                    if (isTauriRuntimeEnv()) {
+                        if (webdavRemoteCorrupted) {
+                            logSyncInfo('Repairing corrupted WebDAV data.json with current merged data');
+                        }
+                        await tauriInvoke('webdav_put_json', { data: sanitized });
+                        remoteDataForCompare = sanitized;
+                        webdavRemoteCorrupted = false;
+                        return;
+                    }
+                    const { url, username, password } = await SyncService.getWebDavConfig();
+                    const normalizedUrl = normalizeWebdavUrl(url);
+                    const fetcher = createFetchWithAbort((await getTauriFetch()) ?? fetch);
+                    if (webdavRemoteCorrupted) {
+                        logSyncInfo('Repairing corrupted WebDAV data.json with current merged data');
+                    }
+                    await webdavPutJson(normalizedUrl, sanitized, { username, password: password || '', fetcher });
+                    remoteDataForCompare = sanitized;
+                    webdavRemoteCorrupted = false;
+                    return;
+                }
+                if (backend === 'cloud') {
+                    if (cloudProvider === 'selfhosted') {
+                        const { url, token } = await SyncService.getCloudConfig();
+                        const normalizedUrl = normalizeCloudUrl(url);
+                        const fetcher = createFetchWithAbort((await getTauriFetch()) ?? fetch);
+                        await cloudPutJson(normalizedUrl, sanitized, { token, fetcher });
+                        remoteDataForCompare = sanitized;
+                        return;
+                    }
+                    if (!dropboxAppKey) {
+                        throw new Error('Dropbox app key is not configured');
+                    }
+                    const fetcher = createFetchWithAbort((await getTauriFetch()) ?? fetch);
+                    try {
+                        const uploaded = await runDropboxWithRetry((token) =>
+                            uploadDropboxAppData(token, sanitized, dropboxDataRev, fetcher)
+                        );
+                        dropboxDataRev = uploaded.rev;
+                        remoteDataForCompare = sanitized;
+                        return;
+                    } catch (error) {
+                        if (error instanceof DropboxConflictError) {
+                            throw new Error('Dropbox changed during sync. Please run Sync again.');
+                        }
+                        throw error;
+                    }
+                }
+                await SyncService.markSyncWrite(sanitized);
+                await tauriInvoke('write_sync_file', { data: sanitized });
+                remoteDataForCompare = sanitized;
+            };
+
             const syncResult = await performSyncCycle({
                 readLocal: async () => {
                     const inMemorySnapshot = getInMemoryAppDataSnapshot();
@@ -1510,45 +2214,7 @@ export class SyncService {
                     localSnapshotChangeAt = useTaskStore.getState().lastDataChangeAt;
                     return data;
                 },
-                readRemote: async () => {
-                    if (backend === 'webdav') {
-                        if (isTauriRuntimeEnv()) {
-                            if (!webdavConfig?.url) {
-                                throw new Error('WebDAV URL not configured');
-                            }
-                            syncUrl = webdavConfig.url;
-                            const data = await tauriInvoke<AppData>('webdav_get_json');
-                            return data;
-                        }
-                        if (!webdavConfig?.url) {
-                            throw new Error('WebDAV URL not configured');
-                        }
-                        const normalizedUrl = normalizeWebdavUrl(webdavConfig.url);
-                        syncUrl = normalizedUrl;
-                        const fetcher = await getTauriFetch();
-                        const data = await webdavGetJson<AppData>(normalizedUrl, {
-                            username: webdavConfig.username,
-                            password: webdavConfig.password || '',
-                            fetcher,
-                        });
-                        return data;
-                    }
-                    if (backend === 'cloud') {
-                        if (!cloudConfig?.url) {
-                            throw new Error('Self-hosted URL not configured');
-                        }
-                        const normalizedUrl = normalizeCloudUrl(cloudConfig.url);
-                        syncUrl = normalizedUrl;
-                        const fetcher = await getTauriFetch();
-                        const data = await cloudGetJson<AppData>(normalizedUrl, { token: cloudConfig.token, fetcher });
-                        return data;
-                    }
-                    if (!isTauriRuntimeEnv()) {
-                        throw new Error('File sync is not available in the web app.');
-                    }
-                    const data = await tauriInvoke<AppData>('read_sync_file');
-                    return data;
-                },
+                readRemote: readRemoteDataByBackend,
                 writeLocal: async (data) => {
                     ensureLocalSnapshotFresh();
                     if (isTauriRuntimeEnv()) {
@@ -1559,30 +2225,14 @@ export class SyncService {
                 },
                 writeRemote: async (data) => {
                     ensureLocalSnapshotFresh();
-                    const sanitized = sanitizeAppDataForRemote(data);
-                    if (backend === 'webdav') {
-                        if (isTauriRuntimeEnv()) {
-                            await tauriInvoke('webdav_put_json', { data: sanitized });
-                            return;
-                        }
-                        const { url, username, password } = await SyncService.getWebDavConfig();
-                        const normalizedUrl = normalizeWebdavUrl(url);
-                        const fetcher = await getTauriFetch();
-                        await webdavPutJson(normalizedUrl, sanitized, { username, password: password || '', fetcher });
-                        return;
-                    }
-                    if (backend === 'cloud') {
-                        const { url, token } = await SyncService.getCloudConfig();
-                        const normalizedUrl = normalizeCloudUrl(url);
-                        const fetcher = await getTauriFetch();
-                        await cloudPutJson(normalizedUrl, sanitized, { token, fetcher });
-                        return;
-                    }
-                    await SyncService.markSyncWrite(sanitized);
-                    await tauriInvoke('write_sync_file', { data: sanitized });
+                    await writeRemoteDataByBackend(data);
                 },
                 onStep: (next) => {
                     setStep(next);
+                },
+                historyContext: {
+                    backend,
+                    type: 'merge',
                 },
             });
             const stats = syncResult.stats;
@@ -1629,13 +2279,14 @@ export class SyncService {
                 try {
                     ensureLocalSnapshotFresh();
                     if (backend === 'webdav') {
+                        ensureNetworkStillAvailable();
                         const config = await SyncService.getWebDavConfig();
                         const baseUrl = config.url ? getBaseSyncUrl(config.url) : '';
                         if (baseUrl) {
                             const candidateData = cloneAppData(mergedData);
-                            const mutated = await syncAttachments(candidateData, config, baseUrl);
-                            if (mutated) {
-                                mergedData = candidateData;
+                            const syncedData = await syncAttachments(candidateData, config, baseUrl);
+                            if (syncedData) {
+                                mergedData = syncedData;
                                 await tauriInvoke('save_data', { data: mergedData });
                             }
                         }
@@ -1649,11 +2300,21 @@ export class SyncService {
                             }
                         }
                     } else if (backend === 'cloud') {
-                        const config = cloudConfig ?? await SyncService.getCloudConfig();
-                        const baseUrl = config.url ? getCloudBaseUrl(config.url) : '';
-                        if (baseUrl) {
+                        ensureNetworkStillAvailable();
+                        if (cloudProvider === 'selfhosted') {
+                            const config = cloudConfig ?? await SyncService.getCloudConfig();
+                            const baseUrl = config.url ? getCloudBaseUrl(config.url) : '';
+                            if (baseUrl) {
+                                const candidateData = cloneAppData(mergedData);
+                                const mutated = await syncCloudAttachments(candidateData, config, baseUrl);
+                                if (mutated) {
+                                    mergedData = candidateData;
+                                    await tauriInvoke('save_data', { data: mergedData });
+                                }
+                            }
+                        } else if (cloudProvider === 'dropbox') {
                             const candidateData = cloneAppData(mergedData);
-                            const mutated = await syncCloudAttachments(candidateData, config, baseUrl);
+                            const mutated = await syncDropboxAttachments(candidateData, resolveDropboxAccessToken);
                             if (mutated) {
                                 mergedData = candidateData;
                                 await tauriInvoke('save_data', { data: mergedData });
@@ -1670,9 +2331,10 @@ export class SyncService {
 
             await cleanupAttachmentTempFiles();
 
-            if (isTauriRuntimeEnv() && shouldRunAttachmentCleanup(mergedData.settings.attachments?.lastCleanupAt)) {
+            if (isTauriRuntimeEnv() && shouldRunAttachmentCleanup(mergedData.settings.attachments?.lastCleanupAt, CLEANUP_INTERVAL_MS)) {
                 setStep('attachments_cleanup');
                 ensureLocalSnapshotFresh();
+                ensureNetworkStillAvailable();
                 mergedData = await cleanupOrphanedAttachments(mergedData, backend);
                 await tauriInvoke('save_data', { data: mergedData });
             }
@@ -1693,6 +2355,8 @@ export class SyncService {
             } catch (error) {
                 logSyncWarning('Failed to persist sync status', error);
             }
+            SyncService.lastSuccessfulSyncLocalChangeAt = useTaskStore.getState().lastDataChangeAt;
+            SyncService.setPendingExternalSyncChange(null);
 
             useTaskStore.getState().setError(null);
             return { success: true, stats };
@@ -1714,10 +2378,13 @@ export class SyncService {
             const nextHistory = appendSyncHistory(useTaskStore.getState().settings, {
                 at: now,
                 status: 'error',
+                backend,
+                type: 'merge',
                 conflicts: 0,
                 conflictIds: [],
                 maxClockSkewMs: 0,
                 timestampAdjustments: 0,
+                details: step,
                 error: `${safeMessage}${logHint}`,
             });
             useTaskStore.getState().setError(`${safeMessage}${logHint}`);
@@ -1735,8 +2402,16 @@ export class SyncService {
             return { success: false, error: `${safeMessage}${logHint}` };
         });
 
-        SyncService.syncInFlight = resultPromise;
         const result = await resultPromise;
+        try {
+            const releaseNetworkListener = removeNetworkListener as (() => void) | null;
+            removeNetworkListener = null;
+            if (typeof releaseNetworkListener === 'function') {
+                releaseNetworkListener();
+            }
+        } catch (error) {
+            logSyncWarning('Failed to unsubscribe network listener after sync', error);
+        }
         SyncService.syncInFlight = null;
         SyncService.updateSyncStatus({
             inFlight: false,
@@ -1747,7 +2422,6 @@ export class SyncService {
         });
 
         if (SyncService.syncQueued) {
-            SyncService.syncQueued = false;
             void SyncService.performSync()
                 .then((queuedResult) => {
                     if (!queuedResult.success) {
@@ -1759,6 +2433,7 @@ export class SyncService {
                 });
         }
 
+        settleInFlight(result);
         return result;
     }
 }
@@ -1777,5 +2452,14 @@ export const __syncServiceTestUtils = {
     },
     clearWebdavDownloadBackoff() {
         webdavDownloadBackoff.clear();
+    },
+    clearAttachmentValidationFailures() {
+        clearAttachmentValidationFailures();
+    },
+    simulateAttachmentValidationFailure(attachment: Attachment, error?: string) {
+        return handleAttachmentValidationFailure(attachment, error);
+    },
+    getAttachmentValidationFailureAttempts(attachmentId: string) {
+        return getAttachmentValidationFailureAttempts(attachmentId);
     },
 };

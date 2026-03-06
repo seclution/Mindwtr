@@ -158,7 +158,7 @@ export const styles = StyleSheet.create({
         borderBottomColor: '#f0f0f0',
     },
     checkboxTouch: {
-        padding: 4,
+        padding: 8,
         minWidth: 44,
         minHeight: 44,
         alignItems: 'center',
@@ -506,6 +506,40 @@ export const styles = StyleSheet.create({
         alignItems: 'center',
         padding: 20,
     },
+    previewOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'rgba(0,0,0,0.8)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    previewCard: {
+        width: '100%',
+        maxWidth: 520,
+        borderRadius: 12,
+        borderWidth: 1,
+        overflow: 'hidden',
+    },
+    previewHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: '#334155',
+    },
+    previewTitle: {
+        flex: 1,
+        fontSize: 14,
+        fontWeight: '600',
+        marginRight: 8,
+    },
+    previewImage: {
+        width: '100%',
+        height: 360,
+        backgroundColor: '#000',
+    },
     modalCard: {
         width: '100%',
         maxWidth: 420,
@@ -520,6 +554,11 @@ export const styles = StyleSheet.create({
     },
     modalLabel: {
         fontSize: 13,
+        fontWeight: '600',
+    },
+    validationText: {
+        marginTop: 8,
+        fontSize: 12,
         fontWeight: '600',
     },
     modalInput: {

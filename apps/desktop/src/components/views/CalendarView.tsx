@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { addMonths, endOfMonth, endOfWeek, format, getMonth, getYear, isSameDay, isSameMonth, isToday, setMonth, setYear, startOfMonth, startOfWeek, subMonths, eachDayOfInterval } from 'date-fns';
-import { shallow, parseIcs, safeParseDate, safeParseDueDate, type ExternalCalendarEvent, type ExternalCalendarSubscription, useTaskStore, type Task, isTaskInActiveProject } from '@mindwtr/core';
+import { shallow, safeParseDate, safeParseDueDate, type ExternalCalendarEvent, type ExternalCalendarSubscription, useTaskStore, type Task, isTaskInActiveProject } from '@mindwtr/core';
 import { useLanguage } from '../../contexts/language-context';
-import { isTauriRuntime } from '../../lib/runtime';
-import { ExternalCalendarService } from '../../lib/external-calendar-service';
 import { cn } from '../../lib/utils';
 import { reportError } from '../../lib/report-error';
 import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
 import { checkBudget } from '../../config/performanceBudgets';
 import { TaskItem } from '../TaskItem';
 import { resolveAreaFilter, taskMatchesAreaFilter } from '../../lib/area-filter';
+import { fetchExternalCalendarEvents } from '../../lib/external-calendar-events';
 
 const dayKey = (date: Date) => format(date, 'yyyy-MM-dd');
 
@@ -46,6 +45,7 @@ export function CalendarView() {
     const today = new Date();
     const [currentMonth, setCurrentMonth] = useState(today);
     const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+    const [viewFilterQuery, setViewFilterQuery] = useState('');
     const [scheduleQuery, setScheduleQuery] = useState('');
     const [scheduleError, setScheduleError] = useState<string | null>(null);
     const [externalCalendars, setExternalCalendars] = useState<ExternalCalendarSubscription[]>([]);
@@ -55,6 +55,7 @@ export function CalendarView() {
     const [editingTimeTaskId, setEditingTimeTaskId] = useState<string | null>(null);
     const [editingTimeValue, setEditingTimeValue] = useState<string>('');
     const calendarBodyRef = useRef<HTMLDivElement | null>(null);
+    const normalizedViewFilterQuery = viewFilterQuery.trim().toLowerCase();
 
     useEffect(() => {
         if (!perf.enabled) return;
@@ -76,6 +77,7 @@ export function CalendarView() {
         if (task.status === 'done' || task.status === 'archived' || task.status === 'reference') return false;
         if (!isTaskInActiveProject(task, projectMap)) return false;
         if (!taskMatchesAreaFilter(task, resolvedAreaFilter, projectMap, areaById)) return false;
+        if (normalizedViewFilterQuery && !task.title.toLowerCase().includes(normalizedViewFilterQuery)) return false;
         return true;
     };
 
@@ -92,7 +94,7 @@ export function CalendarView() {
             else map.set(key, [task]);
         }
         return map;
-    }, [tasks, projectMap, resolvedAreaFilter, areaById]);
+    }, [tasks, projectMap, resolvedAreaFilter, areaById, normalizedViewFilterQuery]);
 
     const scheduledByDay = useMemo(() => {
         const map = new Map<string, Task[]>();
@@ -107,7 +109,7 @@ export function CalendarView() {
             else map.set(key, [task]);
         }
         return map;
-    }, [tasks, projectMap, resolvedAreaFilter, areaById]);
+    }, [tasks, projectMap, resolvedAreaFilter, areaById, normalizedViewFilterQuery]);
 
     const getDeadlinesForDay = (date: Date) => deadlinesByDay.get(dayKey(date)) ?? [];
     const getScheduledForDay = (date: Date) => scheduledByDay.get(dayKey(date)) ?? [];
@@ -117,6 +119,10 @@ export function CalendarView() {
     const openTaskFromCalendar = useCallback((task: Task) => {
         setOpenTaskId(task.id);
     }, []);
+    const markTaskDone = useCallback((taskId: string) => {
+        updateTask(taskId, { status: 'done', isFocusedToday: false })
+            .catch((error) => reportError('Failed to mark task done', error));
+    }, [updateTask]);
 
     const getExternalEventsForDay = (date: Date) => {
         const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
@@ -254,59 +260,11 @@ export function CalendarView() {
             setIsExternalLoading(true);
             setExternalError(null);
             try {
-                const calendars = await ExternalCalendarService.getCalendars();
-                if (cancelled) return;
-                setExternalCalendars(calendars);
-
-                const enabled = calendars.filter((c) => c.enabled);
-                if (enabled.length === 0) {
-                    setExternalEvents([]);
-                    return;
-                }
-
                 const rangeStart = startOfMonth(currentMonth);
                 const rangeEnd = endOfMonth(currentMonth);
-
-                const fetchTextWithTimeout = async (url: string, timeoutMs: number) => {
-                    if (isTauriRuntime()) {
-                        const mod: any = await import('@tauri-apps/plugin-http');
-                        const tauriFetch: any = mod.fetch;
-                        const controller = new AbortController();
-                        const timeout = setTimeout(() => controller.abort(), timeoutMs);
-                        try {
-                            const res = await tauriFetch(url, { method: 'GET', signal: controller.signal });
-                            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                            return await res.text();
-                        } finally {
-                            clearTimeout(timeout);
-                        }
-                    }
-
-                    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-                    const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
-                    try {
-                        const res = await fetch(url, controller ? { signal: controller.signal } : undefined);
-                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                        return await res.text();
-                    } finally {
-                        if (timeout) clearTimeout(timeout);
-                    }
-                };
-
-                const results = await Promise.allSettled(
-                    enabled.map(async (calendar) => {
-                        const text = await fetchTextWithTimeout(calendar.url, 15_000);
-                        return parseIcs(text, { sourceId: calendar.id, rangeStart, rangeEnd });
-                    })
-                );
-
-                const events: ExternalCalendarEvent[] = [];
-                for (const result of results) {
-                    if (result.status !== 'fulfilled') continue;
-                    events.push(...result.value);
-                }
-
+                const { calendars, events } = await fetchExternalCalendarEvents(rangeStart, rangeEnd);
                 if (cancelled) return;
+                setExternalCalendars(calendars);
                 setExternalEvents(events);
             } catch (error) {
                 if (cancelled) return;
@@ -339,7 +297,7 @@ export function CalendarView() {
                 return task.title.toLowerCase().includes(query);
             })
             .slice(0, 12);
-    }, [tasks, scheduleQuery, selectedDate, projectMap]);
+    }, [tasks, scheduleQuery, selectedDate, projectMap, normalizedViewFilterQuery]);
 
     useEffect(() => {
         if (!selectedDate) return;
@@ -504,6 +462,16 @@ export function CalendarView() {
                     </button>
                 </div>
             </header>
+            <div className="mb-4">
+                <input
+                    type="text"
+                    data-view-filter-input
+                    placeholder={t('common.search')}
+                    value={viewFilterQuery}
+                    onChange={(event) => setViewFilterQuery(event.target.value)}
+                    className="w-full text-sm px-3 py-2 rounded border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+            </div>
 
             <div ref={calendarBodyRef} className="space-y-6">
                 <div className="grid grid-cols-7 gap-px bg-border rounded-lg overflow-hidden shadow-sm">
@@ -561,6 +529,8 @@ export function CalendarView() {
                                     {deadlines.map(task => (
                                         <div
                                             key={task.id}
+                                            data-task-id={task.id}
+                                            data-task-edit-trigger
                                             className="text-xs truncate px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20"
                                             title={task.title}
                                             onClick={(e) => {
@@ -574,6 +544,8 @@ export function CalendarView() {
                                     {scheduled.slice(0, 2).map(task => (
                                         <div
                                             key={task.id}
+                                            data-task-id={task.id}
+                                            data-task-edit-trigger
                                             className="text-xs truncate px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
                                             title={task.title}
                                             onClick={(e) => {
@@ -684,14 +656,24 @@ export function CalendarView() {
                             <div className="text-xs font-medium text-muted-foreground">{t('calendar.deadline')}</div>
                             <div className="space-y-1">
                                 {getDeadlinesForDay(selectedDate).map((task) => (
-                                    <button
-                                        key={task.id}
-                                        type="button"
-                                        onClick={() => openTaskFromCalendar(task)}
-                                        className="text-sm truncate text-left text-foreground hover:underline"
-                                    >
-                                        {task.title}
-                                    </button>
+                                    <div key={task.id} className="flex items-center justify-between gap-2">
+                                        <button
+                                            type="button"
+                                            data-task-id={task.id}
+                                            data-task-edit-trigger
+                                            onClick={() => openTaskFromCalendar(task)}
+                                            className="min-w-0 flex-1 text-sm truncate text-left text-foreground hover:underline"
+                                        >
+                                            {task.title}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => markTaskDone(task.id)}
+                                            className="text-xs px-2 py-1 rounded bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/25 dark:text-emerald-300"
+                                        >
+                                            {t('status.done')}
+                                        </button>
+                                    </div>
                                 ))}
                                 {getDeadlinesForDay(selectedDate).length === 0 && (
                                     <div className="text-sm text-muted-foreground">{t('calendar.noTasks')}</div>
@@ -712,6 +694,8 @@ export function CalendarView() {
                                         <div key={task.id} className="flex items-center justify-between gap-3">
                                             <button
                                                 type="button"
+                                                data-task-id={task.id}
+                                                data-task-edit-trigger
                                                 onClick={() => openTaskFromCalendar(task)}
                                                 className="min-w-0 text-sm truncate text-left text-foreground hover:underline"
                                             >
@@ -742,6 +726,12 @@ export function CalendarView() {
                                                     </>
                                                 ) : (
                                                     <>
+                                                        <button
+                                                            className="text-xs px-2 py-1 rounded bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/25 dark:text-emerald-300"
+                                                            onClick={() => markTaskDone(task.id)}
+                                                        >
+                                                            {t('status.done')}
+                                                        </button>
                                                         <button
                                                             className="text-xs px-2 py-1 rounded bg-muted hover:bg-muted/80"
                                                             onClick={() => beginEditScheduledTime(task.id)}

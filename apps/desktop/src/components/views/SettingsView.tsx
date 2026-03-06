@@ -10,7 +10,11 @@ import {
     Sparkles,
 } from 'lucide-react';
 import {
+    type DateFormatSetting,
+    normalizeDateFormatSetting,
+    resolveDateLocaleTag,
     DEFAULT_ANTHROPIC_THINKING_BUDGET,
+    flushPendingSave,
     safeFormatDate,
     useTaskStore,
     type AppData,
@@ -22,7 +26,19 @@ import { isFlatpakRuntime, isTauriRuntime } from '../../lib/runtime';
 import { reportError } from '../../lib/report-error';
 import { SyncService } from '../../lib/sync-service';
 import { clearLog, getLogPath } from '../../lib/app-log';
-import { checkForUpdates, type UpdateInfo, GITHUB_RELEASES_URL, MS_STORE_URL, verifyDownloadChecksum } from '../../lib/update-service';
+import {
+    APP_STORE_LISTING_URL,
+    checkForUpdates,
+    compareVersions,
+    HOMEBREW_CASK_URL,
+    normalizeInstallSource,
+    type UpdateInfo,
+    type InstallSource,
+    GITHUB_RELEASES_URL,
+    MS_STORE_URL,
+    verifyDownloadChecksum,
+    WINGET_PACKAGE_URL,
+} from '../../lib/update-service';
 import { labelFallback, labelKeyOverrides, type SettingsLabels } from './settings/labels';
 import { SettingsUpdateModal } from './settings/SettingsUpdateModal';
 import { SettingsSidebar } from './settings/SettingsSidebar';
@@ -32,11 +48,13 @@ import { useSyncSettings } from './settings/useSyncSettings';
 import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
 import { checkBudget } from '../../config/performanceBudgets';
 import { THEME_STORAGE_KEY, applyThemeMode, coerceDesktopThemeMode, mapSyncedThemeToDesktop, resolveNativeTheme, type DesktopThemeMode } from '../../lib/theme';
+import { type GlobalQuickAddShortcutSetting } from '../../lib/global-quick-add-shortcut';
 
 type ThemeMode = DesktopThemeMode;
 type DensityMode = 'comfortable' | 'compact';
 type SettingsPage = 'main' | 'gtd' | 'notifications' | 'sync' | 'calendar' | 'ai' | 'about';
 type LinuxDistroInfo = { id?: string; id_like?: string[] };
+type DateFormatUiSetting = Exclude<DateFormatSetting, 'ymd'>;
 
 const SettingsMainPage = lazy(() => import('./settings/SettingsMainPage').then((m) => ({ default: m.SettingsMainPage })));
 const SettingsGtdPage = lazy(() => import('./settings/SettingsGtdPage').then((m) => ({ default: m.SettingsGtdPage })));
@@ -53,7 +71,8 @@ const UPDATE_BADGE_INTERVAL_MS = 1000 * 60 * 60 * 24;
 
 const LANGUAGES: { id: Language; label: string; native: string }[] = [
     { id: 'en', label: 'English', native: 'English' },
-    { id: 'zh', label: 'Chinese', native: '中文' },
+    { id: 'zh', label: 'Chinese (Simplified)', native: '中文（简体）' },
+    { id: 'zh-Hant', label: 'Chinese (Traditional)', native: '中文（繁體）' },
     { id: 'es', label: 'Spanish', native: 'Español' },
     { id: 'hi', label: 'Hindi', native: 'हिन्दी' },
     { id: 'ar', label: 'Arabic', native: 'العربية' },
@@ -62,24 +81,12 @@ const LANGUAGES: { id: Language; label: string; native: string }[] = [
     { id: 'ja', label: 'Japanese', native: '日本語' },
     { id: 'fr', label: 'French', native: 'Français' },
     { id: 'pt', label: 'Portuguese', native: 'Português' },
+    { id: 'pl', label: 'Polish', native: 'Polski' },
+    { id: 'nl', label: 'Dutch', native: 'Nederlands' },
     { id: 'ko', label: 'Korean', native: '한국어' },
     { id: 'it', label: 'Italian', native: 'Italiano' },
     { id: 'tr', label: 'Turkish', native: 'Türkçe' },
 ];
-
-const compareVersions = (v1: string, v2: string): number => {
-    const clean1 = v1.replace(/^v/, '');
-    const clean2 = v2.replace(/^v/, '');
-    const parts1 = clean1.split('.').map(Number);
-    const parts2 = clean2.split('.').map(Number);
-    for (let i = 0; i < Math.max(parts1.length, parts2.length); i += 1) {
-        const p1 = parts1[i] || 0;
-        const p2 = parts2[i] || 0;
-        if (p1 > p2) return 1;
-        if (p1 < p2) return -1;
-    }
-    return 0;
-};
 
 const maskCalendarUrl = (url: string): string => {
     const trimmed = url.trim();
@@ -101,7 +108,13 @@ export function SettingsView() {
     const [page, setPage] = useState<SettingsPage>('main');
     const [themeMode, setThemeMode] = useState<ThemeMode>('system');
     const { language, setLanguage, t: translate } = useLanguage();
-    const { style: keybindingStyle, setStyle: setKeybindingStyle, openHelp } = useKeybindings();
+    const {
+        style: keybindingStyle,
+        setStyle: setKeybindingStyle,
+        quickAddShortcut: globalQuickAddShortcut,
+        setQuickAddShortcut: setGlobalQuickAddShortcut,
+        openHelp,
+    } = useKeybindings();
     const settings = useTaskStore((state) => state.settings) ?? ({} as AppData['settings']);
     const updateSettings = useTaskStore((state) => state.updateSettings);
     const isTauri = isTauriRuntime();
@@ -114,23 +127,26 @@ export function SettingsView() {
             return false;
         }
     }, [isTauri]);
-    const isWindows = useMemo(() => {
+    const isMac = useMemo(() => {
         if (!isTauri) return false;
         try {
-            return /win/i.test(navigator.userAgent);
+            return /mac/i.test(navigator.userAgent);
         } catch {
             return false;
         }
     }, [isTauri]);
-    const [windowsUpdateChannel, setWindowsUpdateChannel] = useState<'store' | 'direct' | 'unknown'>('unknown');
+    const [installSource, setInstallSource] = useState<InstallSource>('unknown');
     const windowDecorationsEnabled = settings?.window?.decorations !== false;
     const closeBehavior = settings?.window?.closeBehavior ?? 'ask';
     const trayVisible = settings?.window?.showTray !== false;
     const densityMode = (settings?.appearance?.density === 'compact' ? 'compact' : 'comfortable') as DensityMode;
+    const dateFormat = normalizeDateFormatSetting(settings?.dateFormat);
+    const dateFormatForUi: DateFormatUiSetting = dateFormat === 'ymd' ? 'system' : dateFormat;
     const [saved, setSaved] = useState(false);
     const [appVersion, setAppVersion] = useState('0.1.0');
     const [logPath, setLogPath] = useState('');
     const notificationsEnabled = settings?.notificationsEnabled !== false;
+    const undoNotificationsEnabled = settings?.undoNotificationsEnabled !== false;
     const reviewAtNotificationsEnabled = settings?.reviewAtNotificationsEnabled !== false;
     const dailyDigestMorningEnabled = settings?.dailyDigestMorningEnabled === true;
     const dailyDigestEveningEnabled = settings?.dailyDigestEveningEnabled === true;
@@ -173,34 +189,36 @@ export function SettingsView() {
     }, []);
 
     useEffect(() => {
-        if (!isTauri || !isWindows) {
-            setWindowsUpdateChannel('direct');
+        if (!isTauri) {
+            setInstallSource('github-release');
             return;
         }
         let cancelled = false;
         (async () => {
             try {
                 const { invoke } = await import('@tauri-apps/api/core');
-                const isStore = await invoke<boolean>('is_windows_store_install');
+                const rawSource = await invoke<string>('get_install_source');
+                const source = normalizeInstallSource(rawSource);
                 if (!cancelled) {
-                    setWindowsUpdateChannel(isStore ? 'store' : 'direct');
+                    setInstallSource(source);
                 }
             } catch (error) {
                 if (!cancelled) {
-                    setWindowsUpdateChannel('direct');
+                    setInstallSource('unknown');
                 }
-                reportError('Failed to detect Windows update channel', error);
+                reportError('Failed to detect install source', error);
             }
         })();
         return () => {
             cancelled = true;
         };
-    }, [isTauri, isWindows]);
+    }, [isTauri]);
 
     const {
         aiEnabled,
         aiProvider,
         aiModel,
+        aiBaseUrl,
         aiModelOptions,
         aiCopilotModel,
         aiCopilotOptions,
@@ -248,7 +266,7 @@ export function SettingsView() {
 
 
     const t = useMemo(() => {
-        const labelsFallback = language === 'zh' ? labelFallback.zh : labelFallback.en;
+        const labelsFallback = language === 'zh' || language === 'zh-Hant' ? labelFallback.zh : labelFallback.en;
         const result = {} as SettingsLabels;
         (Object.keys(labelFallback.en) as Array<keyof SettingsLabels>).forEach((key) => {
             const i18nKey = labelKeyOverrides[key] ?? `settings.${key}`;
@@ -317,17 +335,6 @@ export function SettingsView() {
 
     useEffect(() => {
         if (!isTauri || !appVersion || appVersion === 'web') return;
-        if (isWindows && windowsUpdateChannel === 'unknown') return;
-        if (isWindows && windowsUpdateChannel === 'store') {
-            setHasUpdateBadge(false);
-            try {
-                localStorage.setItem(UPDATE_BADGE_AVAILABLE_KEY, 'false');
-                localStorage.removeItem(UPDATE_BADGE_LATEST_KEY);
-            } catch (error) {
-                reportError('Failed to clear update badge state', error);
-            }
-            return;
-        }
         try {
             const storedAvailable = localStorage.getItem(UPDATE_BADGE_AVAILABLE_KEY);
             const storedLatest = localStorage.getItem(UPDATE_BADGE_LATEST_KEY);
@@ -343,12 +350,10 @@ export function SettingsView() {
         } catch (error) {
             reportError('Failed to read update badge state', error);
         }
-    }, [appVersion, isTauri, isWindows, windowsUpdateChannel]);
+    }, [appVersion, installSource, isTauri]);
 
     useEffect(() => {
         if (!isTauri || !appVersion || appVersion === 'web') return;
-        if (isWindows && windowsUpdateChannel === 'unknown') return;
-        if (isWindows && windowsUpdateChannel === 'store') return;
         let lastCheck = 0;
         try {
             lastCheck = Number(localStorage.getItem(UPDATE_BADGE_LAST_CHECK_KEY) || 0);
@@ -364,7 +369,7 @@ export function SettingsView() {
         let cancelled = false;
         (async () => {
             try {
-                const info = await checkForUpdates(appVersion);
+                const info = await checkForUpdates(appVersion, { installSource });
                 if (cancelled) return;
                 if (info.hasUpdate) {
                     persistUpdateBadge(true, info.latestVersion);
@@ -378,7 +383,7 @@ export function SettingsView() {
         return () => {
             cancelled = true;
         };
-    }, [appVersion, isTauri, isWindows, windowsUpdateChannel, persistUpdateBadge]);
+    }, [appVersion, installSource, isTauri, persistUpdateBadge]);
 
     useEffect(() => {
         if (!loggingEnabled) {
@@ -431,6 +436,12 @@ export function SettingsView() {
             .catch((error) => reportError('Failed to update week start', error));
     };
 
+    const saveDateFormatPreference = (value: DateFormatUiSetting) => {
+        updateSettings({ dateFormat: value })
+            .then(showSaved)
+            .catch((error) => reportError('Failed to update date format', error));
+    };
+
     const handleWindowDecorationsChange = useCallback((enabled: boolean) => {
         updateSettings({
             window: {
@@ -454,17 +465,19 @@ export function SettingsView() {
                 closeBehavior: behavior,
             },
         })
+            .then(() => flushPendingSave())
             .then(showSaved)
             .catch((error) => reportError('Failed to update close behavior', error));
     }, [settings?.window, showSaved, updateSettings]);
 
-    const handleTrayVisibleChange = useCallback(async (visible: boolean) => {
+    const handleTrayVisibleChange = useCallback((visible: boolean) => {
         updateSettings({
             window: {
                 ...(settings?.window ?? {}),
                 showTray: visible,
             },
         })
+            .then(() => flushPendingSave())
             .then(showSaved)
             .catch((error) => reportError('Failed to update tray visibility setting', error));
     }, [settings?.window, showSaved, updateSettings]);
@@ -473,6 +486,15 @@ export function SettingsView() {
         setKeybindingStyle(style);
         showSaved();
     };
+    const handleGlobalQuickAddShortcutChange = (shortcut: GlobalQuickAddShortcutSetting) => {
+        setGlobalQuickAddShortcut(shortcut);
+        showSaved();
+    };
+    const handleUndoNotificationsChange = useCallback((enabled: boolean) => {
+        updateSettings({ undoNotificationsEnabled: enabled })
+            .then(showSaved)
+            .catch((error) => reportError('Failed to update undo notifications setting', error));
+    }, [showSaved, updateSettings]);
 
     const openLink = async (url: string): Promise<boolean> => {
         const nextUrl = url.trim();
@@ -528,32 +550,12 @@ export function SettingsView() {
         setUpdateError(null);
         setUpdateNotice(null);
         try {
-            if (isWindows) {
-                let channel = windowsUpdateChannel;
-                if (channel === 'unknown' && isTauri) {
-                    try {
-                        const { invoke } = await import('@tauri-apps/api/core');
-                        const isStore = await invoke<boolean>('is_windows_store_install');
-                        channel = isStore ? 'store' : 'direct';
-                        setWindowsUpdateChannel(channel);
-                    } catch (error) {
-                        reportError('Failed to detect Windows update channel', error);
-                        channel = 'direct';
-                        setWindowsUpdateChannel('direct');
-                    }
-                }
-                if (channel === 'store') {
-                    await openLink(MS_STORE_URL);
-                    setUpdateNotice(t.storeUpdateHint);
-                    return;
-                }
-            }
             try {
                 localStorage.setItem(UPDATE_BADGE_LAST_CHECK_KEY, String(Date.now()));
             } catch (error) {
                 reportError('Failed to persist update check timestamp', error);
             }
-            const info = await checkForUpdates(appVersion);
+            const info = await checkForUpdates(appVersion, { installSource });
             if (!info || !info.hasUpdate) {
                 setUpdateNotice(t.upToDate);
                 persistUpdateBadge(false);
@@ -563,6 +565,11 @@ export function SettingsView() {
             persistUpdateBadge(true, info.latestVersion);
             if (info.platform === 'linux' && linuxFlavor === 'arch') {
                 setDownloadNotice(t.downloadAURHint);
+            } else if (
+                info.platform === 'macos'
+                && (installSource === 'direct' || installSource === 'github-release' || installSource === 'unknown')
+            ) {
+                setDownloadNotice('Recommended on macOS: brew update && brew upgrade --cask mindwtr');
             } else {
                 setDownloadNotice(null);
             }
@@ -578,6 +585,33 @@ export function SettingsView() {
 
     const handleDownloadUpdate = async () => {
         const targetUrl = preferredDownloadUrl;
+        if (installSource === 'microsoft-store') {
+            await openLink(MS_STORE_URL);
+            setDownloadNotice(t.storeUpdateHint);
+            return;
+        }
+        if (installSource === 'mac-app-store') {
+            const opened = await openLink(APP_STORE_LISTING_URL);
+            setDownloadNotice(opened ? 'Update via App Store.' : t.downloadFailed);
+            return;
+        }
+        if (installSource === 'homebrew') {
+            await openLink(HOMEBREW_CASK_URL);
+            setDownloadNotice('Update via Homebrew: brew update && brew upgrade --cask mindwtr');
+            return;
+        }
+        if (installSource === 'winget') {
+            await openLink(WINGET_PACKAGE_URL);
+            setDownloadNotice('Update via winget: winget upgrade --id dongdongbh.Mindwtr --exact');
+            return;
+        }
+        if (updateInfo?.platform === 'macos') {
+            const opened = await openLink(HOMEBREW_CASK_URL);
+            setDownloadNotice(opened
+                ? 'Recommended on macOS: brew update && brew upgrade --cask mindwtr'
+                : t.downloadFailed);
+            return;
+        }
         if (updateInfo?.platform === 'linux' && linuxFlavor === 'arch') {
             setDownloadNotice(getLinuxPostDownloadNotice());
             return;
@@ -623,7 +657,7 @@ export function SettingsView() {
 
     const attachmentsLastCleanupDisplay = useMemo(() => {
         if (!attachmentsLastCleanupAt) return '';
-        return safeFormatDate(attachmentsLastCleanupAt, 'MMM d, HH:mm');
+        return safeFormatDate(attachmentsLastCleanupAt, 'Pp');
     }, [attachmentsLastCleanupAt]);
     const anthropicThinkingOptions = [
         { value: DEFAULT_ANTHROPIC_THINKING_BUDGET || 1024, label: t.aiThinkingLow },
@@ -648,7 +682,13 @@ export function SettingsView() {
 
     const getLinuxPostDownloadNotice = useCallback((): string => {
         if (linuxFlavor === 'arch') {
-            return `${t.downloadAURHint}: yay -Syu mindwtr-bin / paru -Syu mindwtr-bin`;
+            if (installSource === 'aur-source') {
+                return `${t.downloadAURHint}: yay -Syu mindwtr / paru -Syu mindwtr`;
+            }
+            if (installSource === 'aur-bin') {
+                return `${t.downloadAURHint}: yay -Syu mindwtr-bin / paru -Syu mindwtr-bin`;
+            }
+            return `${t.downloadAURHint}: yay -Syu mindwtr / paru -Syu mindwtr`;
         }
         if (linuxFlavor === 'debian') {
             return `${t.linuxUpdateHint} APT repo update: sudo apt update && sudo apt install --only-upgrade mindwtr. Local file install: sudo apt install ./<downloaded-file>.deb`;
@@ -657,10 +697,22 @@ export function SettingsView() {
             return `${t.linuxUpdateHint} Repo update: sudo dnf upgrade mindwtr. Local file install: sudo dnf install ./<downloaded-file>.rpm`;
         }
         return `${t.linuxUpdateHint} AppImage tip: chmod +x <downloaded-file>.AppImage && ./<downloaded-file>.AppImage`;
-    }, [linuxFlavor, t.downloadAURHint, t.linuxUpdateHint]);
+    }, [installSource, linuxFlavor, t.downloadAURHint, t.linuxUpdateHint]);
 
     const recommendedDownload = useMemo(() => {
         if (!updateInfo) return null;
+        if (installSource === 'homebrew') {
+            return { label: 'Homebrew' };
+        }
+        if (installSource === 'winget') {
+            return { label: 'winget' };
+        }
+        if (installSource === 'mac-app-store') {
+            return { label: 'App Store' };
+        }
+        if (installSource === 'microsoft-store') {
+            return { label: 'Microsoft Store' };
+        }
         const assets = updateInfo.assets || [];
         const findAsset = (patterns: RegExp[]) => assets.find((asset) => patterns.some((pattern) => pattern.test(asset.name)));
 
@@ -670,8 +722,7 @@ export function SettingsView() {
         }
 
         if (updateInfo.platform === 'macos') {
-            const asset = findAsset([/\.dmg$/i, /\.app\.tar\.gz$/i]);
-            return asset ? { label: '.dmg', url: asset.url } : null;
+            return { label: 'Homebrew (recommended)', url: HOMEBREW_CASK_URL };
         }
 
         if (updateInfo.platform === 'linux') {
@@ -691,10 +742,13 @@ export function SettingsView() {
         }
 
         return null;
-    }, [updateInfo, linuxFlavor]);
+    }, [installSource, linuxFlavor, updateInfo]);
 
     const preferredDownloadUrl = useMemo(() => {
         if (!updateInfo) return null;
+        if (installSource === 'homebrew' || installSource === 'winget' || installSource === 'mac-app-store' || installSource === 'microsoft-store') {
+            return null;
+        }
         if (updateInfo.platform === 'linux') {
             if (linuxFlavor === 'arch') return null;
             if (linuxFlavor === 'debian' || linuxFlavor === 'rpm') {
@@ -702,10 +756,15 @@ export function SettingsView() {
             }
         }
         return recommendedDownload?.url ?? updateInfo.downloadUrl ?? updateInfo.releaseUrl ?? GITHUB_RELEASES_URL;
-    }, [updateInfo, linuxFlavor, recommendedDownload]);
+    }, [installSource, linuxFlavor, recommendedDownload, updateInfo]);
 
     const isArchLinuxUpdate = updateInfo?.platform === 'linux' && linuxFlavor === 'arch';
-    const canDownloadUpdate = Boolean(preferredDownloadUrl) && !isArchLinuxUpdate;
+    const canDownloadUpdate = useMemo(() => {
+        if (installSource === 'homebrew' || installSource === 'winget' || installSource === 'mac-app-store' || installSource === 'microsoft-store') {
+            return true;
+        }
+        return Boolean(preferredDownloadUrl) && !isArchLinuxUpdate;
+    }, [installSource, isArchLinuxUpdate, preferredDownloadUrl]);
 
     const lastSyncAt = settings?.lastSyncAt;
     const lastSyncStats = settings?.lastSyncStats ?? null;
@@ -717,22 +776,10 @@ export function SettingsView() {
     const weeklyReviewTime = settings?.weeklyReviewTime || '18:00';
     const weeklyReviewDay = Number.isFinite(settings?.weeklyReviewDay) ? settings?.weeklyReviewDay as number : 0;
     const weekStart = settings?.weekStart === 'monday' ? 'monday' : 'sunday';
-    const localeMap: Record<Language, string> = {
-        en: 'en-US',
-        zh: 'zh-CN',
-        es: 'es-ES',
-        hi: 'hi-IN',
-        ar: 'ar',
-        de: 'de-DE',
-        ru: 'ru-RU',
-        ja: 'ja-JP',
-        fr: 'fr-FR',
-        pt: 'pt-PT',
-        ko: 'ko-KR',
-        it: 'it-IT',
-        tr: 'tr-TR',
-    };
-    const locale = localeMap[language] ?? 'en-US';
+    const systemLocale = typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function'
+        ? Intl.DateTimeFormat().resolvedOptions().locale
+        : '';
+    const locale = resolveDateLocaleTag({ language, dateFormat, systemLocale });
     const weekdayOptions = useMemo(() => (
         Array.from({ length: 7 }, (_, i) => {
             const base = new Date(2021, 7, 1 + i);
@@ -767,7 +814,7 @@ export function SettingsView() {
         badge?: boolean;
         badgeLabel?: string;
     }>>(() => [
-        { id: 'main', icon: Monitor, label: t.general, keywords: [t.appearance, t.density, t.language, t.weekStart, t.keybindings, t.windowDecorations, t.closeBehavior, t.showTray, 'theme', 'dark mode', 'light mode'] },
+        { id: 'main', icon: Monitor, label: t.general, keywords: [t.appearance, t.density, t.language, t.weekStart, t.dateFormat, t.keybindings, t.windowDecorations, t.closeBehavior, t.showTray, 'theme', 'dark mode', 'light mode'] },
         { id: 'gtd', icon: ListChecks, label: t.gtd, keywords: ['auto-archive', 'priorities', 'time estimates', 'pomodoro', 'capture', 'inbox processing', '2-minute rule', 'task editor'] },
         { id: 'notifications', icon: Bell, label: t.notifications, keywords: ['review reminders', 'weekly review', 'daily digest', 'morning', 'evening'] },
         { id: 'sync', icon: Database, label: t.sync, keywords: ['file sync', 'WebDAV', 'cloud', 'sync now', 'attachments', 'diagnostics', 'logging'] },
@@ -797,12 +844,27 @@ export function SettingsView() {
         setCloudUrl,
         cloudToken,
         setCloudToken,
+        cloudProvider,
+        dropboxAppKey,
+        dropboxConfigured,
+        dropboxConnected,
+        dropboxBusy,
+        dropboxRedirectUri,
+        dropboxTestState,
+        snapshots,
+        isLoadingSnapshots,
+        isRestoringSnapshot,
         handleSaveSyncPath,
         handleChangeSyncLocation,
         handleSetSyncBackend,
         handleSaveWebDav,
         handleSaveCloud,
+        handleSetCloudProvider,
+        handleConnectDropbox,
+        handleDisconnectDropbox,
+        handleTestDropboxConnection,
         handleSync,
+        handleRestoreSnapshot,
     } = useSyncSettings({
         isTauri,
         showSaved,
@@ -821,12 +883,14 @@ export function SettingsView() {
             newCalendarName,
             newCalendarUrl,
             calendarError,
+            systemCalendarPermission,
             setNewCalendarName,
             setNewCalendarUrl,
             handleAddCalendar,
             handleToggleCalendar,
             handleRemoveCalendar,
-        } = useCalendarSettings({ showSaved, settings, updateSettings });
+            handleRequestSystemCalendarPermission,
+        } = useCalendarSettings({ showSaved, settings, updateSettings, isMac });
 
         return (
             <SettingsCalendarPage
@@ -835,11 +899,14 @@ export function SettingsView() {
                 newCalendarUrl={newCalendarUrl}
                 calendarError={calendarError}
                 externalCalendars={externalCalendars}
+                showSystemCalendarSection={isMac}
+                systemCalendarPermission={systemCalendarPermission}
                 onCalendarNameChange={setNewCalendarName}
                 onCalendarUrlChange={setNewCalendarUrl}
                 onAddCalendar={handleAddCalendar}
                 onToggleCalendar={handleToggleCalendar}
                 onRemoveCalendar={handleRemoveCalendar}
+                onRequestSystemCalendarPermission={handleRequestSystemCalendarPermission}
                 maskCalendarUrl={maskCalendarUrl}
             />
         );
@@ -858,8 +925,14 @@ export function SettingsView() {
                     onLanguageChange={saveLanguagePreference}
                     weekStart={weekStart}
                     onWeekStartChange={saveWeekStartPreference}
+                    dateFormat={dateFormatForUi}
+                    onDateFormatChange={saveDateFormatPreference}
                     keybindingStyle={keybindingStyle}
                     onKeybindingStyleChange={handleKeybindingStyleChange}
+                    globalQuickAddShortcut={globalQuickAddShortcut}
+                    onGlobalQuickAddShortcutChange={handleGlobalQuickAddShortcutChange}
+                    undoNotificationsEnabled={undoNotificationsEnabled}
+                    onUndoNotificationsChange={handleUndoNotificationsChange}
                     onOpenHelp={openHelp}
                     languages={LANGUAGES}
                     showWindowDecorations={isLinux}
@@ -895,6 +968,7 @@ export function SettingsView() {
                     aiEnabled={aiEnabled}
                     aiProvider={aiProvider}
                     aiModel={aiModel}
+                    aiBaseUrl={aiBaseUrl}
                     aiModelOptions={aiModelOptions}
                     aiCopilotModel={aiCopilotModel}
                     aiCopilotOptions={aiCopilotOptions}
@@ -978,9 +1052,20 @@ export function SettingsView() {
                     onSaveWebDav={handleSaveWebDav}
                     cloudUrl={cloudUrl}
                     cloudToken={cloudToken}
+                    cloudProvider={cloudProvider}
+                    dropboxAppKey={dropboxAppKey}
+                    dropboxConfigured={dropboxConfigured}
+                    dropboxConnected={dropboxConnected}
+                    dropboxBusy={dropboxBusy}
+                    dropboxRedirectUri={dropboxRedirectUri}
+                    dropboxTestState={dropboxTestState}
                     onCloudUrlChange={setCloudUrl}
                     onCloudTokenChange={setCloudToken}
+                    onCloudProviderChange={handleSetCloudProvider}
                     onSaveCloud={handleSaveCloud}
+                    onConnectDropbox={handleConnectDropbox}
+                    onDisconnectDropbox={handleDisconnectDropbox}
+                    onTestDropboxConnection={handleTestDropboxConnection}
                     onSyncNow={handleSync}
                     isSyncing={isSyncing}
                     syncQueued={syncQueued}
@@ -998,12 +1083,16 @@ export function SettingsView() {
                     attachmentsLastCleanupDisplay={attachmentsLastCleanupDisplay}
                     onRunAttachmentsCleanup={handleAttachmentsCleanup}
                     isCleaningAttachments={isCleaningAttachments}
+                    snapshots={snapshots}
+                    isLoadingSnapshots={isLoadingSnapshots}
+                    isRestoringSnapshot={isRestoringSnapshot}
+                    onRestoreSnapshot={handleRestoreSnapshot}
                 />
             );
         }
 
         if (page === 'about') {
-            const updateActionLabel = isWindows && windowsUpdateChannel === 'store'
+            const updateActionLabel = installSource === 'microsoft-store'
                 ? t.checkStoreUpdates
                 : t.checkForUpdates;
             return (
@@ -1026,17 +1115,18 @@ export function SettingsView() {
     return (
         <ErrorBoundary>
             <div className="h-full overflow-y-auto">
-            <div className="mx-auto max-w-6xl p-8">
-                <div className="grid grid-cols-12 gap-6">
+            <div className="h-full px-4 py-3">
+                <div className="mx-auto flex h-full w-full max-w-[calc(12rem+920px+1.5rem)] flex-col gap-6 lg:flex-row">
                     <SettingsSidebar
                         title={t.title}
                         subtitle={t.subtitle}
+                        searchPlaceholder={t.searchPlaceholder}
                         items={navItems}
                         activeId={page}
                         onSelect={(id) => setPage(id as SettingsPage)}
                     />
 
-                    <main className="col-span-12 lg:col-span-8 xl:col-span-9">
+                    <main className="min-w-0 flex-1 lg:max-w-[920px]">
                         <div className="space-y-6">
                             <header className="flex items-start justify-between gap-4">
                                 <div>

@@ -5,7 +5,7 @@
 import { Task, TaskStatus, TaskSortBy, Project } from './types';
 import { safeParseDueDate } from './date';
 import { TASK_STATUS_ORDER } from './task-status';
-import type { Language } from './i18n-types';
+import type { Language } from './i18n/i18n-types';
 
 /**
  * Status sorting order for task list display
@@ -44,6 +44,8 @@ const shouldIncrementPushCount = (oldDueDate?: string, newDueDate?: string): boo
     return newTime > oldTime;
 };
 
+const WAITING_FOR_LINE_REGEX = /^\s*waiting\s+for\s*[:：]\s*(.+?)\s*$/i;
+
 export function rescheduleTask(task: Task, newDueDate?: string): Task {
     const next: Task = { ...task, dueDate: newDueDate };
     if (shouldIncrementPushCount(task.dueDate, newDueDate)) {
@@ -52,6 +54,18 @@ export function rescheduleTask(task: Task, newDueDate?: string): Task {
         next.pushCount = task.pushCount;
     }
     return next;
+}
+
+export function extractWaitingPerson(description?: string): string | null {
+    if (!description) return null;
+    const lines = description.split(/\r?\n/);
+    for (const line of lines) {
+        const match = line.match(WAITING_FOR_LINE_REGEX);
+        if (!match) continue;
+        const person = match[1]?.trim();
+        if (person) return person;
+    }
+    return null;
 }
 
 /**
@@ -158,9 +172,10 @@ export function getTaskAgeDays(createdAt: string): number {
  */
 export function getTaskAgeLabel(createdAt: string, lang: Language = 'en'): string | null {
     const days = getTaskAgeDays(createdAt);
+    const isChinese = lang === 'zh' || lang === 'zh-Hant';
 
     if (days < 1) return null;
-    if (lang === 'zh') {
+    if (isChinese) {
         if (days === 1) return '1天前';
         if (days < 7) return `${days}天前`;
         if (days < 14) return '1周前';

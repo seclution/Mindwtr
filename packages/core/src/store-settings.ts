@@ -1,13 +1,15 @@
 import { safeParseDate } from './date';
 import { logWarn } from './logger';
 import { purgeExpiredTombstones } from './sync';
+import { markCoreStartupPhase, measureCoreStartupPhase } from './startup-profiler';
 import { normalizeTaskForLoad } from './task-status';
 import type { StorageAdapter } from './storage';
 import type { AppData, Area, Project, TaskEditorFieldId } from './types';
 import type { DerivedCache, TaskStore } from './store-types';
 import {
     buildSaveSnapshot,
-    computeDerivedState,
+    computeProjectDerivedState,
+    computeTaskDerivedState,
     ensureDeviceId,
     normalizeAiSettingsForSync,
     normalizeRevision,
@@ -20,7 +22,7 @@ const MIGRATION_VERSION = 1;
 // Run auto-archive at most twice a day to keep background work bounded.
 const AUTO_ARCHIVE_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const TOMBSTONE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const TASK_EDITOR_DEFAULTS_VERSION = 3;
+const TASK_EDITOR_DEFAULTS_VERSION = 4;
 const TASK_EDITOR_ALWAYS_VISIBLE: TaskEditorFieldId[] = ['status', 'project', 'description', 'checklist', 'contexts'];
 const STORAGE_TIMEOUT_MS = 15_000;
 
@@ -40,21 +42,38 @@ function shouldPromoteScheduledTask(task: AppData['tasks'][number], nowMs: numbe
     return false;
 }
 
+const normalizeAreaForLoad = (area: Area, fallbackOrder: number, nowIso: string): Area => {
+    const createdAt = typeof area?.createdAt === 'string' && area.createdAt.trim().length > 0
+        ? area.createdAt
+        : (typeof area?.updatedAt === 'string' && area.updatedAt.trim().length > 0 ? area.updatedAt : nowIso);
+    const updatedAt = typeof area?.updatedAt === 'string' && area.updatedAt.trim().length > 0
+        ? area.updatedAt
+        : createdAt;
+    return {
+        ...area,
+        order: Number.isFinite(area?.order) ? area.order : fallbackOrder,
+        createdAt,
+        updatedAt,
+    };
+};
+
 type SettingsActionContext = {
     set: (partial: Partial<TaskStore> | ((state: TaskStore) => Partial<TaskStore> | TaskStore)) => void;
     get: () => TaskStore;
     debouncedSave: (data: AppData, onError?: (msg: string) => void) => void;
     flushPendingSave: () => Promise<void>;
+    hasPendingSaveWork: () => boolean;
     getStorage: () => StorageAdapter;
 };
 
-type SettingsActions = Pick<TaskStore, 'fetchData' | 'updateSettings' | 'getDerivedState' | 'setHighlightTask'>;
+type SettingsActions = Pick<TaskStore, 'fetchData' | 'updateSettings' | 'persistSnapshot' | 'getDerivedState' | 'setHighlightTask'>;
 
 export const createSettingsActions = ({
     set,
     get,
     debouncedSave,
     flushPendingSave,
+    hasPendingSaveWork,
     getStorage,
 }: SettingsActionContext): SettingsActions => ({
     /**
@@ -62,7 +81,14 @@ export const createSettingsActions = ({
      * Stores full data internally, filters for UI display.
      */
     fetchData: async (options) => {
-        await flushPendingSave();
+        markCoreStartupPhase('core.fetch_data.start');
+        if (hasPendingSaveWork()) {
+            await measureCoreStartupPhase('core.fetch_data.flush_pending_save', async () => {
+                await flushPendingSave();
+            });
+        } else {
+            markCoreStartupPhase('core.fetch_data.flush_pending_save.skipped', { reason: 'no_pending_work' });
+        }
         if (options?.silent) {
             set({ error: null });
         } else {
@@ -81,15 +107,33 @@ export const createSettingsActions = ({
         }
         try {
             const storage = getStorage();
-            const data = await withTimeout(storage.getData(), STORAGE_TIMEOUT_MS, 'Storage request timed out');
+            const data = await measureCoreStartupPhase('core.fetch_data.storage_get_data', async () =>
+                withTimeout(storage.getData(), STORAGE_TIMEOUT_MS, 'Storage request timed out')
+            );
+            const postProcessStartedAt = Date.now();
+            markCoreStartupPhase('core.fetch_data.post_process:start');
             const rawTasks = Array.isArray(data.tasks) ? data.tasks : [];
             const rawProjects = Array.isArray(data.projects) ? data.projects : [];
             const rawSettings = data.settings && typeof data.settings === 'object' ? data.settings : {};
             const rawSections = Array.isArray((data as AppData).sections) ? (data as AppData).sections : [];
-            const rawAreas = Array.isArray((data as AppData).areas) ? (data as AppData).areas : [];
             // Store ALL data including tombstones for persistence
             const nowIso = new Date().toISOString();
+            let didNormalizeAreaTimestamps = false;
+            const sourceAreas = Array.isArray((data as AppData).areas) ? (data as AppData).areas : [];
+            const rawAreas = sourceAreas.map((area, index) => {
+                const normalized = normalizeAreaForLoad(area, index, nowIso);
+                if (normalized.createdAt !== area.createdAt || normalized.updatedAt !== area.updatedAt || normalized.order !== area.order) {
+                    didNormalizeAreaTimestamps = true;
+                }
+                return normalized;
+            });
             const settings = stripSensitiveSettings(rawSettings as AppData['settings']);
+            const isFreshInstall =
+                rawTasks.length === 0 &&
+                rawProjects.length === 0 &&
+                rawSections.length === 0 &&
+                rawAreas.length === 0 &&
+                Object.keys(settings).length === 0;
             const migrations = settings.migrations ?? {};
             const shouldRunMigrations = (migrations.version ?? 0) < MIGRATION_VERSION;
             const lastAutoArchiveAt = safeParseDate(migrations.lastAutoArchiveAt)?.getTime() ?? 0;
@@ -120,20 +164,27 @@ export const createSettingsActions = ({
             if (deviceState.updated) {
                 didSettingsUpdate = true;
             }
+            if (isFreshInstall && nextSettings.notificationsEnabled === undefined) {
+                nextSettings = { ...nextSettings, notificationsEnabled: false };
+                didSettingsUpdate = true;
+            }
 
             const taskEditorDefaultsVersion = nextSettings.gtd?.taskEditor?.defaultsVersion ?? 0;
             if (taskEditorDefaultsVersion < TASK_EDITOR_DEFAULTS_VERSION) {
                 const hidden = new Set(nextSettings.gtd?.taskEditor?.hidden ?? []);
                 TASK_EDITOR_ALWAYS_VISIBLE.forEach((fieldId) => hidden.delete(fieldId));
-                if (taskEditorDefaultsVersion < 3) {
+                if (taskEditorDefaultsVersion < 4) {
                     hidden.delete('textDirection');
                 }
+                const existingOrder = nextSettings.gtd?.taskEditor?.order;
+                const normalizedOrder = existingOrder?.filter((fieldId) => fieldId !== 'textDirection');
                 nextSettings = {
                     ...nextSettings,
                     gtd: {
                         ...(nextSettings.gtd ?? {}),
                         taskEditor: {
                             ...(nextSettings.gtd?.taskEditor ?? {}),
+                            ...(normalizedOrder ? { order: normalizedOrder } : {}),
                             hidden: Array.from(hidden),
                             defaultsVersion: TASK_EDITOR_DEFAULTS_VERSION,
                         },
@@ -187,7 +238,8 @@ export const createSettingsActions = ({
                 };
             });
             let didProjectOrderMigration = false;
-            let didAreaMigration = false;
+            let didAreaMigration = didNormalizeAreaTimestamps;
+            let didRunAreaDedupePass = false;
             let allProjects = rawProjects;
             let allSections = rawSections;
             let allAreas = rawAreas;
@@ -252,6 +304,7 @@ export const createSettingsActions = ({
                 }
                 const shouldRunAreaMigration = hasLegacyAreaTitle || hasMissingAreaId || hasDuplicateNames;
                 if (shouldRunAreaMigration) {
+                    didRunAreaDedupePass = true;
                     const areaByName = new Map<string, string>();
                     const areaIdRemap = new Map<string, string>();
                     const uniqueAreas: Area[] = [];
@@ -326,7 +379,7 @@ export const createSettingsActions = ({
                         .sort((a, b) => a.order - b.order);
                 }
             }
-            {
+            if (!didRunAreaDedupePass) {
                 const areaByName = new Map<string, string>();
                 const areaIdRemap = new Map<string, string>();
                 const uniqueAreas: Area[] = [];
@@ -368,6 +421,41 @@ export const createSettingsActions = ({
                     });
                 }
             }
+            let didArchiveTasksForArchivedProjects = false;
+            let didArchiveSectionsForArchivedProjects = false;
+            const archivedProjectIds = new Set(
+                allProjects
+                    .filter((project) => !project.deletedAt && project.status === 'archived')
+                    .map((project) => project.id)
+            );
+            if (archivedProjectIds.size > 0) {
+                allTasks = allTasks.map((task) => {
+                    if (task.deletedAt || task.status === 'archived') return task;
+                    if (!task.projectId || !archivedProjectIds.has(task.projectId)) return task;
+                    didArchiveTasksForArchivedProjects = true;
+                    return {
+                        ...task,
+                        status: 'archived',
+                        completedAt: task.completedAt || nowIso,
+                        isFocusedToday: false,
+                        updatedAt: nowIso,
+                        rev: normalizeRevision(task.rev) + 1,
+                        revBy: nextSettings.deviceId,
+                    };
+                });
+                allSections = allSections.map((section) => {
+                    if (section.deletedAt) return section;
+                    if (!archivedProjectIds.has(section.projectId)) return section;
+                    didArchiveSectionsForArchivedProjects = true;
+                    return {
+                        ...section,
+                        deletedAt: nowIso,
+                        updatedAt: nowIso,
+                        rev: normalizeRevision(section.rev) + 1,
+                        revBy: nextSettings.deviceId,
+                    };
+                });
+            }
             let didTombstoneCleanup = false;
             if (shouldRunTombstoneCleanup) {
                 const cleanup = purgeExpiredTombstones(
@@ -399,27 +487,49 @@ export const createSettingsActions = ({
             const visibleProjects = allProjects.filter(p => !p.deletedAt);
             const visibleSections = allSections.filter((section) => !section.deletedAt);
             const visibleAreas = allAreas.filter((area) => !area.deletedAt);
-            set({
-                tasks: visibleTasks,
-                projects: visibleProjects,
-                sections: visibleSections,
-                areas: visibleAreas,
-                settings: nextSettings,
-                _allTasks: allTasks,
-                _allProjects: allProjects,
-                _allSections: allSections,
-                _allAreas: allAreas,
-                isLoading: false,
-                lastDataChangeAt: didAutoArchive || didPromoteScheduled || didTombstoneCleanup ? Date.now() : get().lastDataChangeAt,
+            markCoreStartupPhase('core.fetch_data.post_process:end', { durationMs: Date.now() - postProcessStartedAt });
+            await measureCoreStartupPhase('core.fetch_data.zustand_set_state', async () => {
+                set({
+                    tasks: visibleTasks,
+                    projects: visibleProjects,
+                    sections: visibleSections,
+                    areas: visibleAreas,
+                    settings: nextSettings,
+                    _allTasks: allTasks,
+                    _allProjects: allProjects,
+                    _allSections: allSections,
+                    _allAreas: allAreas,
+                    isLoading: false,
+                    lastDataChangeAt:
+                        didAutoArchive
+                            || didPromoteScheduled
+                            || didArchiveTasksForArchivedProjects
+                            || didArchiveSectionsForArchivedProjects
+                            || didTombstoneCleanup
+                            ? Date.now()
+                            : get().lastDataChangeAt,
+                });
             });
 
-            if (didAutoArchive || didPromoteScheduled || didTombstoneCleanup || didAreaMigration || didProjectOrderMigration || didSettingsUpdate) {
+            if (
+                didAutoArchive
+                || didPromoteScheduled
+                || didArchiveTasksForArchivedProjects
+                || didArchiveSectionsForArchivedProjects
+                || didTombstoneCleanup
+                || didAreaMigration
+                || didProjectOrderMigration
+                || didSettingsUpdate
+            ) {
+                markCoreStartupPhase('core.fetch_data.debounced_save_enqueued');
                 debouncedSave(
                     { tasks: allTasks, projects: allProjects, sections: allSections, areas: allAreas, settings: nextSettings },
                     (msg) => set({ error: msg })
                 );
             }
+            markCoreStartupPhase('core.fetch_data.end');
         } catch (err) {
+            markCoreStartupPhase('core.fetch_data.error');
             set({ error: 'Failed to fetch data', isLoading: false });
         }
     },
@@ -521,14 +631,47 @@ export const createSettingsActions = ({
         }
     },
 
+    persistSnapshot: async () => {
+        let snapshot: AppData | null = null;
+        set((state) => {
+            snapshot = buildSaveSnapshot(state);
+            return {};
+        });
+        if (snapshot) {
+            debouncedSave(snapshot, (msg) => set({ error: msg }));
+        }
+    },
+
     getDerivedState: () => {
         const state = get();
-        if (derivedCache && derivedCache.lastDataChangeAt === state.lastDataChangeAt) {
+        if (derivedCache && derivedCache.tasksRef === state.tasks && derivedCache.projectsRef === state.projects) {
             return derivedCache.value;
         }
-        const derived = computeDerivedState(state.tasks, state.projects);
+        const previous = derivedCache?.value;
+        const taskDerived =
+            derivedCache && derivedCache.tasksRef === state.tasks && previous
+                ? {
+                    tasksById: previous.tasksById,
+                    activeTasksByStatus: previous.activeTasksByStatus,
+                    allContexts: previous.allContexts,
+                    allTags: previous.allTags,
+                    focusedCount: previous.focusedCount,
+                }
+                : computeTaskDerivedState(state.tasks);
+        const projectDerived =
+            derivedCache && derivedCache.projectsRef === state.projects && previous
+                ? {
+                    projectMap: previous.projectMap,
+                    sequentialProjectIds: previous.sequentialProjectIds,
+                }
+                : computeProjectDerivedState(state.projects);
+        const derived = {
+            ...projectDerived,
+            ...taskDerived,
+        };
         derivedCache = {
-            lastDataChangeAt: state.lastDataChangeAt,
+            tasksRef: state.tasks,
+            projectsRef: state.projects,
             value: derived,
         };
         return derived;

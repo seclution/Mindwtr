@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sortTasks, getStatusColor, getTaskAgeLabel, rescheduleTask } from './task-utils';
+import { sortTasks, getStatusColor, getTaskAgeLabel, rescheduleTask, extractWaitingPerson } from './task-utils';
 import { Task } from './types';
 
 describe('task-utils', () => {
@@ -86,6 +86,22 @@ describe('task-utils', () => {
             };
             const updated = rescheduleTask(task, '2025-01-02T09:00:00.000Z');
             expect(updated.pushCount).toBe(2);
+        });
+    });
+
+    describe('extractWaitingPerson', () => {
+        it('extracts the waiting person from a dedicated line', () => {
+            const description = 'Need follow-up\nWaiting for: Alex\nContext details';
+            expect(extractWaitingPerson(description)).toBe('Alex');
+        });
+
+        it('supports case-insensitive matching and full-width colon', () => {
+            const description = 'waiting FOR：Jordan';
+            expect(extractWaitingPerson(description)).toBe('Jordan');
+        });
+
+        it('returns null when no waiting person line exists', () => {
+            expect(extractWaitingPerson('No delegation info here')).toBeNull();
         });
     });
 });

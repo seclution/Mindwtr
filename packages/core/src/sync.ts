@@ -2,6 +2,18 @@
 import type { AppData, Attachment, Project, Task, Area, SettingsSyncGroup } from './types';
 import { normalizeTaskForLoad } from './task-status';
 import { logWarn } from './logger';
+import {
+    AI_PROVIDER_VALUE_SET,
+    AI_REASONING_EFFORT_VALUE_SET,
+    SETTINGS_DENSITY_VALUE_SET,
+    SETTINGS_KEYBINDING_STYLE_VALUE_SET,
+    SETTINGS_LANGUAGE_VALUE_SET,
+    SETTINGS_THEME_VALUE_SET,
+    SETTINGS_WEEK_START_VALUE_SET,
+    STT_FIELD_STRATEGY_VALUE_SET,
+    STT_MODE_VALUE_SET,
+    STT_PROVIDER_VALUE_SET,
+} from './settings-options';
 
 export interface EntityMergeStats {
     localTotal: number;
@@ -34,15 +46,19 @@ export interface MergeResult {
 export type SyncHistoryEntry = {
     at: string;
     status: 'success' | 'conflict' | 'error';
+    backend?: 'file' | 'webdav' | 'cloud' | 'off';
+    type?: 'push' | 'pull' | 'merge';
     conflicts: number;
     conflictIds: string[];
     maxClockSkewMs: number;
     timestampAdjustments: number;
+    details?: string;
     error?: string;
 };
 
 // Log clock skew warnings if merges show >5 minutes drift.
 export const CLOCK_SKEW_THRESHOLD_MS = 5 * 60 * 1000;
+const DELETE_VS_LIVE_AMBIGUOUS_WINDOW_MS = 0;
 const DEFAULT_TOMBSTONE_RETENTION_DAYS = 90;
 const MIN_TOMBSTONE_RETENTION_DAYS = 1;
 const MAX_TOMBSTONE_RETENTION_DAYS = 3650;
@@ -54,6 +70,11 @@ export type SyncCycleIO = {
     readRemote: () => Promise<AppData | null | undefined>;
     writeLocal: (data: AppData) => Promise<void>;
     writeRemote: (data: AppData) => Promise<void>;
+    historyContext?: {
+        backend?: SyncHistoryEntry['backend'];
+        type?: SyncHistoryEntry['type'];
+        details?: string;
+    };
     tombstoneRetentionDays?: number;
     now?: () => string;
     onStep?: (step: SyncStep) => void;
@@ -68,7 +89,7 @@ export type SyncCycleResult = {
 export const appendSyncHistory = (
     settings: AppData['settings'] | undefined,
     entry: SyncHistoryEntry,
-    limit: number = 20
+    limit: number = 50
 ): SyncHistoryEntry[] => {
     const history = Array.isArray(settings?.lastSyncHistory) ? settings?.lastSyncHistory ?? [] : [];
     const items = [entry, ...history];
@@ -207,11 +228,15 @@ const validateMergedSyncData = (data: AppData): string[] => {
             if (!isNonEmptyString(area.name)) {
                 errors.push(`areas[${index}].name must be a non-empty string`);
             }
-            if (area.createdAt !== undefined && !isValidTimestamp(area.createdAt)) {
-                errors.push(`areas[${index}].createdAt must be a valid ISO timestamp when present`);
+            if (!isNonEmptyString(area.createdAt)) {
+                errors.push(`areas[${index}].createdAt must be a non-empty string`);
+            } else if (!isValidTimestamp(area.createdAt)) {
+                errors.push(`areas[${index}].createdAt must be a valid ISO timestamp`);
             }
-            if (area.updatedAt !== undefined && !isValidTimestamp(area.updatedAt)) {
-                errors.push(`areas[${index}].updatedAt must be a valid ISO timestamp when present`);
+            if (!isNonEmptyString(area.updatedAt)) {
+                errors.push(`areas[${index}].updatedAt must be a non-empty string`);
+            } else if (!isValidTimestamp(area.updatedAt)) {
+                errors.push(`areas[${index}].updatedAt must be a valid ISO timestamp`);
             }
             if (isValidTimestamp(area.createdAt) && isValidTimestamp(area.updatedAt)) {
                 const createdMs = Date.parse(area.createdAt);
@@ -288,10 +313,15 @@ export const purgeExpiredTombstones = (
     data: AppData,
     nowIso: string,
     retentionDays?: number
-): { data: AppData; removedTaskTombstones: number; removedAttachmentTombstones: number } => {
+): {
+    data: AppData;
+    removedTaskTombstones: number;
+    removedAttachmentTombstones: number;
+    removedPendingRemoteDeletes: number;
+} => {
     const nowMs = Date.parse(nowIso);
     if (!Number.isFinite(nowMs)) {
-        return { data, removedTaskTombstones: 0, removedAttachmentTombstones: 0 };
+        return { data, removedTaskTombstones: 0, removedAttachmentTombstones: 0, removedPendingRemoteDeletes: 0 };
     }
     const keepDays = resolveTombstoneRetentionDays(retentionDays);
     const cutoffMs = nowMs - keepDays * 24 * 60 * 60 * 1000;
@@ -319,15 +349,40 @@ export const purgeExpiredTombstones = (
         removedAttachmentTombstones += pruned.removed;
         return pruned.removed > 0 ? { ...project, attachments: pruned.next } : project;
     });
+    const previousPendingRemoteDeletes = data.settings.attachments?.pendingRemoteDeletes;
+    let removedPendingRemoteDeletes = 0;
+    const nextPendingRemoteDeletes = previousPendingRemoteDeletes?.filter((entry) => {
+        const lastErrorMs = parseTimestampOrInfinity(entry.lastErrorAt);
+        const expired = Number.isFinite(lastErrorMs) && lastErrorMs <= cutoffMs;
+        if (expired) {
+            removedPendingRemoteDeletes += 1;
+            return false;
+        }
+        return true;
+    });
+    const hasPendingChanged = removedPendingRemoteDeletes > 0;
+    const nextSettings = hasPendingChanged
+        ? {
+            ...data.settings,
+            attachments: {
+                ...data.settings.attachments,
+                pendingRemoteDeletes: nextPendingRemoteDeletes && nextPendingRemoteDeletes.length > 0
+                    ? nextPendingRemoteDeletes
+                    : undefined,
+            },
+        }
+        : data.settings;
 
     return {
         data: {
             ...data,
             tasks: nextTasks,
             projects: nextProjects,
+            settings: nextSettings,
         },
         removedTaskTombstones,
         removedAttachmentTombstones,
+        removedPendingRemoteDeletes,
     };
 };
 
@@ -363,6 +418,193 @@ const sanitizeAiForSync = (
     return sanitized;
 };
 
+const SETTINGS_SYNC_GROUP_KEYS: SettingsSyncGroup[] = ['appearance', 'language', 'externalCalendars', 'ai'];
+const SETTINGS_SYNC_UPDATED_AT_KEYS: Array<SettingsSyncGroup | 'preferences'> = ['preferences', ...SETTINGS_SYNC_GROUP_KEYS];
+
+const cloneSettingValue = <T>(value: T): T => {
+    if (typeof globalThis.structuredClone === 'function') {
+        try {
+            return globalThis.structuredClone(value);
+        } catch {
+            // Fallback to manual deep clone for environments/values unsupported by structuredClone.
+        }
+    }
+    if (Array.isArray(value)) {
+        return value.map((item) => cloneSettingValue(item)) as unknown as T;
+    }
+    if (value && typeof value === 'object') {
+        const cloned: Record<string, unknown> = {};
+        for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+            cloned[key] = cloneSettingValue(item);
+        }
+        return cloned as T;
+    }
+    return value;
+};
+
+const sanitizeSyncPreferences = (
+    value: AppData['settings']['syncPreferences'] | undefined,
+    fallback: AppData['settings']['syncPreferences'] | undefined
+): AppData['settings']['syncPreferences'] | undefined => {
+    if (value === undefined) return fallback ? cloneSettingValue(fallback) : undefined;
+    if (!isObjectRecord(value)) return fallback ? cloneSettingValue(fallback) : undefined;
+    const next: NonNullable<AppData['settings']['syncPreferences']> = {};
+    for (const key of SETTINGS_SYNC_GROUP_KEYS) {
+        const candidate = (value as Record<string, unknown>)[key];
+        if (typeof candidate === 'boolean') {
+            next[key] = candidate;
+        }
+    }
+    return Object.keys(next).length > 0 ? next : (fallback ? cloneSettingValue(fallback) : undefined);
+};
+
+const sanitizeSyncPreferencesUpdatedAt = (
+    value: AppData['settings']['syncPreferencesUpdatedAt'] | undefined,
+    fallback: AppData['settings']['syncPreferencesUpdatedAt'] | undefined
+): AppData['settings']['syncPreferencesUpdatedAt'] | undefined => {
+    if (value === undefined) return fallback ? cloneSettingValue(fallback) : undefined;
+    if (!isObjectRecord(value)) return fallback ? cloneSettingValue(fallback) : undefined;
+    const next: NonNullable<AppData['settings']['syncPreferencesUpdatedAt']> = {};
+    for (const key of SETTINGS_SYNC_UPDATED_AT_KEYS) {
+        const candidate = (value as Record<string, unknown>)[key];
+        if (isValidTimestamp(candidate)) {
+            next[key] = candidate;
+        }
+    }
+    return Object.keys(next).length > 0 ? next : (fallback ? cloneSettingValue(fallback) : undefined);
+};
+
+const sanitizeExternalCalendars = (
+    value: AppData['settings']['externalCalendars'] | undefined,
+    fallback: AppData['settings']['externalCalendars'] | undefined
+): AppData['settings']['externalCalendars'] | undefined => {
+    if (value === undefined) return fallback ? cloneSettingValue(fallback) : undefined;
+    if (!Array.isArray(value)) return fallback ? cloneSettingValue(fallback) : undefined;
+    const next = value
+        .filter((item): item is { id: string; name: string; url: string; enabled: boolean } =>
+            isObjectRecord(item)
+            && isNonEmptyString(item.id)
+            && isNonEmptyString(item.name)
+            && isNonEmptyString(item.url)
+            && typeof item.enabled === 'boolean'
+        )
+        .map((item) => ({
+            id: item.id.trim(),
+            name: item.name.trim(),
+            url: item.url.trim(),
+            enabled: item.enabled,
+        }));
+    const deduped = new Map<string, (typeof next)[number]>();
+    for (const item of next) {
+        deduped.set(item.id, item);
+    }
+    if (value.length > 0 && deduped.size === 0 && fallback) {
+        return cloneSettingValue(fallback);
+    }
+    return Array.from(deduped.values());
+};
+
+const sanitizeAiSettings = (
+    value: AppData['settings']['ai'] | undefined,
+    fallback: AppData['settings']['ai'] | undefined
+): AppData['settings']['ai'] | undefined => {
+    if (value === undefined) return fallback ? sanitizeAiForSync(cloneSettingValue(fallback), fallback) : undefined;
+    if (!isObjectRecord(value)) return fallback ? sanitizeAiForSync(cloneSettingValue(fallback), fallback) : undefined;
+    const next: NonNullable<AppData['settings']['ai']> = cloneSettingValue(
+        value as NonNullable<AppData['settings']['ai']>
+    );
+    if (next.enabled !== undefined && typeof next.enabled !== 'boolean') {
+        next.enabled = fallback?.enabled;
+    }
+    if (next.provider !== undefined && !AI_PROVIDER_VALUE_SET.has(next.provider)) {
+        next.provider = fallback?.provider;
+    }
+    if (next.baseUrl !== undefined && !isNonEmptyString(next.baseUrl)) {
+        next.baseUrl = fallback?.baseUrl;
+    }
+    if (next.model !== undefined && !isNonEmptyString(next.model)) {
+        next.model = fallback?.model;
+    }
+    if (next.reasoningEffort !== undefined && !AI_REASONING_EFFORT_VALUE_SET.has(next.reasoningEffort)) {
+        next.reasoningEffort = fallback?.reasoningEffort;
+    }
+    if (next.thinkingBudget !== undefined && (!Number.isFinite(next.thinkingBudget) || next.thinkingBudget < 0)) {
+        next.thinkingBudget = fallback?.thinkingBudget;
+    }
+    if (next.copilotModel !== undefined && !isNonEmptyString(next.copilotModel)) {
+        next.copilotModel = fallback?.copilotModel;
+    }
+    if (next.speechToText !== undefined && !isObjectRecord(next.speechToText)) {
+        next.speechToText = fallback?.speechToText ? cloneSettingValue(fallback.speechToText) : undefined;
+    } else if (next.speechToText) {
+        const speechFallback = fallback?.speechToText;
+        if (next.speechToText.enabled !== undefined && typeof next.speechToText.enabled !== 'boolean') {
+            next.speechToText.enabled = speechFallback?.enabled;
+        }
+        if (next.speechToText.provider !== undefined && !STT_PROVIDER_VALUE_SET.has(next.speechToText.provider)) {
+            next.speechToText.provider = speechFallback?.provider;
+        }
+        if (next.speechToText.model !== undefined && !isNonEmptyString(next.speechToText.model)) {
+            next.speechToText.model = speechFallback?.model;
+        }
+        if (next.speechToText.language !== undefined && !isNonEmptyString(next.speechToText.language)) {
+            next.speechToText.language = speechFallback?.language;
+        }
+        if (next.speechToText.mode !== undefined && !STT_MODE_VALUE_SET.has(next.speechToText.mode)) {
+            next.speechToText.mode = speechFallback?.mode;
+        }
+        if (
+            next.speechToText.fieldStrategy !== undefined
+            && !STT_FIELD_STRATEGY_VALUE_SET.has(next.speechToText.fieldStrategy)
+        ) {
+            next.speechToText.fieldStrategy = speechFallback?.fieldStrategy;
+        }
+    }
+    return sanitizeAiForSync(next, fallback);
+};
+
+const sanitizeMergedSettingsForSync = (
+    merged: AppData['settings'],
+    localSettings: AppData['settings']
+): AppData['settings'] => {
+    const next: AppData['settings'] = cloneSettingValue(merged);
+
+    if (next.theme !== undefined && !SETTINGS_THEME_VALUE_SET.has(next.theme)) {
+        next.theme = localSettings.theme;
+    }
+    if (next.language !== undefined && !SETTINGS_LANGUAGE_VALUE_SET.has(next.language)) {
+        next.language = localSettings.language;
+    }
+    if (next.weekStart !== undefined && !SETTINGS_WEEK_START_VALUE_SET.has(next.weekStart)) {
+        next.weekStart = localSettings.weekStart;
+    }
+    if (next.keybindingStyle !== undefined && !SETTINGS_KEYBINDING_STYLE_VALUE_SET.has(next.keybindingStyle)) {
+        next.keybindingStyle = localSettings.keybindingStyle;
+    }
+    if (next.dateFormat !== undefined && typeof next.dateFormat !== 'string') {
+        next.dateFormat = localSettings.dateFormat;
+    }
+    if (next.appearance !== undefined && !isObjectRecord(next.appearance)) {
+        next.appearance = localSettings.appearance ? cloneSettingValue(localSettings.appearance) : undefined;
+    } else if (next.appearance?.density !== undefined && !SETTINGS_DENSITY_VALUE_SET.has(next.appearance.density)) {
+        next.appearance = {
+            ...(localSettings.appearance ? cloneSettingValue(localSettings.appearance) : {}),
+            ...next.appearance,
+            density: localSettings.appearance?.density,
+        };
+    }
+
+    next.syncPreferences = sanitizeSyncPreferences(next.syncPreferences, localSettings.syncPreferences);
+    next.syncPreferencesUpdatedAt = sanitizeSyncPreferencesUpdatedAt(
+        next.syncPreferencesUpdatedAt,
+        localSettings.syncPreferencesUpdatedAt
+    );
+    next.externalCalendars = sanitizeExternalCalendars(next.externalCalendars, localSettings.externalCalendars);
+    next.ai = sanitizeAiSettings(next.ai, localSettings.ai);
+
+    return next;
+};
+
 const mergeSettingsForSync = (localSettings: AppData['settings'], incomingSettings: AppData['settings']): AppData['settings'] => {
     const merged: AppData['settings'] = { ...localSettings };
     const nextSyncUpdatedAt: NonNullable<AppData['settings']['syncPreferencesUpdatedAt']> = {
@@ -377,7 +619,7 @@ const mergeSettingsForSync = (localSettings: AppData['settings'], incomingSettin
     const incomingPrefsWins = isIncomingNewer(localPrefsAt, incomingPrefsAt);
     const mergedPrefs = incomingPrefsWins ? incomingPrefs : localPrefs;
 
-    merged.syncPreferences = mergedPrefs;
+    merged.syncPreferences = cloneSettingValue(mergedPrefs);
     if (incomingPrefsWins) {
         if (incomingPrefsAt) nextSyncUpdatedAt.preferences = incomingPrefsAt;
     } else if (localPrefsAt) {
@@ -389,10 +631,10 @@ const mergeSettingsForSync = (localSettings: AppData['settings'], incomingSettin
         return JSON.stringify(left) === JSON.stringify(right);
     };
     const chooseGroupFieldValue = <T>(localValue: T, incomingValue: T, incomingWins: boolean): T => {
-        if (incomingValue === undefined) return localValue;
-        if (localValue === undefined) return incomingValue;
-        if (isSameValue(localValue, incomingValue)) return localValue;
-        return incomingWins ? incomingValue : localValue;
+        if (incomingValue === undefined) return cloneSettingValue(localValue);
+        if (localValue === undefined) return cloneSettingValue(incomingValue);
+        if (isSameValue(localValue, incomingValue)) return cloneSettingValue(localValue);
+        return cloneSettingValue(incomingWins ? incomingValue : localValue);
     };
     const mergeRecordFields = <T extends Record<string, unknown>>(localValue: T, incomingValue: T, incomingWins: boolean): T => {
         const mergedValue: Record<string, unknown> = {};
@@ -417,7 +659,7 @@ const mergeSettingsForSync = (localSettings: AppData['settings'], incomingSettin
         const resolvedValue = mergeValues
             ? mergeValues(localValue, incomingValue, incomingWins)
             : (incomingWins ? incomingValue : localValue);
-        apply(resolvedValue, incomingWins);
+        apply(cloneSettingValue(resolvedValue), incomingWins);
         const winnerAt = incomingWins ? incomingAt : localAt;
         if (winnerAt) nextSyncUpdatedAt[key] = winnerAt;
     };
@@ -474,17 +716,18 @@ const mergeSettingsForSync = (localSettings: AppData['settings'], incomingSettin
     );
 
     merged.syncPreferencesUpdatedAt = Object.keys(nextSyncUpdatedAt).length > 0 ? nextSyncUpdatedAt : merged.syncPreferencesUpdatedAt;
-    return merged;
+    return sanitizeMergedSettingsForSync(merged, localSettings);
 };
 
 /**
- * Merge entities with soft-delete support using Last-Write-Wins (LWW) strategy.
- * 
+ * Merge entities with soft-delete support using revision-aware conflict resolution.
+ *
  * Rules:
- * 1. If an item exists only in one source, include it
- * 2. If an item exists in both, take the one with newer updatedAt
- * 3. Deleted items (deletedAt set) are preserved - deletion syncs across devices
- * 4. If one version is deleted and one is not, the newer version wins
+ * 1. If an item exists only in one source, include it.
+ * 2. When revisions are present, resolve by operation semantics:
+ *    deletion op time, revision number, timestamp, then deterministic tie-break.
+ * 3. Without revisions, fall back to timestamp-based conflict resolution.
+ * 4. Deleted items (deletedAt set) are preserved so deletion propagates cross-device.
  */
 function createEmptyEntityStats(localTotal: number, incomingTotal: number): EntityMergeStats {
     return {
@@ -504,19 +747,30 @@ function createEmptyEntityStats(localTotal: number, incomingTotal: number): Enti
     };
 }
 
-const CONTENT_DIFF_IGNORED_KEYS = new Set(['rev', 'revBy', 'updatedAt', 'createdAt', 'localStatus']);
+const CONTENT_DIFF_IGNORED_KEYS = new Set([
+    'rev',
+    'revBy',
+    'updatedAt',
+    'createdAt',
+    'localStatus',
+    'purgedAt',
+    // Order fields can differ due local adapter fallbacks (for legacy rows) without user edits.
+    'order',
+    'orderNum',
+]);
 
-const toComparableValue = (value: unknown): unknown => {
+const toComparableValue = (value: unknown, options?: { includeIgnoredKeys?: boolean }): unknown => {
+    const includeIgnoredKeys = options?.includeIgnoredKeys === true;
     if (Array.isArray(value)) {
-        return value.map((item) => toComparableValue(item));
+        return value.map((item) => toComparableValue(item, options));
     }
     if (value && typeof value === 'object') {
         const record = value as Record<string, unknown>;
         const comparable: Record<string, unknown> = {};
         for (const key of Object.keys(record).sort()) {
-            if (CONTENT_DIFF_IGNORED_KEYS.has(key)) continue;
-            if (key === 'uri' && record.kind === 'file') continue;
-            comparable[key] = toComparableValue(record[key]);
+            if (!includeIgnoredKeys && CONTENT_DIFF_IGNORED_KEYS.has(key)) continue;
+            if (!includeIgnoredKeys && key === 'uri' && record.kind === 'file') continue;
+            comparable[key] = toComparableValue(record[key], options);
         }
         return comparable;
     }
@@ -526,17 +780,54 @@ const toComparableValue = (value: unknown): unknown => {
 const hasContentDifference = (localItem: unknown, incomingItem: unknown): boolean =>
     JSON.stringify(toComparableValue(localItem)) !== JSON.stringify(toComparableValue(incomingItem));
 
-const toComparableSignature = (value: unknown): string =>
-    JSON.stringify(toComparableValue(value));
+const comparableSignatureCache = new WeakMap<object, string>();
+const deterministicSignatureCache = new WeakMap<object, string>();
+
+const toComparableSignature = (value: unknown): string => {
+    if (value && typeof value === 'object') {
+        const cached = comparableSignatureCache.get(value);
+        if (cached) return cached;
+        const signature = JSON.stringify(toComparableValue(value));
+        comparableSignatureCache.set(value, signature);
+        return signature;
+    }
+    return JSON.stringify(toComparableValue(value));
+};
+
+const toDeterministicSignature = (value: unknown): string => {
+    if (value && typeof value === 'object') {
+        const cached = deterministicSignatureCache.get(value);
+        if (cached) return cached;
+        const signature = JSON.stringify(toComparableValue(value, { includeIgnoredKeys: true }));
+        deterministicSignatureCache.set(value, signature);
+        return signature;
+    }
+    return JSON.stringify(toComparableValue(value, { includeIgnoredKeys: true }));
+};
 
 const chooseDeterministicWinner = <T>(localItem: T, incomingItem: T): T => {
     const localSignature = toComparableSignature(localItem);
     const incomingSignature = toComparableSignature(incomingItem);
-    if (localSignature === incomingSignature) return incomingItem;
+    if (localSignature === incomingSignature) {
+        const localFullSignature = toDeterministicSignature(localItem);
+        const incomingFullSignature = toDeterministicSignature(incomingItem);
+        if (localFullSignature === incomingFullSignature) return incomingItem;
+        return incomingFullSignature > localFullSignature ? incomingItem : localItem;
+    }
     return incomingSignature > localSignature ? incomingItem : localItem;
 };
 
-function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; deletedAt?: string }>(
+const parseMergeTimestamp = (value: unknown, maxAllowedMs?: number): number => {
+    if (typeof value !== 'string') return -1;
+    const parsed = new Date(value).getTime();
+    if (!Number.isFinite(parsed)) return -1;
+    if (maxAllowedMs !== undefined && parsed > maxAllowedMs) {
+        return maxAllowedMs;
+    }
+    return parsed;
+};
+
+function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; deletedAt?: string; rev?: number; revBy?: string }>(
     local: T[],
     incoming: T[],
     mergeConflict?: (localItem: T, incomingItem: T, winner: T) => T
@@ -548,6 +839,8 @@ function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; delet
     const stats = createEmptyEntityStats(local.length, incoming.length);
     const merged: T[] = [];
     let invalidDeletedAtWarnings = 0;
+    // Reject timestamps in the future so a clock-skewed device cannot permanently dominate merges.
+    const maxAllowedMergeTime = Date.now();
     const normalizeTimestamps = <Item extends { id?: string; updatedAt: string; createdAt?: string }>(item: Item): Item => {
         if (!('createdAt' in item) || !item.createdAt) return item;
         const createdTime = new Date(item.createdAt).getTime();
@@ -572,44 +865,50 @@ function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; delet
         const localItem = localMap.get(id);
         const incomingItem = incomingMap.get(id);
 
-        if (localItem && !incomingItem) {
+        if (!localItem && !incomingItem) {
+            continue;
+        }
+
+        if (!incomingItem) {
             stats.localOnly += 1;
             stats.resolvedUsingLocal += 1;
             merged.push(normalizeTimestamps(localItem as unknown as { updatedAt: string; createdAt?: string }) as T);
             continue;
         }
-        if (incomingItem && !localItem) {
+
+        if (!localItem) {
             stats.incomingOnly += 1;
             stats.resolvedUsingIncoming += 1;
             merged.push(normalizeTimestamps(incomingItem as unknown as { updatedAt: string; createdAt?: string }) as T);
             continue;
         }
 
-        if (!localItem || !incomingItem) continue;
+        const normalizedLocalItem = normalizeTimestamps(localItem as unknown as { updatedAt: string; createdAt?: string }) as T;
+        const normalizedIncomingItem = normalizeTimestamps(incomingItem as unknown as { updatedAt: string; createdAt?: string }) as T;
 
-        const localTime = localItem.updatedAt ? new Date(localItem.updatedAt).getTime() : 0;
-        const incomingTime = incomingItem.updatedAt ? new Date(incomingItem.updatedAt).getTime() : 0;
-        const safeLocalTime = isNaN(localTime) ? 0 : localTime;
-        const safeIncomingTime = isNaN(incomingTime) ? 0 : incomingTime;
-        const localRev = typeof (localItem as any).rev === 'number' && Number.isFinite((localItem as any).rev)
-            ? (localItem as any).rev as number
+        const safeLocalTime = parseMergeTimestamp(normalizedLocalItem.updatedAt, maxAllowedMergeTime);
+        const safeIncomingTime = parseMergeTimestamp(normalizedIncomingItem.updatedAt, maxAllowedMergeTime);
+        const localRev = typeof normalizedLocalItem.rev === 'number' && Number.isFinite(normalizedLocalItem.rev)
+            ? normalizedLocalItem.rev
             : 0;
-        const incomingRev = typeof (incomingItem as any).rev === 'number' && Number.isFinite((incomingItem as any).rev)
-            ? (incomingItem as any).rev as number
+        const incomingRev = typeof normalizedIncomingItem.rev === 'number' && Number.isFinite(normalizedIncomingItem.rev)
+            ? normalizedIncomingItem.rev
             : 0;
-        const localRevBy = typeof (localItem as any).revBy === 'string' ? (localItem as any).revBy as string : '';
-        const incomingRevBy = typeof (incomingItem as any).revBy === 'string' ? (incomingItem as any).revBy as string : '';
+        const localRevBy = typeof normalizedLocalItem.revBy === 'string' ? normalizedLocalItem.revBy : '';
+        const incomingRevBy = typeof normalizedIncomingItem.revBy === 'string' ? normalizedIncomingItem.revBy : '';
         const hasRevision = localRev > 0 || incomingRev > 0 || !!localRevBy || !!incomingRevBy;
-        const localDeleted = !!localItem.deletedAt;
-        const incomingDeleted = !!incomingItem.deletedAt;
+        const localDeleted = !!normalizedLocalItem.deletedAt;
+        const incomingDeleted = !!normalizedIncomingItem.deletedAt;
         const revDiff = localRev - incomingRev;
         const revByDiff = localRevBy !== incomingRevBy;
-        const shouldCheckContentDiff = hasRevision && revDiff === 0 && !revByDiff && localDeleted === incomingDeleted;
-        const contentDiff = shouldCheckContentDiff ? hasContentDifference(localItem, incomingItem) : false;
+        const shouldCheckContentDiff = hasRevision
+            ? revDiff === 0 && localDeleted === incomingDeleted
+            : localDeleted === incomingDeleted;
+        const contentDiff = shouldCheckContentDiff ? hasContentDifference(normalizedLocalItem, normalizedIncomingItem) : false;
 
         const differs = hasRevision
-            ? revDiff !== 0 || revByDiff || localDeleted !== incomingDeleted || contentDiff
-            : safeLocalTime !== safeIncomingTime || localDeleted !== incomingDeleted;
+            ? revDiff !== 0 || localDeleted !== incomingDeleted || contentDiff
+            : localDeleted !== incomingDeleted || contentDiff;
 
         if (differs) {
             stats.conflicts += 1;
@@ -623,83 +922,70 @@ function mergeEntitiesWithStats<T extends { id: string; updatedAt: string; delet
         }
         const withinSkew = Math.abs(timeDiff) <= CLOCK_SKEW_THRESHOLD_MS;
         const resolveOperationTime = (item: T): number => {
-            const updatedTimeRaw = item.updatedAt ? new Date(item.updatedAt).getTime() : NaN;
-            const updatedTime = Number.isFinite(updatedTimeRaw) ? updatedTimeRaw : 0;
+            const updatedTime = parseMergeTimestamp(item.updatedAt, maxAllowedMergeTime);
             if (!item.deletedAt) return updatedTime;
 
             const deletedTimeRaw = new Date(item.deletedAt).getTime();
             if (!Number.isFinite(deletedTimeRaw)) {
-                const fallbackDeletedTime = Date.now();
                 invalidDeletedAtWarnings += 1;
                 if (invalidDeletedAtWarnings <= 5) {
-                    logWarn('Invalid deletedAt timestamp during merge; using conservative current-time fallback', {
+                    logWarn('Invalid deletedAt timestamp during merge; using updatedAt fallback', {
                         scope: 'sync',
                         category: 'sync',
-                        context: { id: item.id, deletedAt: item.deletedAt, updatedAt: item.updatedAt, fallbackDeletedTime },
+                        context: { id: item.id, deletedAt: item.deletedAt, updatedAt: item.updatedAt, fallbackDeletedTime: updatedTime },
                     });
                 }
-                return Math.max(updatedTime, fallbackDeletedTime);
+                return updatedTime;
             }
 
-            return Math.max(updatedTime, deletedTimeRaw);
+            return deletedTimeRaw > maxAllowedMergeTime ? maxAllowedMergeTime : deletedTimeRaw;
         };
-        let winner = safeIncomingTime > safeLocalTime ? incomingItem : localItem;
+        let winner = safeIncomingTime > safeLocalTime ? normalizedIncomingItem : normalizedLocalItem;
+        const resolveDeleteVsLiveWinner = (localCandidate: T, incomingCandidate: T): T => {
+            const localOpTime = resolveOperationTime(localCandidate);
+            const incomingOpTime = resolveOperationTime(incomingCandidate);
+            const operationDiff = incomingOpTime - localOpTime;
+            if (Math.abs(operationDiff) <= DELETE_VS_LIVE_AMBIGUOUS_WINDOW_MS) {
+                return localCandidate.deletedAt ? localCandidate : incomingCandidate;
+            }
+            if (operationDiff > 0) return incomingCandidate;
+            if (operationDiff < 0) return localCandidate;
+            return localCandidate.deletedAt ? localCandidate : incomingCandidate;
+        };
+
         if (hasRevision) {
             if (localDeleted !== incomingDeleted) {
-                const localOpTime = resolveOperationTime(localItem);
-                const incomingOpTime = resolveOperationTime(incomingItem);
-                if (incomingOpTime > localOpTime) {
-                    winner = incomingItem;
-                } else if (localOpTime > incomingOpTime) {
-                    winner = localItem;
-                } else {
-                    winner = localDeleted ? localItem : incomingItem;
-                }
+                winner = resolveDeleteVsLiveWinner(normalizedLocalItem, normalizedIncomingItem);
             } else if (revDiff !== 0) {
-                winner = revDiff > 0 ? localItem : incomingItem;
+                winner = revDiff > 0 ? normalizedLocalItem : normalizedIncomingItem;
             } else if (safeIncomingTime !== safeLocalTime) {
                 // When revisions tie, prefer fresher timestamps before revBy tie-break.
-                winner = safeIncomingTime > safeLocalTime ? incomingItem : localItem;
+                winner = safeIncomingTime > safeLocalTime ? normalizedIncomingItem : normalizedLocalItem;
             } else if (revByDiff && localRevBy && incomingRevBy) {
-                winner = incomingRevBy > localRevBy ? incomingItem : localItem;
+                winner = incomingRevBy > localRevBy ? normalizedIncomingItem : normalizedLocalItem;
             } else {
                 // Preserve deterministic convergence when metadata ties but content differs.
-                winner = chooseDeterministicWinner(localItem, incomingItem);
+                winner = chooseDeterministicWinner(normalizedLocalItem, normalizedIncomingItem);
             }
         } else if (localDeleted !== incomingDeleted) {
-            const localOpTime = resolveOperationTime(localItem);
-            const incomingOpTime = resolveOperationTime(incomingItem);
-            if (incomingOpTime > localOpTime) {
-                winner = incomingItem;
-            } else if (localOpTime > incomingOpTime) {
-                winner = localItem;
-            } else {
-                winner = localDeleted ? localItem : incomingItem;
-            }
+            winner = resolveDeleteVsLiveWinner(normalizedLocalItem, normalizedIncomingItem);
         } else if (withinSkew && safeIncomingTime === safeLocalTime) {
-            winner = chooseDeterministicWinner(localItem, incomingItem);
+            winner = chooseDeterministicWinner(normalizedLocalItem, normalizedIncomingItem);
         }
-        if (winner === incomingItem) stats.resolvedUsingIncoming += 1;
+        if (winner === normalizedIncomingItem) stats.resolvedUsingIncoming += 1;
         else stats.resolvedUsingLocal += 1;
 
-        if (winner.deletedAt && (!localItem.deletedAt || !incomingItem.deletedAt || differs)) {
+        if (winner.deletedAt && (!normalizedLocalItem.deletedAt || !normalizedIncomingItem.deletedAt || differs)) {
             stats.deletionsWon += 1;
         }
 
-        const mergedItem = mergeConflict ? mergeConflict(localItem, incomingItem, winner) : winner;
+        const mergedItem = mergeConflict ? mergeConflict(normalizedLocalItem, normalizedIncomingItem, winner) : winner;
         merged.push(normalizeTimestamps(mergedItem as unknown as { updatedAt: string; createdAt?: string }) as T);
     }
 
     stats.mergedTotal = merged.length;
 
     return { merged, stats };
-}
-
-function mergeEntities<T extends { id: string; updatedAt: string; deletedAt?: string }>(
-    local: T[],
-    incoming: T[]
-): T[] {
-    return mergeEntitiesWithStats(local, incoming).merged;
 }
 
 const normalizeAreaForMerge = (area: Area, nowIso: string): Area & { createdAt: string; updatedAt: string } => {
@@ -739,8 +1025,8 @@ export function filterDeleted<T extends { deletedAt?: string }>(items: T[]): T[]
 
 /**
  * Merge two AppData objects for synchronization.
- * Uses Last-Write-Wins for tasks and projects.
- * Preserves local settings (device-specific preferences).
+ * Uses revision-aware entity merge plus deterministic tie-breakers for convergence.
+ * Preserves local-only settings while merging sync-enabled settings groups.
  */
 export function mergeAppDataWithStats(local: AppData, incoming: AppData): MergeResult {
     const nowIso = new Date().toISOString();
@@ -760,37 +1046,81 @@ export function mergeAppDataWithStats(local: AppData, incoming: AppData): MergeR
     };
 
     const mergeAttachments = (local?: Attachment[], incoming?: Attachment[]): Attachment[] | undefined => {
+        const hadExplicitAttachments = local !== undefined || incoming !== undefined;
         const localList = local || [];
         const incomingList = incoming || [];
-        if (localList.length === 0 && incomingList.length === 0) return undefined;
-        const merged = mergeEntities(localList, incomingList);
-        if (merged.length === 0) return undefined;
-        if (localList.length === 0) return merged;
-
+        if (localList.length === 0 && incomingList.length === 0) {
+            return hadExplicitAttachments ? [] : undefined;
+        }
         const localById = new Map(localList.map((item) => [item.id, item]));
         const incomingById = new Map(incomingList.map((item) => [item.id, item]));
-        return merged.map((attachment) => {
-            const localAttachment = localById.get(attachment.id);
-            if (!localAttachment) return attachment;
-            if (attachment.kind !== 'file' || localAttachment.kind !== 'file') {
-                return attachment;
+        const hasAvailableUri = (attachment?: Attachment): boolean => {
+            return attachment?.kind === 'file'
+                && attachment.localStatus !== 'missing'
+                && typeof attachment.uri === 'string'
+                && attachment.uri.trim().length > 0;
+        };
+
+        const merged = mergeEntitiesWithStats(localList, incomingList, (localAttachment, incomingAttachment, winner) => {
+            if (winner.kind !== 'file' || localAttachment.kind !== 'file' || incomingAttachment.kind !== 'file') {
+                return winner;
             }
+
+            const winnerIsIncoming = winner === incomingAttachment;
+            const winnerHasUri = hasAvailableUri(winner);
+            const localHasUri = hasAvailableUri(localAttachment);
+            const incomingHasUri = hasAvailableUri(incomingAttachment);
+
+            let uri = winner.uri;
+            let localStatus = winner.localStatus;
+
+            if (winnerHasUri) {
+                uri = winner.uri;
+                localStatus = winner.localStatus || 'available';
+            } else if (winnerIsIncoming && localHasUri) {
+                uri = localAttachment.uri;
+                localStatus = localAttachment.localStatus || 'available';
+            } else if (!winnerIsIncoming && incomingHasUri) {
+                uri = incomingAttachment.uri;
+                localStatus = incomingAttachment.localStatus || 'available';
+            } else if ((localStatus === undefined || localStatus === null) && typeof uri === 'string' && uri.trim().length > 0) {
+                localStatus = 'available';
+            }
+
+            return {
+                ...winner,
+                cloudKey: winner.deletedAt
+                    ? winner.cloudKey
+                    : winner.cloudKey || localAttachment.cloudKey || incomingAttachment.cloudKey,
+                fileHash: winner.deletedAt
+                    ? winner.fileHash
+                    : winner.fileHash || localAttachment.fileHash || incomingAttachment.fileHash,
+                uri,
+                localStatus,
+            };
+        }).merged;
+
+        const normalized = merged.map((attachment) => {
+            if (attachment.kind !== 'file') return attachment;
+            const localAttachment = localById.get(attachment.id);
             const incomingAttachment = incomingById.get(attachment.id);
-            const localUriAvailable = localAttachment.localStatus !== 'missing'
-                && typeof localAttachment.uri === 'string'
-                && localAttachment.uri.trim().length > 0;
+            const localFile = localAttachment?.kind === 'file' ? localAttachment : undefined;
+            const incomingFile = incomingAttachment?.kind === 'file' ? incomingAttachment : undefined;
+            const uriAvailable = hasAvailableUri(attachment);
             return {
                 ...attachment,
-                cloudKey: attachment.cloudKey || localAttachment.cloudKey || incomingAttachment?.cloudKey,
-                fileHash: attachment.fileHash || localAttachment.fileHash || incomingAttachment?.fileHash,
-                uri: localUriAvailable
-                    ? localAttachment.uri
-                    : (attachment.uri || incomingAttachment?.uri || localAttachment.uri),
-                localStatus: localUriAvailable
-                    ? (localAttachment.localStatus || 'available')
-                    : (attachment.localStatus || incomingAttachment?.localStatus || localAttachment.localStatus),
+                cloudKey: attachment.deletedAt
+                    ? attachment.cloudKey
+                    : attachment.cloudKey || localFile?.cloudKey || incomingFile?.cloudKey,
+                fileHash: attachment.deletedAt
+                    ? attachment.fileHash
+                    : attachment.fileHash || localFile?.fileHash || incomingFile?.fileHash,
+                localStatus: attachment.localStatus ?? (uriAvailable ? 'available' : undefined),
             };
         });
+
+        if (normalized.length > 0) return normalized;
+        return hadExplicitAttachments ? [] : undefined;
     };
 
     const tasksResult = mergeEntitiesWithStats(localNormalized.tasks, incomingNormalized.tasks, (localTask: Task, incomingTask: Task, winner: Task) => {
@@ -828,6 +1158,27 @@ export function mergeAppData(local: AppData, incoming: AppData): AppData {
     return mergeAppDataWithStats(local, incoming).data;
 }
 
+const withPendingRemoteWriteFlag = (data: AppData, pendingAt: string): AppData => ({
+    ...data,
+    settings: {
+        ...data.settings,
+        pendingRemoteWriteAt: pendingAt,
+    },
+});
+
+const clearPendingRemoteWriteFlag = (data: AppData): AppData => {
+    if (!data.settings.pendingRemoteWriteAt) return data;
+    return {
+        ...data,
+        settings: {
+            ...data.settings,
+            pendingRemoteWriteAt: undefined,
+        },
+    };
+};
+
+const hasPendingRemoteWriteFlag = (data: AppData): boolean => isValidTimestamp(data.settings.pendingRemoteWriteAt);
+
 export async function performSyncCycle(io: SyncCycleIO): Promise<SyncCycleResult> {
     const nowIso = io.now ? io.now() : new Date().toISOString();
 
@@ -839,7 +1190,18 @@ export async function performSyncCycle(io: SyncCycleIO): Promise<SyncCycleResult
         throw new Error(`Invalid local sync payload: ${sample}`);
     }
     const localNormalized = normalizeAppData(localDataRaw);
-    const localData = purgeExpiredTombstones(localNormalized, nowIso, io.tombstoneRetentionDays).data;
+    let localData = purgeExpiredTombstones(localNormalized, nowIso, io.tombstoneRetentionDays).data;
+
+    if (hasPendingRemoteWriteFlag(localData)) {
+        io.onStep?.('write-remote');
+        await io.writeRemote(localData);
+        const recoveredLocalData = clearPendingRemoteWriteFlag(localData);
+        if (recoveredLocalData !== localData) {
+            io.onStep?.('write-local');
+            await io.writeLocal(recoveredLocalData);
+        }
+        localData = recoveredLocalData;
+    }
 
     io.onStep?.('read-remote');
     const remoteDataRaw = await io.readRemote();
@@ -895,10 +1257,13 @@ export async function performSyncCycle(io: SyncCycleIO): Promise<SyncCycleResult
     const historyEntry: SyncHistoryEntry = {
         at: nowIso,
         status: nextSyncStatus,
+        backend: io.historyContext?.backend,
+        type: io.historyContext?.type ?? 'merge',
         conflicts: conflictCount,
         conflictIds,
         maxClockSkewMs,
         timestampAdjustments,
+        details: io.historyContext?.details,
     };
     const nextHistory = appendSyncHistory(mergeResult.data.settings, historyEntry);
     const nextMergedData: AppData = {
@@ -913,12 +1278,13 @@ export async function performSyncCycle(io: SyncCycleIO): Promise<SyncCycleResult
         },
     };
     const pruned = purgeExpiredTombstones(nextMergedData, nowIso, io.tombstoneRetentionDays);
-    if (pruned.removedTaskTombstones > 0 || pruned.removedAttachmentTombstones > 0) {
+    if (pruned.removedTaskTombstones > 0 || pruned.removedAttachmentTombstones > 0 || pruned.removedPendingRemoteDeletes > 0) {
         logWarn('Purged expired sync tombstones', {
             scope: 'sync',
             context: {
                 removedTaskTombstones: pruned.removedTaskTombstones,
                 removedAttachmentTombstones: pruned.removedAttachmentTombstones,
+                removedPendingRemoteDeletes: pruned.removedPendingRemoteDeletes,
             },
         });
     }
@@ -936,12 +1302,18 @@ export async function performSyncCycle(io: SyncCycleIO): Promise<SyncCycleResult
         throw new Error(`Sync validation failed: ${sample}`);
     }
 
+    const finalDataWithPendingRemoteWrite = withPendingRemoteWriteFlag(finalData, nowIso);
     io.onStep?.('write-local');
-    await io.writeLocal(finalData);
+    await io.writeLocal(finalDataWithPendingRemoteWrite);
 
     // Write local first so a local persistence failure cannot leave remote ahead.
     io.onStep?.('write-remote');
-    await io.writeRemote(finalData);
+    await io.writeRemote(finalDataWithPendingRemoteWrite);
 
-    return { data: finalData, stats: mergeResult.stats, status: nextSyncStatus };
+    const persistedFinalData = clearPendingRemoteWriteFlag(finalDataWithPendingRemoteWrite);
+    if (persistedFinalData !== finalDataWithPendingRemoteWrite) {
+        await io.writeLocal(persistedFinalData);
+    }
+
+    return { data: persistedFinalData, stats: mergeResult.stats, status: nextSyncStatus };
 }

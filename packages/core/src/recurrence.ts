@@ -371,8 +371,9 @@ function resetChecklist(checklist: ChecklistItem[] | undefined): ChecklistItem[]
 /**
  * Create the next instance of a recurring task.
  *
- * - Uses task.dueDate as the base if present/valid, else completion time.
+ * - Advances dueDate only when the original task has a dueDate.
  * - Shifts startTime/reviewAt forward if present.
+ * - For due/review-only recurrences, derives startTime to keep deferred instances out of Next until scheduled.
  * - Resets checklist completion and IDs.
  * - New instance status is based on the previous status, with done -> next.
  */
@@ -393,15 +394,22 @@ export function createNextRecurringTask(
         return Number.isNaN(candidate.getTime()) ? new Date() : candidate;
     })();
     const completedAtDate = parsedCompletedAt ?? fallbackCompletedAt;
-    const baseIso = strategy === 'fluid' ? completedAtIso : task.dueDate;
-
-    const nextDueDate = nextIsoFrom(baseIso, rule, completedAtDate, byDay, interval, byMonthDay);
+    const nextDueDate = task.dueDate
+        ? nextIsoFrom(strategy === 'fluid' ? completedAtIso : task.dueDate, rule, completedAtDate, byDay, interval, byMonthDay)
+        : undefined;
     let nextStartTime = task.startTime
         ? nextIsoFrom(strategy === 'fluid' ? completedAtIso : task.startTime, rule, completedAtDate, byDay, interval, byMonthDay)
         : undefined;
     const nextReviewAt = task.reviewAt
         ? nextIsoFrom(strategy === 'fluid' ? completedAtIso : task.reviewAt, rule, completedAtDate, byDay, interval, byMonthDay)
         : undefined;
+    if (!nextStartTime && !nextDueDate && !nextReviewAt) {
+        // When recurrence exists but no schedule fields are set, defer the next instance
+        // from completion so it does not reappear in Next immediately.
+        nextStartTime = nextIsoFrom(completedAtIso, rule, completedAtDate, byDay, interval, byMonthDay);
+    } else if (!nextStartTime) {
+        nextStartTime = nextDueDate ?? nextReviewAt;
+    }
 
     let newStatus: TaskStatus = previousStatus;
     if (newStatus === 'done' || newStatus === 'archived') {
@@ -432,6 +440,8 @@ export function createNextRecurringTask(
         attachments: duplicatedAttachments.length > 0 ? duplicatedAttachments : undefined,
         location: task.location,
         projectId: task.projectId,
+        sectionId: task.sectionId,
+        areaId: task.areaId,
         isFocusedToday: false,
         timeEstimate: task.timeEstimate,
         reviewAt: nextReviewAt,

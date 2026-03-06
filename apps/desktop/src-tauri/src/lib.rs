@@ -1,14 +1,25 @@
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::env;
+#[cfg(target_os = "macos")]
+use std::ffi::{CStr, CString};
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+#[cfg(target_os = "macos")]
+use std::os::raw::c_char;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
@@ -21,6 +32,10 @@ use tauri::image::Image;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use rusqlite::{params, Connection, OptionalExtension, params_from_iter, ToSql};
 use keyring::{Entry, Error as KeyringError};
+use rand::RngCore;
+use reqwest::StatusCode;
+use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -30,15 +45,40 @@ const CONFIG_FILE_NAME: &str = "config.toml";
 const SECRETS_FILE_NAME: &str = "secrets.toml";
 const DATA_FILE_NAME: &str = "data.json";
 const DB_FILE_NAME: &str = "mindwtr.db";
+const SNAPSHOT_DIR_NAME: &str = "snapshots";
+const SNAPSHOT_RETENTION_MAX_COUNT: usize = 5;
+const SNAPSHOT_RETENTION_MAX_AGE_SECS: u64 = 7 * 24 * 60 * 60;
+const SNAPSHOT_RETENTION_RECENT_COUNT: usize = 2;
+const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
+const STORAGE_RETRY_ATTEMPTS: usize = 4;
+const STORAGE_RETRY_BASE_DELAY_MS: u64 = 120;
 const KEYRING_WEB_DAV_PASSWORD: &str = "webdav_password";
 const KEYRING_CLOUD_TOKEN: &str = "cloud_token";
+const KEYRING_DROPBOX_TOKENS: &str = "dropbox_tokens";
 const KEYRING_AI_OPENAI: &str = "ai_key_openai";
 const KEYRING_AI_ANTHROPIC: &str = "ai_key_anthropic";
 const KEYRING_AI_GEMINI: &str = "ai_key_gemini";
+const DROPBOX_AUTH_ENDPOINT: &str = "https://www.dropbox.com/oauth2/authorize";
+const DROPBOX_TOKEN_ENDPOINT: &str = "https://api.dropboxapi.com/oauth2/token";
+const DROPBOX_REVOKE_ENDPOINT: &str = "https://api.dropboxapi.com/2/auth/token/revoke";
+const DROPBOX_REDIRECT_HOST: &str = "127.0.0.1";
+const DROPBOX_REDIRECT_PORT: u16 = 53682;
+const DROPBOX_REDIRECT_PATH: &str = "/oauth/dropbox/callback";
+const DROPBOX_SCOPES: &str = "files.content.read files.content.write files.metadata.read";
+const DROPBOX_OAUTH_TIMEOUT_SECS: u64 = 180;
+const DROPBOX_TOKEN_REFRESH_SKEW_MS: i64 = 60_000;
+const DROPBOX_DEFAULT_TOKEN_LIFETIME_SECS: i64 = 4 * 60 * 60;
+const GLOBAL_QUICK_ADD_SHORTCUT_DEFAULT: &str = "Control+Alt+M";
+const GLOBAL_QUICK_ADD_SHORTCUT_ALTERNATE_N: &str = "Control+Alt+N";
+const GLOBAL_QUICK_ADD_SHORTCUT_ALTERNATE_Q: &str = "Control+Alt+Q";
+const GLOBAL_QUICK_ADD_SHORTCUT_LEGACY: &str = "CommandOrControl+Shift+A";
+const GLOBAL_QUICK_ADD_SHORTCUT_DISABLED: &str = "disabled";
 #[cfg(target_os = "macos")]
 const MENU_HELP_DOCS_ID: &str = "help_docs";
 #[cfg(target_os = "macos")]
 const MENU_HELP_ISSUES_ID: &str = "help_report_issue";
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const SQLITE_SCHEMA: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -241,10 +281,56 @@ struct ExternalCalendarSubscription {
     enabled: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ExternalCalendarEventRecord {
+    id: String,
+    source_id: String,
+    title: String,
+    start: String,
+    end: String,
+    all_day: bool,
+    description: Option<String>,
+    location: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MacOsCalendarReadResult {
+    permission: String,
+    calendars: Vec<ExternalCalendarSubscription>,
+    events: Vec<ExternalCalendarEventRecord>,
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn mindwtr_macos_calendar_permission_status_json() -> *mut c_char;
+    fn mindwtr_macos_calendar_request_permission_json() -> *mut c_char;
+    fn mindwtr_macos_calendar_events_json(range_start: *const c_char, range_end: *const c_char) -> *mut c_char;
+    fn mindwtr_macos_calendar_free_string(value: *mut c_char);
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct LinuxDistroInfo {
     id: Option<String>,
     id_like: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct DropboxTokenBundle {
+    client_id: String,
+    access_token: String,
+    refresh_token: String,
+    expires_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct DropboxTokenResponse {
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_in: Option<i64>,
+    error_description: Option<String>,
+    error_summary: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,6 +344,7 @@ struct TaskQueryOptions {
 }
 
 struct QuickAddPending(AtomicBool);
+struct GlobalQuickAddShortcutState(Mutex<Option<String>>);
 
 struct AudioRecorderState(Mutex<Option<AudioRecorderHandle>>);
 
@@ -284,9 +371,109 @@ struct AudioCaptureResult {
     size: usize,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GlobalQuickAddShortcutApplyResult {
+    shortcut: String,
+    warning: Option<String>,
+}
+
+fn default_global_quick_add_shortcut() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        GLOBAL_QUICK_ADD_SHORTCUT_DISABLED
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        GLOBAL_QUICK_ADD_SHORTCUT_DEFAULT
+    }
+}
+
 #[tauri::command]
 fn consume_quick_add_pending(state: tauri::State<'_, QuickAddPending>) -> bool {
     state.0.swap(false, Ordering::SeqCst)
+}
+
+fn normalize_global_quick_add_shortcut(shortcut: Option<&str>) -> Result<Option<String>, String> {
+    let trimmed = shortcut.map(str::trim).unwrap_or("");
+    if trimmed.is_empty() {
+        return Ok(Some(default_global_quick_add_shortcut().to_string()));
+    }
+
+    if trimmed.eq_ignore_ascii_case(GLOBAL_QUICK_ADD_SHORTCUT_DISABLED) {
+        return Ok(None);
+    }
+
+    if trimmed == GLOBAL_QUICK_ADD_SHORTCUT_DEFAULT
+        || trimmed == GLOBAL_QUICK_ADD_SHORTCUT_ALTERNATE_N
+        || trimmed == GLOBAL_QUICK_ADD_SHORTCUT_ALTERNATE_Q
+        || trimmed == GLOBAL_QUICK_ADD_SHORTCUT_LEGACY
+    {
+        return Ok(Some(trimmed.to_string()));
+    }
+
+    Err("Unsupported quick add shortcut".to_string())
+}
+
+fn apply_global_quick_add_shortcut(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, GlobalQuickAddShortcutState>,
+    shortcut: Option<&str>,
+) -> Result<String, String> {
+    let normalized = normalize_global_quick_add_shortcut(shortcut)?;
+    let mut guard = state.0.lock().map_err(|_| "Shortcut state lock poisoned".to_string())?;
+
+    if *guard == normalized {
+        return Ok(guard
+            .clone()
+            .unwrap_or_else(|| GLOBAL_QUICK_ADD_SHORTCUT_DISABLED.to_string()));
+    }
+
+    if let Some(existing) = guard.as_ref() {
+        if let Err(error) = app.global_shortcut().unregister(existing.as_str()) {
+            log::warn!("Failed to unregister existing quick add shortcut: {error}");
+        }
+    }
+
+    if let Some(next_shortcut) = normalized.as_ref() {
+        app.global_shortcut()
+            .on_shortcut(next_shortcut.as_str(), move |app, _shortcut, _event| {
+                show_main_and_emit(app);
+            })
+            .map_err(|error| format!("Failed to register global quick add shortcut: {error}"))?;
+    }
+
+    *guard = normalized.clone();
+    Ok(normalized.unwrap_or_else(|| GLOBAL_QUICK_ADD_SHORTCUT_DISABLED.to_string()))
+}
+
+#[tauri::command]
+fn set_global_quick_add_shortcut(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, GlobalQuickAddShortcutState>,
+    shortcut: Option<String>,
+) -> Result<GlobalQuickAddShortcutApplyResult, String> {
+    match apply_global_quick_add_shortcut(&app, &state, shortcut.as_deref()) {
+        Ok(applied) => Ok(GlobalQuickAddShortcutApplyResult {
+            shortcut: applied,
+            warning: None,
+        }),
+        Err(error) => {
+            log::warn!("Failed to apply global quick add shortcut; falling back to disabled: {error}");
+            let disabled = apply_global_quick_add_shortcut(
+                &app,
+                &state,
+                Some(GLOBAL_QUICK_ADD_SHORTCUT_DISABLED),
+            )?;
+            Ok(GlobalQuickAddShortcutApplyResult {
+                shortcut: disabled,
+                warning: Some(
+                    "Global quick add shortcut is unavailable (likely already used by another app), so it was disabled."
+                        .to_string(),
+                ),
+            })
+        }
+    }
 }
 
 #[tauri::command]
@@ -294,16 +481,274 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+#[cfg(target_os = "windows")]
+fn has_windows_package_identity() -> bool {
+    use windows_sys::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, ERROR_INSUFFICIENT_BUFFER};
+    use windows_sys::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
+
+    let mut package_name_len: u32 = 0;
+    // Per Win32 docs, packaged apps return ERROR_INSUFFICIENT_BUFFER on a size probe.
+    let status = unsafe { GetCurrentPackageFullName(&mut package_name_len, std::ptr::null_mut()) };
+    if status == APPMODEL_ERROR_NO_PACKAGE {
+        return false;
+    }
+    status == ERROR_INSUFFICIENT_BUFFER || (status == 0 && package_name_len > 0)
+}
+
+#[cfg(target_os = "windows")]
+fn is_windowsapps_mindwtr_path(path: &str) -> bool {
+    (path.contains("\\windowsapps\\") || path.contains("/windowsapps/")) && path.contains("mindwtr")
+}
+
 #[tauri::command]
 fn is_windows_store_install() -> bool {
     #[cfg(target_os = "windows")]
     {
-        std::env::var_os("APPX_PACKAGE_FAMILY_NAME").is_some()
+        if has_windows_package_identity() {
+            return true;
+        }
+
+        if std::env::var_os("APPX_PACKAGE_FAMILY_NAME").is_some()
             || std::env::var_os("APPX_PACKAGE_FULL_NAME").is_some()
+            || std::env::var_os("MSIX_PACKAGE_ROOT").is_some()
+            || std::env::var_os("PACKAGE_FAMILY_NAME").is_some()
+            || std::env::var_os("PACKAGE_FULL_NAME").is_some()
+        {
+            return true;
+        }
+
+        if let Some(path) = current_exe_path_lowercase() {
+            if is_windowsapps_mindwtr_path(&path) {
+                return true;
+            }
+        }
+        if let Some(path) = current_exe_canonical_path_lowercase() {
+            if is_windowsapps_mindwtr_path(&path) {
+                return true;
+            }
+        }
+
+        false
     }
     #[cfg(not(target_os = "windows"))]
     {
         false
+    }
+}
+
+fn current_exe_path_lowercase() -> Option<String> {
+    env::current_exe()
+        .ok()
+        .and_then(|path| path.to_str().map(|value| value.to_lowercase()))
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn current_exe_canonical_path_lowercase() -> Option<String> {
+    env::current_exe()
+        .ok()
+        .and_then(|path| fs::canonicalize(path).ok())
+        .and_then(|path| path.to_str().map(|value| value.to_lowercase()))
+}
+
+#[cfg(target_os = "windows")]
+fn command_succeeds(cmd: &str, args: &[&str]) -> bool {
+    Command::new(cmd)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn command_succeeds(cmd: &str, args: &[&str]) -> bool {
+    Command::new(cmd)
+        .args(args)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn is_homebrew_cask_installed() -> bool {
+    if command_succeeds("brew", &["list", "--cask", "mindwtr"]) {
+        return true;
+    }
+    let brew_paths = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"];
+    if brew_paths
+        .iter()
+        .any(|path| command_succeeds(path, &["list", "--cask", "mindwtr"]))
+    {
+        return true;
+    }
+    let caskroom_paths = ["/opt/homebrew/Caskroom/mindwtr", "/usr/local/Caskroom/mindwtr"];
+    caskroom_paths.iter().any(|path| Path::new(path).exists())
+}
+
+#[cfg(target_os = "linux")]
+fn is_homebrew_install_linux() -> bool {
+    if command_succeeds("brew", &["list", "--cask", "mindwtr"])
+        || command_succeeds("brew", &["list", "mindwtr"])
+    {
+        return true;
+    }
+    let brew_paths = [
+        "/home/linuxbrew/.linuxbrew/bin/brew",
+        "/opt/homebrew/bin/brew",
+        "/usr/local/bin/brew",
+    ];
+    if brew_paths.iter().any(|path| {
+        command_succeeds(path, &["list", "--cask", "mindwtr"])
+            || command_succeeds(path, &["list", "mindwtr"])
+    }) {
+        return true;
+    }
+    let install_paths = [
+        "/home/linuxbrew/.linuxbrew/Caskroom/mindwtr",
+        "/home/linuxbrew/.linuxbrew/Cellar/mindwtr",
+        "/linuxbrew/.linuxbrew/Caskroom/mindwtr",
+        "/linuxbrew/.linuxbrew/Cellar/mindwtr",
+    ];
+    install_paths.iter().any(|path| Path::new(path).exists())
+}
+
+#[cfg(target_os = "windows")]
+fn command_output_lowercase(cmd: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(cmd)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut combined = String::from_utf8_lossy(&output.stdout).to_lowercase();
+    if !output.stderr.is_empty() {
+        combined.push('\n');
+        combined.push_str(&String::from_utf8_lossy(&output.stderr).to_lowercase());
+    }
+    Some(combined)
+}
+
+#[cfg(target_os = "macos")]
+fn find_macos_bundle_root(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|ancestor| {
+            ancestor
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("app"))
+                .unwrap_or(false)
+        })
+        .map(|ancestor| ancestor.to_path_buf())
+}
+
+#[tauri::command]
+fn get_install_source() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        if is_windows_store_install() {
+            return "microsoft-store".to_string();
+        }
+        if env::var_os("WINGET_PACKAGE_IDENTIFIER").is_some() {
+            return "winget".to_string();
+        }
+        if let Some(path) = current_exe_path_lowercase() {
+            if path.contains("\\microsoft\\winget\\packages\\")
+                || path.contains("/microsoft/winget/packages/")
+            {
+                return "winget".to_string();
+            }
+        }
+        if let Some(path) = current_exe_canonical_path_lowercase() {
+            if path.contains("\\microsoft\\winget\\packages\\")
+                || path.contains("/microsoft/winget/packages/")
+            {
+                return "winget".to_string();
+            }
+        }
+        if let Some(list_output) = command_output_lowercase(
+            "winget",
+            &["list", "--id", "dongdongbh.Mindwtr", "--exact", "--disable-interactivity"],
+        ) {
+            if list_output.contains("dongdongbh.mindwtr") && list_output.contains("winget") {
+                return "winget".to_string();
+            }
+        }
+        return "direct".to_string();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(exe_path) = env::current_exe() {
+            if let Some(bundle_root) = find_macos_bundle_root(&exe_path) {
+                if bundle_root
+                    .join("Contents")
+                    .join("_MASReceipt")
+                    .join("receipt")
+                    .exists()
+                {
+                    return "mac-app-store".to_string();
+                }
+            }
+        }
+        let is_homebrew_path = |path: &str| path.contains("/caskroom/") || path.contains("/homebrew/");
+        if let Some(path) = current_exe_path_lowercase() {
+            if is_homebrew_path(&path) {
+                return "homebrew".to_string();
+            }
+        }
+        if let Some(path) = current_exe_canonical_path_lowercase() {
+            if is_homebrew_path(&path) {
+                return "homebrew".to_string();
+            }
+        }
+        if is_homebrew_cask_installed() {
+            return "homebrew".to_string();
+        }
+        return "direct".to_string();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if is_flatpak() {
+            return "flatpak".to_string();
+        }
+        if env::var_os("SNAP").is_some() || env::var_os("SNAP_NAME").is_some() {
+            return "snap".to_string();
+        }
+        if env::var_os("APPIMAGE").is_some() {
+            return "appimage".to_string();
+        }
+        if let Some(path) = current_exe_path_lowercase() {
+            if path.ends_with(".appimage") || path.contains(".appimage") {
+                return "appimage".to_string();
+            }
+            if path.contains("/home/linuxbrew/") || path.contains("/linuxbrew/") {
+                return "homebrew".to_string();
+            }
+        }
+        if is_homebrew_install_linux() {
+            return "homebrew".to_string();
+        }
+        if command_succeeds("pacman", &["-Q", "mindwtr"]) {
+            return "aur-source".to_string();
+        }
+        if command_succeeds("pacman", &["-Q", "mindwtr-bin"]) {
+            return "aur-bin".to_string();
+        }
+        if command_succeeds("dpkg-query", &["-W", "mindwtr"]) {
+            return "apt".to_string();
+        }
+        if command_succeeds("rpm", &["-q", "mindwtr"]) {
+            return "rpm".to_string();
+        }
+        return "direct".to_string();
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        "direct".to_string()
     }
 }
 
@@ -650,6 +1095,8 @@ fn open_sqlite(app: &tauri::AppHandle) -> Result<Connection, String> {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    conn.busy_timeout(Duration::from_millis(SQLITE_BUSY_TIMEOUT_MS))
+        .map_err(|e| e.to_string())?;
     conn.execute_batch(SQLITE_SCHEMA).map_err(|e| e.to_string())?;
     ensure_tasks_purged_at_column(&conn)?;
     ensure_tasks_order_column(&conn)?;
@@ -661,6 +1108,62 @@ fn open_sqlite(app: &tauri::AppHandle) -> Result<Connection, String> {
     ensure_fts_triggers(&conn)?;
     ensure_fts_populated(&conn, false)?;
     Ok(conn)
+}
+
+fn is_retryable_storage_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("database is locked")
+        || normalized.contains("database is busy")
+        || normalized.contains("resource busy")
+        || normalized.contains("temporarily unavailable")
+}
+
+fn write_data_json_file(data_path: &Path, data: &Value) -> Result<(), String> {
+    if let Some(parent) = data_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let backup_path = data_path.with_extension("json.bak");
+    if data_path.exists() {
+        let _ = fs::copy(data_path, &backup_path);
+    }
+    let tmp_path = data_path.with_extension("json.tmp");
+    let content = serde_json::to_string_pretty(data).map_err(|e| e.to_string())?;
+    {
+        let mut file = File::create(&tmp_path).map_err(|e| e.to_string())?;
+        file.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+    }
+    if cfg!(windows) && data_path.exists() {
+        fs::remove_file(data_path).map_err(|e| e.to_string())?;
+    }
+    fs::rename(&tmp_path, data_path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn persist_data_snapshot(app: &tauri::AppHandle, data: &Value) -> Result<(), String> {
+    ensure_data_file(app)?;
+    let mut conn = open_sqlite(app)?;
+    migrate_json_to_sqlite(&mut conn, data)?;
+    write_data_json_file(&get_data_path(app), data)?;
+    Ok(())
+}
+
+fn persist_data_snapshot_with_retries(app: &tauri::AppHandle, data: &Value) -> Result<(), String> {
+    for attempt in 0..STORAGE_RETRY_ATTEMPTS {
+        match persist_data_snapshot(app, data) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let can_retry = is_retryable_storage_error(&error) && attempt + 1 < STORAGE_RETRY_ATTEMPTS;
+                if can_retry {
+                    let delay = STORAGE_RETRY_BASE_DELAY_MS * (attempt as u64 + 1);
+                    std::thread::sleep(Duration::from_millis(delay));
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
+    Err("Failed to save data".to_string())
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
@@ -1176,7 +1679,7 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
         let checklist_json = json_str(task.get("checklist"));
         let attachments_json = json_str(task.get("attachments"));
         tx.execute(
-            "INSERT INTO tasks (id, title, status, priority, taskMode, startTime, dueDate, recurrence, pushCount, tags, contexts, checklist, description, attachments, location, projectId, sectionId, areaId, orderNum, isFocusedToday, timeEstimate, reviewAt, completedAt, rev, revBy, createdAt, updatedAt, deletedAt, purgedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
+            "INSERT OR REPLACE INTO tasks (id, title, status, priority, taskMode, startTime, dueDate, recurrence, pushCount, tags, contexts, checklist, description, attachments, location, projectId, sectionId, areaId, orderNum, isFocusedToday, timeEstimate, reviewAt, completedAt, rev, revBy, createdAt, updatedAt, deletedAt, purgedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
             params![
                 task.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
                 task.get("title").and_then(|v| v.as_str()).unwrap_or_default(),
@@ -1217,7 +1720,7 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
         let tag_ids_json = json_str_or_default(project.get("tagIds"), "[]");
         let attachments_json = json_str(project.get("attachments"));
         tx.execute(
-            "INSERT INTO projects (id, title, status, color, orderNum, tagIds, isSequential, isFocused, supportNotes, attachments, reviewAt, areaId, areaTitle, rev, revBy, createdAt, updatedAt, deletedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            "INSERT OR REPLACE INTO projects (id, title, status, color, orderNum, tagIds, isSequential, isFocused, supportNotes, attachments, reviewAt, areaId, areaTitle, rev, revBy, createdAt, updatedAt, deletedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 project.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
                 project.get("title").and_then(|v| v.as_str()).unwrap_or_default(),
@@ -1245,7 +1748,7 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
     let areas = data.get("areas").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     for area in areas {
         tx.execute(
-            "INSERT INTO areas (id, name, color, icon, orderNum, deletedAt, rev, revBy, createdAt, updatedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT OR REPLACE INTO areas (id, name, color, icon, orderNum, deletedAt, rev, revBy, createdAt, updatedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 area.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
                 area.get("name").and_then(|v| v.as_str()).unwrap_or_default(),
@@ -1265,7 +1768,7 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
     let sections = data.get("sections").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     for section in sections {
         tx.execute(
-            "INSERT INTO sections (id, projectId, title, description, orderNum, isCollapsed, rev, revBy, createdAt, updatedAt, deletedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT OR REPLACE INTO sections (id, projectId, title, description, orderNum, isCollapsed, rev, revBy, createdAt, updatedAt, deletedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 section.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
                 section.get("projectId").and_then(|v| v.as_str()).unwrap_or_default(),
@@ -1733,6 +2236,403 @@ fn set_keyring_secret(app: &tauri::AppHandle, key: &str, value: Option<String>) 
     }
 }
 
+fn now_unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn normalize_dropbox_client_id(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Dropbox app key is required".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn dropbox_redirect_uri() -> String {
+    format!(
+        "http://{}:{}{}",
+        DROPBOX_REDIRECT_HOST, DROPBOX_REDIRECT_PORT, DROPBOX_REDIRECT_PATH
+    )
+}
+
+fn decode_query_component(raw: &str) -> String {
+    let mut bytes: Vec<u8> = Vec::with_capacity(raw.len());
+    let mut idx = 0usize;
+    let raw_bytes = raw.as_bytes();
+    while idx < raw_bytes.len() {
+        match raw_bytes[idx] {
+            b'+' => {
+                bytes.push(b' ');
+                idx += 1;
+            }
+            b'%' if idx + 2 < raw_bytes.len() => {
+                let hex = &raw[idx + 1..idx + 3];
+                if let Ok(value) = u8::from_str_radix(hex, 16) {
+                    bytes.push(value);
+                    idx += 3;
+                } else {
+                    bytes.push(raw_bytes[idx]);
+                    idx += 1;
+                }
+            }
+            value => {
+                bytes.push(value);
+                idx += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+fn parse_query_string(query: &str) -> HashMap<String, String> {
+    let mut values: HashMap<String, String> = HashMap::new();
+    for part in query.split('&') {
+        if part.is_empty() {
+            continue;
+        }
+        let (key, value) = match part.split_once('=') {
+            Some((key, value)) => (key, value),
+            None => (part, ""),
+        };
+        values.insert(
+            decode_query_component(key),
+            decode_query_component(value),
+        );
+    }
+    values
+}
+
+fn write_oauth_http_response(
+    stream: &mut std::net::TcpStream,
+    status_line: &str,
+    body: &str,
+) -> Result<(), String> {
+    let response = format!(
+        "HTTP/1.1 {status_line}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.as_bytes().len(),
+        body
+    );
+    stream
+        .write_all(response.as_bytes())
+        .map_err(|error| format!("Failed to write OAuth response: {error}"))?;
+    stream
+        .flush()
+        .map_err(|error| format!("Failed to flush OAuth response: {error}"))?;
+    Ok(())
+}
+
+fn wait_for_dropbox_auth_code(listener: &TcpListener, expected_state: &str) -> Result<String, String> {
+    let deadline = Instant::now() + Duration::from_secs(DROPBOX_OAUTH_TIMEOUT_SECS);
+    while Instant::now() < deadline {
+        match listener.accept() {
+            Ok((mut stream, _addr)) => {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut buffer = [0u8; 8192];
+                let read_len = stream
+                    .read(&mut buffer)
+                    .map_err(|error| format!("Failed to read OAuth callback: {error}"))?;
+                if read_len == 0 {
+                    continue;
+                }
+                let request = String::from_utf8_lossy(&buffer[..read_len]);
+                let request_line = request
+                    .lines()
+                    .next()
+                    .ok_or_else(|| "Invalid OAuth callback request".to_string())?;
+                let target = request_line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("/");
+                if !target.starts_with(DROPBOX_REDIRECT_PATH) {
+                    let _ = write_oauth_http_response(
+                        &mut stream,
+                        "404 Not Found",
+                        "Mindwtr OAuth callback endpoint not found.",
+                    );
+                    continue;
+                }
+
+                let query = target
+                    .split_once('?')
+                    .map(|(_, query)| query)
+                    .unwrap_or("");
+                let params = parse_query_string(query);
+
+                if let Some(error_value) = params.get("error") {
+                    let details = params
+                        .get("error_description")
+                        .or_else(|| params.get("error_summary"))
+                        .cloned()
+                        .unwrap_or_else(|| error_value.clone());
+                    let _ = write_oauth_http_response(
+                        &mut stream,
+                        "400 Bad Request",
+                        "Dropbox authorization failed. You can return to Mindwtr.",
+                    );
+                    return Err(format!("Dropbox authorization failed: {details}"));
+                }
+
+                let state = params.get("state").cloned().unwrap_or_default();
+                if state != expected_state {
+                    let _ = write_oauth_http_response(
+                        &mut stream,
+                        "400 Bad Request",
+                        "Dropbox state validation failed. Please retry from Mindwtr.",
+                    );
+                    return Err("Dropbox authorization failed: state mismatch".to_string());
+                }
+
+                let code = params.get("code").cloned().unwrap_or_default();
+                if code.trim().is_empty() {
+                    let _ = write_oauth_http_response(
+                        &mut stream,
+                        "400 Bad Request",
+                        "Dropbox authorization failed. Missing authorization code.",
+                    );
+                    return Err("Dropbox authorization failed: missing code".to_string());
+                }
+
+                let _ = write_oauth_http_response(
+                    &mut stream,
+                    "200 OK",
+                    "Dropbox connected. You can close this tab and return to Mindwtr.",
+                );
+                return Ok(code);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => {
+                return Err(format!("Failed to accept OAuth callback: {error}"));
+            }
+        }
+    }
+    Err("Dropbox authorization timed out. Please try again.".to_string())
+}
+
+fn generate_random_urlsafe(size: usize) -> String {
+    let mut bytes = vec![0u8; size];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn generate_dropbox_pkce_verifier() -> String {
+    generate_random_urlsafe(64)
+}
+
+fn generate_dropbox_pkce_challenge(verifier: &str) -> String {
+    let digest = Sha256::digest(verifier.as_bytes());
+    URL_SAFE_NO_PAD.encode(digest)
+}
+
+fn dropbox_token_error_message(status: StatusCode, response_body: &str) -> String {
+    if let Ok(parsed) = serde_json::from_str::<DropboxTokenResponse>(response_body) {
+        if let Some(message) = parsed.error_description {
+            let trimmed = message.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        if let Some(message) = parsed.error_summary {
+            let trimmed = message.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    format!("HTTP {status}")
+}
+
+fn exchange_dropbox_auth_code(
+    client_id: &str,
+    code: &str,
+    verifier: &str,
+    redirect_uri: &str,
+) -> Result<DropboxTokenBundle, String> {
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post(DROPBOX_TOKEN_ENDPOINT)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("client_id", client_id),
+            ("redirect_uri", redirect_uri),
+            ("code_verifier", verifier),
+        ])
+        .send()
+        .map_err(|error| format!("Dropbox token exchange failed: {error}"))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .map_err(|error| format!("Failed to read Dropbox token response: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "Dropbox token exchange failed: {}",
+            dropbox_token_error_message(status, &body)
+        ));
+    }
+    let payload: DropboxTokenResponse = serde_json::from_str(&body)
+        .map_err(|error| format!("Dropbox token exchange returned invalid JSON: {error}"))?;
+    let access_token = payload
+        .access_token
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let refresh_token = payload
+        .refresh_token
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let expires_in = payload
+        .expires_in
+        .filter(|value| *value > 0)
+        .unwrap_or(DROPBOX_DEFAULT_TOKEN_LIFETIME_SECS);
+    if access_token.is_empty() || refresh_token.is_empty() {
+        return Err("Dropbox token exchange returned an invalid payload".to_string());
+    }
+    Ok(DropboxTokenBundle {
+        client_id: client_id.to_string(),
+        access_token,
+        refresh_token,
+        expires_at: now_unix_ms() + expires_in * 1000,
+    })
+}
+
+fn refresh_dropbox_token(
+    client_id: &str,
+    refresh_token: &str,
+) -> Result<(String, i64), String> {
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post(DROPBOX_TOKEN_ENDPOINT)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", client_id),
+        ])
+        .send()
+        .map_err(|error| format!("Dropbox token refresh failed: {error}"))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .map_err(|error| format!("Failed to read Dropbox refresh response: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "Dropbox token refresh failed: {}",
+            dropbox_token_error_message(status, &body)
+        ));
+    }
+    let payload: DropboxTokenResponse = serde_json::from_str(&body)
+        .map_err(|error| format!("Dropbox token refresh returned invalid JSON: {error}"))?;
+    let access_token = payload
+        .access_token
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let expires_in = payload
+        .expires_in
+        .filter(|value| *value > 0)
+        .unwrap_or(DROPBOX_DEFAULT_TOKEN_LIFETIME_SECS);
+    if access_token.is_empty() {
+        return Err("Dropbox token refresh returned an invalid payload".to_string());
+    }
+    Ok((access_token, now_unix_ms() + expires_in * 1000))
+}
+
+fn read_dropbox_tokens(app: &tauri::AppHandle) -> Result<Option<DropboxTokenBundle>, String> {
+    let Some(raw) = get_keyring_secret(app, KEYRING_DROPBOX_TOKENS)? else {
+        return Ok(None);
+    };
+    let parsed: DropboxTokenBundle = serde_json::from_str(&raw)
+        .map_err(|_| "Stored Dropbox token payload is invalid. Please reconnect Dropbox.".to_string())?;
+    if parsed.client_id.trim().is_empty()
+        || parsed.access_token.trim().is_empty()
+        || parsed.refresh_token.trim().is_empty()
+    {
+        return Err("Stored Dropbox token payload is invalid. Please reconnect Dropbox.".to_string());
+    }
+    Ok(Some(parsed))
+}
+
+fn write_dropbox_tokens(app: &tauri::AppHandle, tokens: &DropboxTokenBundle) -> Result<(), String> {
+    let payload = serde_json::to_string(tokens)
+        .map_err(|error| format!("Failed to serialize Dropbox tokens: {error}"))?;
+    set_keyring_secret(app, KEYRING_DROPBOX_TOKENS, Some(payload))
+}
+
+fn clear_dropbox_tokens(app: &tauri::AppHandle) -> Result<(), String> {
+    set_keyring_secret(app, KEYRING_DROPBOX_TOKENS, None)
+}
+
+fn get_valid_dropbox_access_token(
+    app: &tauri::AppHandle,
+    client_id: &str,
+    force_refresh: bool,
+) -> Result<String, String> {
+    let client_id = normalize_dropbox_client_id(client_id)?;
+    let mut tokens = read_dropbox_tokens(app)?
+        .ok_or_else(|| "Dropbox is not connected".to_string())?;
+    if tokens.client_id != client_id {
+        return Err("Dropbox token was issued for a different app key. Reconnect Dropbox.".to_string());
+    }
+    if !force_refresh && now_unix_ms() < tokens.expires_at - DROPBOX_TOKEN_REFRESH_SKEW_MS {
+        return Ok(tokens.access_token);
+    }
+    let (access_token, expires_at) = refresh_dropbox_token(&client_id, &tokens.refresh_token)?;
+    tokens.access_token = access_token;
+    tokens.expires_at = expires_at;
+    write_dropbox_tokens(app, &tokens)?;
+    Ok(tokens.access_token)
+}
+
+fn run_dropbox_oauth(app: &tauri::AppHandle, client_id: &str) -> Result<(), String> {
+    let normalized_client_id = normalize_dropbox_client_id(client_id)?;
+    let listener = TcpListener::bind((DROPBOX_REDIRECT_HOST, DROPBOX_REDIRECT_PORT))
+        .map_err(|error| {
+            format!(
+                "Failed to start Dropbox OAuth callback listener on {}:{} ({error})",
+                DROPBOX_REDIRECT_HOST, DROPBOX_REDIRECT_PORT
+            )
+        })?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("Failed to set Dropbox callback listener mode: {error}"))?;
+
+    let redirect_uri = dropbox_redirect_uri();
+    let state = generate_random_urlsafe(24);
+    let verifier = generate_dropbox_pkce_verifier();
+    let challenge = generate_dropbox_pkce_challenge(&verifier);
+
+    let mut authorize_url = reqwest::Url::parse(DROPBOX_AUTH_ENDPOINT)
+        .map_err(|error| format!("Failed to build Dropbox OAuth URL: {error}"))?;
+    {
+        let mut query = authorize_url.query_pairs_mut();
+        query.append_pair("client_id", &normalized_client_id);
+        query.append_pair("response_type", "code");
+        query.append_pair("redirect_uri", &redirect_uri);
+        query.append_pair("code_challenge", &challenge);
+        query.append_pair("code_challenge_method", "S256");
+        query.append_pair("token_access_type", "offline");
+        query.append_pair("scope", DROPBOX_SCOPES);
+        query.append_pair("state", &state);
+    }
+
+    open::that(authorize_url.as_str())
+        .map_err(|error| format!("Failed to open Dropbox authorization URL: {error}"))?;
+
+    let code = wait_for_dropbox_auth_code(&listener, &state)?;
+    let tokens = exchange_dropbox_auth_code(&normalized_client_id, &code, &verifier, &redirect_uri)?;
+    write_dropbox_tokens(app, &tokens)?;
+    Ok(())
+}
+
 fn bootstrap_storage_layout(app: &tauri::AppHandle) -> Result<(), String> {
     let config_dir = get_config_dir(app);
     let data_dir = get_data_dir(app);
@@ -1849,36 +2749,227 @@ async fn get_data(app: tauri::AppHandle) -> Result<Value, String> {
 }
 
 #[tauri::command]
+async fn read_data_json(app: tauri::AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let data_path = get_data_path(&app);
+        read_json_with_retries(&data_path, 2).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn save_data(app: tauri::AppHandle, data: Value) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_data_file(&app)?;
-        let mut conn = open_sqlite(&app)?;
-        migrate_json_to_sqlite(&mut conn, &data)?;
-
-        // Keep JSON backup updated for safety/rollbacks
-        let data_path = get_data_path(&app);
-        if let Some(parent) = data_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let backup_path = data_path.with_extension("json.bak");
-        if data_path.exists() {
-            let _ = fs::copy(&data_path, &backup_path);
-        }
-        let tmp_path = data_path.with_extension("json.tmp");
-        let content = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-        {
-            let mut file = File::create(&tmp_path).map_err(|e| e.to_string())?;
-            file.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
-            file.sync_all().map_err(|e| e.to_string())?;
-        }
-        if cfg!(windows) && data_path.exists() {
-            fs::remove_file(&data_path).map_err(|e| e.to_string())?;
-        }
-        fs::rename(&tmp_path, &data_path).map_err(|e| e.to_string())?;
+        persist_data_snapshot_with_retries(&app, &data)?;
         Ok(true)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn get_snapshot_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_path = get_data_path(app);
+    let parent = data_path
+        .parent()
+        .ok_or_else(|| "Failed to resolve data directory for snapshots".to_string())?;
+    Ok(parent.join(SNAPSHOT_DIR_NAME))
+}
+
+fn is_snapshot_file_name(name: &str) -> bool {
+    name.starts_with("data.") && name.ends_with(".snapshot.json")
+}
+
+fn format_snapshot_file_name(now: OffsetDateTime) -> String {
+    format!(
+        "data.{:04}-{:02}-{:02}T{:02}-{:02}-{:02}.snapshot.json",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second()
+    )
+}
+
+fn list_snapshot_entries(snapshot_dir: &Path) -> Vec<(String, PathBuf, SystemTime)> {
+    let mut entries: Vec<(String, PathBuf, SystemTime)> = Vec::new();
+    let Ok(read_dir) = fs::read_dir(snapshot_dir) else {
+        return entries;
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !is_snapshot_file_name(name) {
+            continue;
+        }
+        let modified = fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(UNIX_EPOCH);
+        entries.push((name.to_string(), path, modified));
+    }
+    entries.sort_by(|a, b| b.2.cmp(&a.2));
+    entries
+}
+
+fn prune_data_snapshots(snapshot_dir: &Path) {
+    let now = SystemTime::now();
+    let max_age_secs = SNAPSHOT_RETENTION_MAX_AGE_SECS;
+    let entries = list_snapshot_entries(snapshot_dir);
+
+    let mut fresh: Vec<(String, PathBuf, u64)> = Vec::new();
+    for (name, path, modified) in entries {
+        let age_secs = now
+            .duration_since(modified)
+            .unwrap_or(Duration::from_secs(0))
+            .as_secs();
+        if age_secs > max_age_secs {
+            let _ = fs::remove_file(&path);
+            continue;
+        }
+        fresh.push((name, path, age_secs));
+    }
+
+    if fresh.len() <= SNAPSHOT_RETENTION_MAX_COUNT {
+        return;
+    }
+
+    // Strategy: keep the latest few snapshots, then spread remaining slots across
+    // the retention window so snapshots represent different points in time.
+    let recent_keep = SNAPSHOT_RETENTION_RECENT_COUNT
+        .min(SNAPSHOT_RETENTION_MAX_COUNT)
+        .min(fresh.len());
+    let mut keep = vec![false; fresh.len()];
+    let mut kept_count = 0usize;
+    for flag in keep.iter_mut().take(recent_keep) {
+        *flag = true;
+        kept_count += 1;
+    }
+
+    let extra_slots = SNAPSHOT_RETENTION_MAX_COUNT.saturating_sub(recent_keep);
+    if extra_slots > 0 {
+        for slot in 1..=extra_slots {
+            let target_age = (slot as u64 * max_age_secs) / (extra_slots as u64);
+            let mut best_index: Option<usize> = None;
+            let mut best_distance = u64::MAX;
+            for (index, (_, _, age_secs)) in fresh.iter().enumerate() {
+                if keep[index] {
+                    continue;
+                }
+                let distance = age_secs.abs_diff(target_age);
+                if distance < best_distance {
+                    best_distance = distance;
+                    best_index = Some(index);
+                }
+            }
+            if let Some(index) = best_index {
+                keep[index] = true;
+                kept_count += 1;
+            }
+        }
+    }
+
+    // If selection is still short (sparse history), fill from the oldest entries.
+    if kept_count < SNAPSHOT_RETENTION_MAX_COUNT {
+        for index in (0..fresh.len()).rev() {
+            if keep[index] {
+                continue;
+            }
+            keep[index] = true;
+            kept_count += 1;
+            if kept_count >= SNAPSHOT_RETENTION_MAX_COUNT {
+                break;
+            }
+        }
+    }
+
+    for (index, (_, path, _)) in fresh.into_iter().enumerate() {
+        if !keep[index] {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
+fn files_are_identical(left: &Path, right: &Path) -> bool {
+    let left_meta = match fs::metadata(left) {
+        Ok(meta) => meta,
+        Err(_) => return false,
+    };
+    let right_meta = match fs::metadata(right) {
+        Ok(meta) => meta,
+        Err(_) => return false,
+    };
+    if left_meta.len() != right_meta.len() {
+        return false;
+    }
+    match (fs::read(left), fs::read(right)) {
+        (Ok(left_bytes), Ok(right_bytes)) => left_bytes == right_bytes,
+        _ => false,
+    }
+}
+
+#[tauri::command]
+fn create_data_snapshot(app: tauri::AppHandle) -> Result<String, String> {
+    ensure_data_file(&app)?;
+    let data_path = get_data_path(&app);
+    if !data_path.exists() {
+        return Err("Local data file not found".to_string());
+    }
+    let snapshot_dir = get_snapshot_dir(&app)?;
+    fs::create_dir_all(&snapshot_dir).map_err(|e| e.to_string())?;
+    if let Some((latest_name, latest_path, _)) = list_snapshot_entries(&snapshot_dir).first() {
+        if files_are_identical(&data_path, latest_path) {
+            prune_data_snapshots(&snapshot_dir);
+            return Ok(latest_name.clone());
+        }
+    }
+    let now = OffsetDateTime::now_utc();
+    let file_name = format_snapshot_file_name(now);
+    let snapshot_path = snapshot_dir.join(&file_name);
+    fs::copy(&data_path, &snapshot_path).map_err(|e| e.to_string())?;
+    prune_data_snapshots(&snapshot_dir);
+    Ok(file_name)
+}
+
+#[tauri::command]
+fn list_data_snapshots(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    ensure_data_file(&app)?;
+    let snapshot_dir = get_snapshot_dir(&app)?;
+    if !snapshot_dir.exists() {
+        return Ok(Vec::new());
+    }
+    prune_data_snapshots(&snapshot_dir);
+    let names = list_snapshot_entries(&snapshot_dir)
+        .into_iter()
+        .map(|(name, _, _)| name)
+        .collect();
+    Ok(names)
+}
+
+#[tauri::command]
+fn restore_data_snapshot(app: tauri::AppHandle, snapshot_file_name: String) -> Result<bool, String> {
+    ensure_data_file(&app)?;
+    let trimmed = snapshot_file_name.trim();
+    if trimmed.is_empty() || trimmed.contains('/') || trimmed.contains('\\') {
+        return Err("Invalid snapshot file name".to_string());
+    }
+    if !is_snapshot_file_name(trimmed) {
+        return Err("Invalid snapshot file format".to_string());
+    }
+    let snapshot_dir = get_snapshot_dir(&app)?;
+    let snapshot_path = snapshot_dir.join(trimmed);
+    if !snapshot_path.exists() {
+        return Err("Snapshot file not found".to_string());
+    }
+
+    let data = read_json_with_retries(&snapshot_path, 2)?;
+    persist_data_snapshot_with_retries(&app, &data)?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -2064,7 +3155,10 @@ fn normalize_sync_dir(input: &str) -> PathBuf {
     let path = PathBuf::from(input);
     let legacy_name = format!("{}-sync.json", APP_NAME);
     if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-        if name == DATA_FILE_NAME || name == legacy_name {
+        if name == DATA_FILE_NAME
+            || name == legacy_name
+            || name.to_ascii_lowercase().ends_with(".json")
+        {
             return path.parent().unwrap_or(&path).to_path_buf();
         }
     }
@@ -2159,12 +3253,16 @@ fn set_sync_backend(app: tauri::AppHandle, backend: String) -> Result<bool, Stri
 #[tauri::command]
 fn get_webdav_config(app: tauri::AppHandle) -> Result<Value, String> {
     let mut config = read_config(&app);
-    let mut password = get_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD)?;
+    let mut password = match get_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD) {
+        Ok(value) => value,
+        Err(_) => None,
+    };
     if password.is_none() {
         if let Some(legacy) = config.webdav_password.clone() {
-            set_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD, Some(legacy.clone()))?;
-            config.webdav_password = None;
-            write_config_files(&get_config_path(&app), &get_secrets_path(&app), &config)?;
+            if set_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD, Some(legacy.clone())).is_ok() {
+                config.webdav_password = None;
+                write_config_files(&get_config_path(&app), &get_secrets_path(&app), &config)?;
+            }
             password = Some(legacy);
         }
     }
@@ -2185,13 +3283,20 @@ fn set_webdav_config(app: tauri::AppHandle, url: String, username: String, passw
         config.webdav_url = None;
         config.webdav_username = None;
         config.webdav_password = None;
-        set_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD, None)?;
+        let _ = set_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD, None);
     } else {
         config.webdav_url = Some(url);
         config.webdav_username = Some(username.trim().to_string());
-        config.webdav_password = None;
         if !password.trim().is_empty() {
-            set_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD, Some(password))?;
+            let next_password = password.trim().to_string();
+            match set_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD, Some(next_password.clone())) {
+                Ok(_) => {
+                    config.webdav_password = None;
+                }
+                Err(_) => {
+                    config.webdav_password = Some(next_password);
+                }
+            }
         }
     }
 
@@ -2219,7 +3324,11 @@ fn webdav_get_json(app: tauri::AppHandle) -> Result<Value, String> {
         return Err("WebDAV URL not configured".to_string());
     }
     let username = config.webdav_username.unwrap_or_default();
-    let password = get_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD)?
+    let password = match get_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD) {
+        Ok(value) => value,
+        Err(_) => None,
+    }
+        .or(config.webdav_password.clone())
         .ok_or_else(|| "WebDAV password not configured".to_string())?;
 
     let client = reqwest::blocking::Client::new();
@@ -2229,13 +3338,23 @@ fn webdav_get_json(app: tauri::AppHandle) -> Result<Value, String> {
         .send()
         .map_err(|e| format!("WebDAV request failed: {e}"))?;
 
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(Value::Null);
+    }
+  
     if !response.status().is_success() {
         return Err(format!("WebDAV error: {}", response.status()));
     }
 
-    response
-        .json::<Value>()
-        .map_err(|e| format!("Invalid WebDAV response: {e}"))
+    let body = response
+        .text()
+        .map_err(|e| format!("Invalid WebDAV response: error reading response body: {e}"))?;
+    let normalized_body = body.trim_start_matches('\u{feff}').trim();
+    if normalized_body.is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str::<Value>(normalized_body)
+        .map_err(|e| format!("Invalid WebDAV response: error decoding response body: {e}"))
 }
 
 #[tauri::command]
@@ -2246,14 +3365,21 @@ fn webdav_put_json(app: tauri::AppHandle, data: Value) -> Result<bool, String> {
         return Err("WebDAV URL not configured".to_string());
     }
     let username = config.webdav_username.unwrap_or_default();
-    let password = get_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD)?
+    let password = match get_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD) {
+        Ok(value) => value,
+        Err(_) => None,
+    }
+        .or(config.webdav_password.clone())
         .ok_or_else(|| "WebDAV password not configured".to_string())?;
 
+    let payload = serde_json::to_string_pretty(&data)
+        .map_err(|e| format!("Failed to encode WebDAV payload: {e}"))?;
     let client = reqwest::blocking::Client::new();
     let response = client
         .put(url)
         .basic_auth(username, Some(password))
-        .json(&data)
+        .header("Content-Type", "application/json")
+        .body(payload)
         .send()
         .map_err(|e| format!("WebDAV request failed: {e}"))?;
 
@@ -2265,7 +3391,13 @@ fn webdav_put_json(app: tauri::AppHandle, data: Value) -> Result<bool, String> {
 
 #[tauri::command]
 fn get_webdav_password(app: tauri::AppHandle) -> Result<String, String> {
-    Ok(get_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD)?.unwrap_or_default())
+    let config = read_config(&app);
+    let password = match get_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD) {
+        Ok(value) => value,
+        Err(_) => None,
+    }
+        .or(config.webdav_password);
+    Ok(password.unwrap_or_default())
 }
 
 #[tauri::command]
@@ -2304,6 +3436,154 @@ fn set_cloud_config(app: tauri::AppHandle, url: String, token: String) -> Result
 
     write_config_files(&config_path, &get_secrets_path(&app), &config)?;
     Ok(true)
+}
+
+#[tauri::command]
+fn get_dropbox_redirect_uri() -> String {
+    dropbox_redirect_uri()
+}
+
+#[tauri::command]
+fn is_dropbox_connected(app: tauri::AppHandle, client_id: String) -> Result<bool, String> {
+    let normalized_client_id = normalize_dropbox_client_id(&client_id)?;
+    match read_dropbox_tokens(&app) {
+        Ok(Some(tokens)) => Ok(
+            tokens.client_id == normalized_client_id
+                && !tokens.access_token.trim().is_empty()
+                && !tokens.refresh_token.trim().is_empty(),
+        ),
+        Ok(None) => Ok(false),
+        Err(_error) => {
+            let _ = clear_dropbox_tokens(&app);
+            Ok(false)
+        }
+    }
+}
+
+#[tauri::command]
+async fn connect_dropbox(app: tauri::AppHandle, client_id: String) -> Result<bool, String> {
+    let oauth_result = tauri::async_runtime::spawn_blocking(move || run_dropbox_oauth(&app, &client_id))
+        .await
+        .map_err(|error| format!("Dropbox OAuth task failed: {error}"))?;
+    oauth_result?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn get_dropbox_access_token(
+    app: tauri::AppHandle,
+    client_id: String,
+    force_refresh: Option<bool>,
+) -> Result<String, String> {
+    let should_force_refresh = force_refresh.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        get_valid_dropbox_access_token(&app, &client_id, should_force_refresh)
+    })
+    .await
+    .map_err(|error| format!("Dropbox token task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn disconnect_dropbox(app: tauri::AppHandle, client_id: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let normalized_client_id = normalize_dropbox_client_id(&client_id)?;
+        if let Ok(Some(tokens)) = read_dropbox_tokens(&app) {
+            if tokens.client_id == normalized_client_id && !tokens.access_token.trim().is_empty() {
+                let _ = reqwest::blocking::Client::new()
+                    .post(DROPBOX_REVOKE_ENDPOINT)
+                    .bearer_auth(tokens.access_token)
+                    .send();
+            }
+        }
+        clear_dropbox_tokens(&app)?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|error| format!("Dropbox disconnect task failed: {error}"))??;
+    Ok(true)
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_eventkit_json(raw: *mut c_char) -> Result<Value, String> {
+    if raw.is_null() {
+        return Err("EventKit bridge returned null output".to_string());
+    }
+    let parsed = unsafe {
+        let text = CStr::from_ptr(raw).to_string_lossy().into_owned();
+        mindwtr_macos_calendar_free_string(raw);
+        serde_json::from_str::<Value>(&text)
+            .map_err(|error| format!("Failed to parse EventKit bridge output: {error}"))?
+    };
+    Ok(parsed)
+}
+
+#[tauri::command]
+fn get_macos_calendar_permission_status() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let value = parse_macos_eventkit_json(unsafe {
+            mindwtr_macos_calendar_permission_status_json()
+        })?;
+        let status = value
+            .get("status")
+            .and_then(|item| item.as_str())
+            .unwrap_or("denied");
+        return Ok(status.to_string());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok("unsupported".to_string())
+    }
+}
+
+#[tauri::command]
+async fn request_macos_calendar_permission() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let value = tauri::async_runtime::spawn_blocking(|| {
+            parse_macos_eventkit_json(unsafe {
+                mindwtr_macos_calendar_request_permission_json()
+            })
+        })
+        .await
+        .map_err(|error| format!("EventKit permission request task failed: {error}"))??;
+        let status = value
+            .get("status")
+            .and_then(|item| item.as_str())
+            .unwrap_or("denied");
+        return Ok(status.to_string());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok("unsupported".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_macos_calendar_events(range_start: String, range_end: String) -> Result<MacOsCalendarReadResult, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let start = CString::new(range_start.as_str())
+            .map_err(|error| format!("Invalid calendar range start: {error}"))?;
+        let end = CString::new(range_end.as_str())
+            .map_err(|error| format!("Invalid calendar range end: {error}"))?;
+        let value = parse_macos_eventkit_json(unsafe {
+            mindwtr_macos_calendar_events_json(start.as_ptr(), end.as_ptr())
+        })?;
+        let parsed = serde_json::from_value::<MacOsCalendarReadResult>(value)
+            .map_err(|error| format!("Failed to decode EventKit payload: {error}"))?;
+        return Ok(parsed);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = range_start;
+        let _ = range_end;
+        Ok(MacOsCalendarReadResult {
+            permission: "unsupported".to_string(),
+            calendars: Vec::new(),
+            events: Vec::new(),
+        })
+    }
 }
 
 #[tauri::command]
@@ -2373,13 +3653,49 @@ fn open_path(path: String) -> Result<bool, String> {
 #[tauri::command]
 fn read_sync_file(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let sync_path_str = get_sync_path(app)?;
-    let sync_file = PathBuf::from(&sync_path_str).join(DATA_FILE_NAME);
-    let backup_file = PathBuf::from(&sync_path_str).join(format!("{}.bak", DATA_FILE_NAME));
+    let sync_dir = PathBuf::from(&sync_path_str);
+    let sync_file = sync_dir.join(DATA_FILE_NAME);
+    let backup_file = sync_dir.join(format!("{}.bak", DATA_FILE_NAME));
+
+    let find_seed_backup_file = |dir: &Path| -> Option<PathBuf> {
+        let mut latest: Option<(SystemTime, PathBuf)> = None;
+        let entries = fs::read_dir(dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let lower = name.to_ascii_lowercase();
+            if !(lower.starts_with("mindwtr-backup-") || lower.starts_with("data-backup-")) {
+                continue;
+            }
+            if !lower.ends_with(".json") {
+                continue;
+            }
+            let modified = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH);
+            match &latest {
+                Some((latest_modified, _)) if &modified <= latest_modified => {}
+                _ => latest = Some((modified, path)),
+            }
+        }
+        latest.map(|(_, path)| path)
+    };
     
     if !sync_file.exists() {
         let legacy_sync_file = PathBuf::from(&sync_path_str).join(format!("{}-sync.json", APP_NAME));
         if legacy_sync_file.exists() {
             let content = fs::read_to_string(&legacy_sync_file).map_err(|e| e.to_string())?;
+            return parse_json_relaxed(&content)
+                .map(normalize_sync_value)
+                .map_err(|e| e.to_string());
+        }
+        if let Some(seed_file) = find_seed_backup_file(&sync_dir) {
+            let content = fs::read_to_string(&seed_file).map_err(|e| e.to_string())?;
             return parse_json_relaxed(&content)
                 .map(normalize_sync_value)
                 .map_err(|e| e.to_string());
@@ -2449,6 +3765,24 @@ fn set_tray_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> 
     } else {
         Ok(())
     }
+}
+
+#[tauri::command]
+fn set_macos_activation_policy(app: tauri::AppHandle, accessory: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let policy = if accessory {
+            tauri::ActivationPolicy::Accessory
+        } else {
+            tauri::ActivationPolicy::Regular
+        };
+        app.set_activation_policy(policy).map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (&app, accessory);
+    }
+    Ok(())
 }
 
 fn sanitize_json_text(raw: &str) -> String {
@@ -2554,6 +3888,7 @@ fn diagnostics_enabled() -> bool {
 pub fn run() {
     let builder = tauri::Builder::default()
         .manage(QuickAddPending(AtomicBool::new(false)))
+        .manage(GlobalQuickAddShortcutState(Mutex::new(None)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
@@ -2595,6 +3930,7 @@ pub fn run() {
             // Ensure data file exists on startup
             ensure_data_file(&app.handle()).ok();
             let diagnostics_enabled = diagnostics_enabled();
+            let is_windows_store = is_windows_store_install();
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(target_os = "linux")]
                 if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/icon.png")) {
@@ -2616,52 +3952,70 @@ pub fn run() {
             }
 
             let handle = app.handle();
-            if !(cfg!(target_os = "linux") && is_flatpak()) {
-                // Build system tray with Quick Add entry.
-                let quick_add_item = MenuItem::with_id(handle, "quick_add", "Quick Add", true, None::<&str>)?;
-                let show_item = MenuItem::with_id(handle, "show", "Show Mindwtr", true, None::<&str>)?;
-                let quit_item = MenuItem::with_id(handle, "quit", "Quit", true, None::<&str>)?;
-                let tray_menu = Menu::with_items(handle, &[&quick_add_item, &show_item, &quit_item])?;
+            if !(cfg!(target_os = "linux") && is_flatpak()) && !is_windows_store {
+                // Build system tray with Quick Add entry. Never hard-fail startup here.
+                let tray_init_result: tauri::Result<()> = (|| {
+                    let quick_add_item = MenuItem::with_id(handle, "quick_add", "Quick Add", true, None::<&str>)?;
+                    let show_item = MenuItem::with_id(handle, "show", "Show Mindwtr", true, None::<&str>)?;
+                    let quit_item = MenuItem::with_id(handle, "quit", "Quit", true, None::<&str>)?;
+                    let tray_menu = Menu::with_items(handle, &[&quick_add_item, &show_item, &quit_item])?;
 
-                let tray_icon = Image::from_bytes(include_bytes!("../icons/tray.png"))
-                    .unwrap_or_else(|_| handle.default_window_icon().unwrap().clone());
+                    let tray_icon = Image::from_bytes(include_bytes!("../icons/tray.png"))
+                        .ok()
+                        .or_else(|| handle.default_window_icon().cloned());
 
-                TrayIconBuilder::with_id("main")
-                    .icon(tray_icon)
-                    .menu(&tray_menu)
-                    .show_menu_on_left_click(false)
-                    .on_menu_event(move |app, event| {
-                        match event.id().as_ref() {
-                            "quick_add" => {
-                                show_main_and_emit(app);
-                            }
-                            "show" => {
-                                show_main(app);
-                            }
-                            "quit" => {
-                                app.exit(0);
-                            }
-                            _ => {}
-                        }
-                    })
-                    .on_tray_icon_event(|tray, event| {
-                        if let TrayIconEvent::Click { button, button_state, .. } = event {
-                            if button == MouseButton::Left && button_state == MouseButtonState::Up {
-                                show_main(tray.app_handle());
-                            }
-                        }
-                    })
-                    .build(handle)?;
+                    if let Some(tray_icon) = tray_icon {
+                        let _ = TrayIconBuilder::with_id("main")
+                            .icon(tray_icon)
+                            .menu(&tray_menu)
+                            .show_menu_on_left_click(false)
+                            .on_menu_event(move |app, event| {
+                                match event.id().as_ref() {
+                                    "quick_add" => {
+                                        show_main_and_emit(app);
+                                    }
+                                    "show" => {
+                                        show_main(app);
+                                    }
+                                    "quit" => {
+                                        app.exit(0);
+                                    }
+                                    _ => {}
+                                }
+                            })
+                            .on_tray_icon_event(|tray, event| {
+                                if let TrayIconEvent::Click { button, button_state, .. } = event {
+                                    if button == MouseButton::Left && button_state == MouseButtonState::Up {
+                                        show_main(tray.app_handle());
+                                    }
+                                }
+                            })
+                            .build(handle)?;
+                    } else {
+                        log::warn!("No tray icon available; skipping tray initialization.");
+                    }
+
+                    Ok(())
+                })();
+
+                if let Err(error) = tray_init_result {
+                    log::warn!("Failed to initialize tray support: {error}");
+                }
+            } else if is_windows_store {
+                log::info!("Tray disabled for Microsoft Store install.");
             } else {
                 log::info!("Tray disabled inside Flatpak sandbox.");
             }
 
             // Global hotkey for Quick Add.
-            handle
-                .global_shortcut()
-                .on_shortcut("CommandOrControl+Shift+A", move |app, _shortcut, _event| {
-                    show_main_and_emit(app);
-                })?;
+            let shortcut_state = app.state::<GlobalQuickAddShortcutState>();
+            if let Err(error) = apply_global_quick_add_shortcut(
+                &handle,
+                &shortcut_state,
+                Some(default_global_quick_add_shortcut()),
+            ) {
+                log::warn!("Failed to register global quick add shortcut: {error}");
+            }
             
             if cfg!(debug_assertions) || diagnostics_enabled {
                 app.handle().plugin(
@@ -2675,7 +4029,11 @@ pub fn run() {
         .manage(AudioRecorderState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_data,
+            read_data_json,
             save_data,
+            create_data_snapshot,
+            list_data_snapshots,
+            restore_data_snapshot,
             query_tasks,
             search_fts,
             get_data_path_cmd,
@@ -2694,12 +4052,21 @@ pub fn run() {
             webdav_put_json,
             get_cloud_config,
             set_cloud_config,
+            get_dropbox_redirect_uri,
+            is_dropbox_connected,
+            connect_dropbox,
+            get_dropbox_access_token,
+            disconnect_dropbox,
             get_external_calendars,
             set_external_calendars,
+            get_macos_calendar_permission_status,
+            request_macos_calendar_permission,
+            get_macos_calendar_events,
             open_path,
             read_sync_file,
             write_sync_file,
             set_tray_visible,
+            set_macos_activation_policy,
             get_linux_distro,
             start_audio_recording,
             stop_audio_recording,
@@ -2708,7 +4075,9 @@ pub fn run() {
             append_log_line,
             clear_log_file,
             consume_quick_add_pending,
+            set_global_quick_add_shortcut,
             is_windows_store_install,
+            get_install_source,
             quit_app
         ])
         .run(tauri::generate_context!())

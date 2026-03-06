@@ -15,33 +15,45 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: release-linux-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   linux:
     runs-on: ubuntu-22.04
     name: Linux Build + Snap + AUR
     timeout-minutes: 90
+    env:
+      VITE_DROPBOX_APP_KEY: ${{ vars.VITE_DROPBOX_APP_KEY || secrets.VITE_DROPBOX_APP_KEY }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev
+          WEBKIT_DEV_PKG="libwebkit2gtk-4.0-dev"
+          if apt-cache show libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
+            WEBKIT_DEV_PKG="libwebkit2gtk-4.1-dev"
+          fi
+          sudo apt-get install -y \
+            "$WEBKIT_DEV_PKG" \
+            libgtk-3-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev
         shell: bash
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
         with:
           workspaces: apps/desktop/src-tauri
 
@@ -49,7 +61,7 @@ jobs:
         run: cargo install tauri-cli --version "^2.0"
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
         with:
           bun-version: "1.x"
 
@@ -57,12 +69,114 @@ jobs:
         run: bun install
 
       - name: Build Tauri app
+        timeout-minutes: 35
         run: |
           cd apps/desktop
           cargo tauri build
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_ANALYTICS_HEARTBEAT_URL: ${{ secrets.ANALYTICS_HEARTBEAT_URL }}
+
+      - name: Repair AppImage metadata
+        run: |
+          set -euo pipefail
+
+          mapfile -t APPIMAGES < <(find apps/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' | sort)
+          if [ "${#APPIMAGES[@]}" -eq 0 ]; then
+            echo "No AppImage found, skipping repair."
+            exit 0
+          fi
+
+          RUNNER_ARCH="$(uname -m)"
+          case "$RUNNER_ARCH" in
+            amd64) RUNNER_ARCH="x86_64" ;;
+            arm64) RUNNER_ARCH="aarch64" ;;
+          esac
+
+          TOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          TOOL_WORKDIR="$(mktemp -d)"
+          METAINFO_SOURCE="$GITHUB_WORKSPACE/apps/desktop/src-tauri/linux/Mindwtr.metainfo.xml"
+          curl -fsSL "$TOOL_URL" -o "$TOOL_WORKDIR/appimagetool.AppImage"
+          chmod +x "$TOOL_WORKDIR/appimagetool.AppImage"
+          (
+            cd "$TOOL_WORKDIR"
+            ./appimagetool.AppImage --appimage-extract >/dev/null
+          )
+          APPIMAGETOOL="$TOOL_WORKDIR/squashfs-root/AppRun"
+
+          for APPIMAGE_PATH in "${APPIMAGES[@]}"; do
+            echo "Checking AppImage: $APPIMAGE_PATH"
+            APP_WORKDIR="$(mktemp -d)"
+            cp "$APPIMAGE_PATH" "$APP_WORKDIR/original.AppImage"
+            chmod +x "$APP_WORKDIR/original.AppImage"
+
+            (
+              cd "$APP_WORKDIR"
+              ./original.AppImage --appimage-extract >/dev/null
+              mv squashfs-root appdir
+
+              # Some Tauri builds emit .DirIcon as an absolute symlink into the CI workspace.
+              # That symlink is broken for downstream users and AppImageHub lint.
+              if [ -L appdir/.DirIcon ]; then
+                DIRICON_TARGET="$(readlink appdir/.DirIcon || true)"
+                if [[ "$DIRICON_TARGET" = /* ]] || [ ! -e appdir/.DirIcon ]; then
+                  rm -f appdir/.DirIcon
+                  cp "$GITHUB_WORKSPACE/apps/desktop/src-tauri/icons/128x128.png" appdir/.DirIcon
+                  echo "Replaced broken/absolute .DirIcon symlink with regular file"
+                else
+                  echo ".DirIcon symlink is relative and valid"
+                fi
+              elif [ ! -e appdir/.DirIcon ]; then
+                cp "$GITHUB_WORKSPACE/apps/desktop/src-tauri/icons/128x128.png" appdir/.DirIcon
+                echo "Injected missing .DirIcon"
+              else
+                echo ".DirIcon already present"
+              fi
+
+              # Keep AppStream metadata under usr/share/metainfo (not AppDir root),
+              # and ensure filenames match the component id to satisfy appstreamcli.
+              if [ -f "$METAINFO_SOURCE" ]; then
+                mkdir -p appdir/usr/share/metainfo
+                rm -f appdir/usr/share/metainfo/*.xml
+                cp "$METAINFO_SOURCE" appdir/usr/share/metainfo/tech.dongdongbh.mindwtr.metainfo.xml
+                # appdir-lint in AppImageHub looks for *.appdata.xml specifically.
+                cp "$METAINFO_SOURCE" appdir/usr/share/metainfo/tech.dongdongbh.mindwtr.appdata.xml
+                rm -f appdir/*.metainfo.xml appdir/*.appdata.xml || true
+                echo "Injected AppStream metainfo/appdata in usr/share/metainfo"
+              fi
+
+              # Tauri can emit an empty Categories= entry, which fails AppStream checks.
+              if [ -d appdir/usr/share/applications ]; then
+                for DESKTOP_FILE in appdir/usr/share/applications/*.desktop; do
+                  [ -f "$DESKTOP_FILE" ] || continue
+                  if grep -q '^Categories=$' "$DESKTOP_FILE"; then
+                    sed -i 's/^Categories=$/Categories=Office;Utility;/' "$DESKTOP_FILE"
+                    echo "Patched empty categories in $DESKTOP_FILE"
+                  fi
+                done
+              fi
+
+              # Some Tauri/linuxdeploy builds can leave AppRun.wrapped as 770.
+              # AppImageHub runs the app as an unprivileged user and fails with:
+              # "AppRun.wrapped: Permission denied". Normalize to world-executable.
+              if [ -e appdir/AppRun ]; then
+                chmod 0755 appdir/AppRun
+              fi
+              if [ -e appdir/AppRun.wrapped ]; then
+                chmod 0755 appdir/AppRun.wrapped
+              fi
+
+              ARCH="$RUNNER_ARCH" "$APPIMAGETOOL" appdir fixed.AppImage
+            )
+
+            cp "$APP_WORKDIR/fixed.AppImage" "$APPIMAGE_PATH"
+            chmod +x "$APPIMAGE_PATH"
+            rm -rf "$APP_WORKDIR"
+          done
+
+          rm -rf "$TOOL_WORKDIR"
+        shell: bash
 
       - name: Normalize deb filename for packaging
         run: |
@@ -79,17 +193,49 @@ jobs:
 
       - name: Collect Linux artifacts
         run: |
+          set -euo pipefail
           mkdir -p release-artifacts
-          for f in $(find apps/desktop/src-tauri/target -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm"); do
-            base=$(basename "$f")
-            lower=$(echo "$base" | tr 'A-Z' 'a-z')
+
+          APPIMAGE_PATH="$(find apps/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' | head -n 1 || true)"
+          if [ -n "${APPIMAGE_PATH:-}" ]; then
+            TAG_INPUT="${{ inputs.tag || github.event.inputs.tag }}"
+            TAG="${TAG_INPUT:-${GITHUB_REF#refs/tags/}}"
+            VERSION="${TAG#v}"
+
+            if [ -z "${VERSION}" ] || [ "${VERSION}" = "${TAG}" ]; then
+              APPIMAGE_BASE="$(basename "$APPIMAGE_PATH")"
+              VERSION_FROM_FILE="$(echo "$APPIMAGE_BASE" | sed -E 's/^[^_]+_([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?)_.+\.AppImage$/\1/')"
+              if [ -n "${VERSION_FROM_FILE}" ] && [ "${VERSION_FROM_FILE}" != "${APPIMAGE_BASE}" ]; then
+                VERSION="${VERSION_FROM_FILE}"
+              fi
+            fi
+
+            if [ -z "${VERSION:-}" ]; then
+              echo "Failed to resolve AppImage version for naming." >&2
+              exit 1
+            fi
+
+            ARCH="$(uname -m)"
+            case "$ARCH" in
+              amd64) ARCH="x86_64" ;;
+              arm64) ARCH="aarch64" ;;
+            esac
+
+            cp "$APPIMAGE_PATH" "release-artifacts/Mindwtr-${VERSION}-${ARCH}.AppImage"
+          fi
+
+          find apps/desktop/src-tauri/target -type f \( -name "*.deb" -o -name "*.rpm" \) -print0 | while IFS= read -r -d '' f; do
+            base="$(basename "$f")"
+            lower="$(echo "$base" | tr 'A-Z' 'a-z')"
             cp "$f" "release-artifacts/$lower"
           done
+
           ls -la release-artifacts/ || true
         shell: bash
 
       - name: Build Snap
-        uses: snapcore/action-build@v1.3.0
+        timeout-minutes: 15
+        uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1.3.0
         id: snap_build
 
       - name: Add Snap to artifacts
@@ -101,7 +247,8 @@ jobs:
 
       - name: Publish Snap (stable)
         if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch'
-        uses: snapcore/action-publish@v1.2.0
+        timeout-minutes: 10
+        uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1.2.0
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_TOKEN }}
         with:
@@ -109,8 +256,9 @@ jobs:
           release: stable
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-linux
           path: release-artifacts/*
           if-no-files-found: warn
+          retention-days: 28

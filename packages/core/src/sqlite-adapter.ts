@@ -91,8 +91,7 @@ const toAttachments = (value: unknown): Attachment[] | undefined => {
                 typeof item.id === 'string' &&
                 typeof item.kind === 'string' &&
                 typeof item.title === 'string' &&
-                typeof item.uri === 'string' &&
-                item.uri.trim().length > 0
+                typeof item.uri === 'string'
         )
         .map((item) => ({
             id: item.id as string,
@@ -115,6 +114,7 @@ const toAttachments = (value: unknown): Attachment[] | undefined => {
 
 export class SqliteAdapter {
     private client: SqliteClient;
+    private schemaReadyPromise: Promise<void> | null = null;
 
     constructor(client: SqliteClient) {
         this.client = client;
@@ -131,11 +131,10 @@ export class SqliteAdapter {
                 );
                 if (page.length === 0) break;
                 page.forEach((row) => {
-                    const { _rowid, ...rest } = row;
-                    if (typeof _rowid === 'number') {
-                        lastRowId = _rowid;
+                    if (typeof row._rowid === 'number') {
+                        lastRowId = row._rowid;
                     }
-                    rows.push(rest);
+                    rows.push(row);
                 });
                 if (page.length < READ_PAGE_SIZE) break;
             }
@@ -149,8 +148,8 @@ export class SqliteAdapter {
         }
         let offset = 0;
         while (true) {
-            const page = await this.client.all<Record<string, unknown>>(
-                `SELECT * FROM ${table} ORDER BY rowid LIMIT ? OFFSET ?`,
+            const page = await this.client.all<Record<string, unknown> & { _rowid: number }>(
+                `SELECT rowid as _rowid, * FROM ${table} ORDER BY rowid LIMIT ? OFFSET ?`,
                 [READ_PAGE_SIZE, offset]
             );
             rows.push(...page);
@@ -184,7 +183,7 @@ export class SqliteAdapter {
         await this.client.run('DELETE FROM fts_lock WHERE id = 1 AND owner = ?', [owner]);
     }
 
-    async ensureSchema() {
+    private async ensureSchemaInternal(): Promise<void> {
         if (this.client.exec) {
             await this.client.exec(SQLITE_BASE_SCHEMA);
         } else {
@@ -212,6 +211,16 @@ export class SqliteAdapter {
                 error,
             });
         }
+    }
+
+    async ensureSchema(): Promise<void> {
+        if (!this.schemaReadyPromise) {
+            this.schemaReadyPromise = this.ensureSchemaInternal().catch((error) => {
+                this.schemaReadyPromise = null;
+                throw error;
+            });
+        }
+        await this.schemaReadyPromise;
     }
 
     private async ensureFtsTriggers() {
@@ -305,6 +314,9 @@ export class SqliteAdapter {
                 await this.client.run(definition.sql);
             }
         }
+        await this.client.run(
+            'CREATE INDEX IF NOT EXISTS idx_sections_project_deletedAt ON sections(projectId, deletedAt)'
+        );
     }
 
     private async ensureProjectColumns() {
@@ -497,6 +509,8 @@ export class SqliteAdapter {
     }
 
     private mapTaskRow(row: Record<string, unknown>): Task {
+        const orderNumRaw = row.orderNum;
+        const order = orderNumRaw === null || orderNumRaw === undefined ? undefined : Number(orderNumRaw);
         return {
             id: String(row.id),
             title: String(row.title ?? ''),
@@ -520,7 +534,8 @@ export class SqliteAdapter {
             projectId: row.projectId as string | undefined,
             sectionId: row.sectionId as string | undefined,
             areaId: row.areaId as string | undefined,
-            orderNum: row.orderNum === null || row.orderNum === undefined ? undefined : Number(row.orderNum),
+            order,
+            orderNum: order,
             isFocusedToday: fromBool(row.isFocusedToday),
             timeEstimate: row.timeEstimate as Task['timeEstimate'] | undefined,
             reviewAt: row.reviewAt as string | undefined,
@@ -535,12 +550,14 @@ export class SqliteAdapter {
     }
 
     private mapProjectRow(row: Record<string, unknown>): Project {
+        const orderNumRaw = row.orderNum;
+        const fallbackOrder = typeof row._rowid === 'number' ? row._rowid : 0;
         return {
             id: String(row.id),
             title: String(row.title ?? ''),
             status: normalizeProjectStatus(row.status),
             color: String(row.color ?? '#6B7280'),
-            order: row.orderNum === null || row.orderNum === undefined ? 0 : Number(row.orderNum),
+            order: orderNumRaw === null || orderNumRaw === undefined ? fallbackOrder : Number(orderNumRaw),
             tagIds: toStringArray(fromJson<unknown>(row.tagIds, [])),
             isSequential: fromBool(row.isSequential),
             isFocused: fromBool(row.isFocused),
@@ -558,12 +575,14 @@ export class SqliteAdapter {
     }
 
     private mapSectionRow(row: Record<string, unknown>): Section {
+        const orderNumRaw = row.orderNum;
+        const fallbackOrder = typeof row._rowid === 'number' ? row._rowid : 0;
         return {
             id: String(row.id),
             projectId: String(row.projectId ?? ''),
             title: String(row.title ?? ''),
             description: row.description as string | undefined,
-            order: row.orderNum === null || row.orderNum === undefined ? 0 : Number(row.orderNum),
+            order: orderNumRaw === null || orderNumRaw === undefined ? fallbackOrder : Number(orderNumRaw),
             isCollapsed: fromBool(row.isCollapsed),
             rev: row.rev === null || row.rev === undefined ? undefined : Number(row.rev),
             revBy: row.revBy as string | undefined,
@@ -575,28 +594,41 @@ export class SqliteAdapter {
 
     async getData(): Promise<AppData> {
         await this.ensureSchema();
-        const tasksRows = await this.loadAllRows('tasks');
-        const projectsRows = await this.loadAllRows('projects');
-        const sectionsRows = await this.loadAllRows('sections');
-        const areasRows = await this.loadAllRows('areas');
-        const settingsRow = await this.client.get<Record<string, unknown>>('SELECT data FROM settings WHERE id = 1');
+        const [tasksRows, projectsRows, sectionsRows, areasRows, settingsRow] = await Promise.all([
+            this.loadAllRows('tasks'),
+            this.loadAllRows('projects'),
+            this.loadAllRows('sections'),
+            this.loadAllRows('areas'),
+            this.client.get<Record<string, unknown>>('SELECT data FROM settings WHERE id = 1'),
+        ]);
 
         const tasks: Task[] = tasksRows.map((row) => this.mapTaskRow(row));
         const projects: Project[] = projectsRows.map((row) => this.mapProjectRow(row));
         const sections: Section[] = sectionsRows.map((row) => this.mapSectionRow(row));
+        const nowIso = new Date().toISOString();
 
-        const areas: Area[] = areasRows.map((row) => ({
-            id: String(row.id),
-            name: String(row.name ?? ''),
-            color: row.color as string | undefined,
-            icon: row.icon as string | undefined,
-            order: Number(row.orderNum ?? 0),
-            rev: row.rev === null || row.rev === undefined ? undefined : Number(row.rev),
-            revBy: row.revBy as string | undefined,
-            createdAt: row.createdAt as string | undefined,
-            updatedAt: row.updatedAt as string | undefined,
-            deletedAt: row.deletedAt as string | undefined,
-        }));
+        const areas: Area[] = areasRows.map((row) => {
+            const createdAtRaw = typeof row.createdAt === 'string' && row.createdAt.trim().length > 0
+                ? row.createdAt
+                : undefined;
+            const updatedAtRaw = typeof row.updatedAt === 'string' && row.updatedAt.trim().length > 0
+                ? row.updatedAt
+                : undefined;
+            const createdAt = createdAtRaw ?? updatedAtRaw ?? nowIso;
+            const updatedAt = updatedAtRaw ?? createdAtRaw ?? nowIso;
+            return {
+                id: String(row.id),
+                name: String(row.name ?? ''),
+                color: row.color as string | undefined,
+                icon: row.icon as string | undefined,
+                order: Number(row.orderNum ?? 0),
+                rev: row.rev === null || row.rev === undefined ? undefined : Number(row.rev),
+                revBy: row.revBy as string | undefined,
+                createdAt,
+                updatedAt,
+                deletedAt: row.deletedAt as string | undefined,
+            };
+        });
 
         const settings = settingsRow?.data ? fromJson<AppData['settings']>(settingsRow.data, {}) : {};
 
@@ -777,38 +809,41 @@ export class SqliteAdapter {
                     'deletedAt',
                     'purgedAt',
                 ],
-                data.tasks.map((task) => [
-                    task.id,
-                    task.title,
-                    task.status,
-                    task.priority ?? null,
-                    task.taskMode ?? null,
-                    task.startTime ?? null,
-                    task.dueDate ?? null,
-                    toJson(task.recurrence),
-                    task.pushCount ?? null,
-                    toJson(task.tags ?? []),
-                    toJson(task.contexts ?? []),
-                    toJson(task.checklist),
-                    task.description ?? null,
-                    task.textDirection ?? null,
-                    toJson(task.attachments),
-                    task.location ?? null,
-                    task.projectId ?? null,
-                    task.sectionId ?? null,
-                    task.areaId ?? null,
-                    task.orderNum ?? null,
-                    toBool(task.isFocusedToday),
-                    task.timeEstimate ?? null,
-                    task.reviewAt ?? null,
-                    task.completedAt ?? null,
-                    task.rev ?? null,
-                    task.revBy ?? null,
-                    task.createdAt,
-                    task.updatedAt,
-                    task.deletedAt ?? null,
-                    task.purgedAt ?? null,
-                ]),
+                data.tasks.map((task) => {
+                    const taskOrder = Number.isFinite(task.order) ? task.order : task.orderNum;
+                    return [
+                        task.id,
+                        task.title,
+                        task.status,
+                        task.priority ?? null,
+                        task.taskMode ?? null,
+                        task.startTime ?? null,
+                        task.dueDate ?? null,
+                        toJson(task.recurrence),
+                        task.pushCount ?? null,
+                        toJson(task.tags ?? []),
+                        toJson(task.contexts ?? []),
+                        toJson(task.checklist),
+                        task.description ?? null,
+                        task.textDirection ?? null,
+                        toJson(task.attachments),
+                        task.location ?? null,
+                        task.projectId ?? null,
+                        task.sectionId ?? null,
+                        task.areaId ?? null,
+                        taskOrder ?? null,
+                        toBool(task.isFocusedToday),
+                        task.timeEstimate ?? null,
+                        task.reviewAt ?? null,
+                        task.completedAt ?? null,
+                        task.rev ?? null,
+                        task.revBy ?? null,
+                        task.createdAt,
+                        task.updatedAt,
+                        task.deletedAt ?? null,
+                        task.purgedAt ?? null,
+                    ];
+                }),
                 `title=excluded.title,
                  status=excluded.status,
                  priority=excluded.priority,

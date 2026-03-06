@@ -5,12 +5,13 @@ import type { Task, Project } from '@mindwtr/core';
 import { useLanguage } from '../../contexts/language-context';
 import { cn } from '../../lib/utils';
 import { useUiStore } from '../../store/ui-store';
-import { Clock, Star, Calendar, AlertCircle, ArrowRight, Filter, Folder, List, type LucideIcon } from 'lucide-react';
+import { Clock, Star, Calendar, ArrowRight, Filter, Folder, List, ChevronDown, type LucideIcon } from 'lucide-react';
 import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
 import { checkBudget } from '../../config/performanceBudgets';
 import { TaskItem } from '../TaskItem';
 import { projectMatchesAreaFilter, resolveAreaFilter, taskMatchesAreaFilter } from '../../lib/area-filter';
 import { PomodoroPanel } from './PomodoroPanel';
+import { groupTasksByArea, groupTasksByContext, type NextGroupBy, type TaskGroup } from './list/next-grouping';
 
 export function AgendaView() {
     const perf = usePerformanceMonitor('AgendaView');
@@ -29,13 +30,15 @@ export function AgendaView() {
     const getDerivedState = useTaskStore((state) => state.getDerivedState);
     const { projectMap, sequentialProjectIds } = getDerivedState();
     const { t } = useLanguage();
-    const { showListDetails, setListOptions } = useUiStore((state) => ({
+    const { showListDetails, nextGroupBy, setListOptions } = useUiStore((state) => ({
         showListDetails: state.listOptions.showDetails,
+        nextGroupBy: state.listOptions.nextGroupBy,
         setListOptions: state.setListOptions,
     }));
     const [selectedTokens, setSelectedTokens] = useState<string[]>([]);
     const [selectedPriorities, setSelectedPriorities] = useState<TaskPriority[]>([]);
     const [selectedTimeEstimates, setSelectedTimeEstimates] = useState<TimeEstimate[]>([]);
+    const [searchQuery, setSearchQuery] = useState('');
     const [filtersOpen, setFiltersOpen] = useState(false);
     const [top3Only, setTop3Only] = useState(false);
     const prioritiesEnabled = settings?.features?.priorities === true;
@@ -92,10 +95,22 @@ export function AgendaView() {
         if (activeTimeEstimates.length > 0 && (!task.timeEstimate || !activeTimeEstimates.includes(task.timeEstimate))) return false;
         return true;
     }, [selectedTokens, activePriorities, activeTimeEstimates]);
+    const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+    const matchesSearchQuery = useCallback((title: string) => {
+        if (!normalizedSearchQuery) return true;
+        return title.toLowerCase().includes(normalizedSearchQuery);
+    }, [normalizedSearchQuery]);
+    const resolveText = useCallback((key: string, fallback: string) => {
+        const value = t(key);
+        return value === key ? fallback : value;
+    }, [t]);
 
     const { filteredActiveTasks, reviewDueCandidates } = useMemo(() => {
         const now = new Date();
-        const filtered = activeTasks.filter(matchesFilters);
+        const filtered = activeTasks.filter((task) =>
+            matchesFilters(task)
+            && matchesSearchQuery(task.title)
+        );
         const reviewDue = tasks
             .filter((task) => {
                 if (task.deletedAt) return false;
@@ -107,11 +122,12 @@ export function AgendaView() {
                     if (project?.status === 'archived') return false;
                 }
                 if (!taskMatchesAreaFilter(task, resolvedAreaFilter, projectMap, areaById)) return false;
+                if (!matchesSearchQuery(task.title)) return false;
                 return true;
             })
             .filter(matchesFilters);
         return { filteredActiveTasks: filtered, reviewDueCandidates: reviewDue };
-    }, [activeTasks, tasks, projectMap, matchesFilters, resolvedAreaFilter, areaById]);
+    }, [activeTasks, tasks, projectMap, matchesFilters, matchesSearchQuery, resolvedAreaFilter, areaById]);
 
     const reviewDueProjects = useMemo(() => {
         const now = new Date();
@@ -120,6 +136,7 @@ export function AgendaView() {
                 if (project.deletedAt) return false;
                 if (project.status === 'archived') return false;
                 if (!projectMatchesAreaFilter(project, resolvedAreaFilter, areaById)) return false;
+                if (!matchesSearchQuery(project.title)) return false;
                 return isDueForReview(project.reviewAt, now);
             })
             .sort((a, b) => {
@@ -128,8 +145,9 @@ export function AgendaView() {
                 if (aReview !== bReview) return aReview - bReview;
                 return a.title.localeCompare(b.title);
             });
-    }, [projects, resolvedAreaFilter, areaById]);
+    }, [projects, matchesSearchQuery, resolvedAreaFilter, areaById]);
     const hasFilters = selectedTokens.length > 0 || activePriorities.length > 0 || activeTimeEstimates.length > 0;
+    const hasTaskFilters = hasFilters || Boolean(normalizedSearchQuery);
     const showFiltersPanel = filtersOpen || hasFilters;
     const toggleTokenFilter = (token: string) => {
         setSelectedTokens((prev) =>
@@ -194,8 +212,16 @@ export function AgendaView() {
             const aProjectOrder = a.projectId ? (projectOrderMap.get(a.projectId) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
             const bProjectOrder = b.projectId ? (projectOrderMap.get(b.projectId) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
             if (aProjectOrder !== bProjectOrder) return aProjectOrder - bProjectOrder;
-            const aOrder = Number.isFinite(a.orderNum) ? (a.orderNum as number) : Number.POSITIVE_INFINITY;
-            const bOrder = Number.isFinite(b.orderNum) ? (b.orderNum as number) : Number.POSITIVE_INFINITY;
+            const aOrder = Number.isFinite(a.order)
+                ? (a.order as number)
+                : Number.isFinite(a.orderNum)
+                    ? (a.orderNum as number)
+                    : Number.POSITIVE_INFINITY;
+            const bOrder = Number.isFinite(b.order)
+                ? (b.order as number)
+                : Number.isFinite(b.orderNum)
+                    ? (b.orderNum as number)
+                    : Number.POSITIVE_INFINITY;
             if (aOrder !== bOrder) return aOrder - bOrder;
             const aCreated = safeParseDate(a.createdAt)?.getTime() ?? 0;
             const bCreated = safeParseDate(b.createdAt)?.getTime() ?? 0;
@@ -206,7 +232,6 @@ export function AgendaView() {
     // Categorize tasks
     const sections = useMemo(() => {
         const now = new Date();
-        const todayStr = now.toDateString();
         const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
         const isDeferred = (task: Task) => {
             const start = safeParseDate(task.startTime);
@@ -233,7 +258,7 @@ export function AgendaView() {
         };
         const tasksByProject = new Map<string, Task[]>();
         for (const task of filteredActiveTasks) {
-            if (task.deletedAt || task.status !== 'next' || !task.projectId) continue;
+            if (task.deletedAt || !task.projectId) continue;
             if (!sequentialProjectIds.has(task.projectId)) continue;
             const list = tasksByProject.get(task.projectId) ?? [];
             list.push(task);
@@ -241,12 +266,17 @@ export function AgendaView() {
         }
         const sequentialFirstTasks = new Set<string>();
         tasksByProject.forEach((tasksForProject: Task[]) => {
-            const hasOrder = tasksForProject.some((task) => Number.isFinite(task.orderNum));
+            const hasOrder = tasksForProject.some((task) => Number.isFinite(task.order) || Number.isFinite(task.orderNum));
             let firstTaskId: string | null = null;
             let bestKey = Number.POSITIVE_INFINITY;
             tasksForProject.forEach((task) => {
+                const taskOrder = Number.isFinite(task.order)
+                    ? (task.order as number)
+                    : Number.isFinite(task.orderNum)
+                        ? (task.orderNum as number)
+                        : Number.POSITIVE_INFINITY;
                 const key = hasOrder
-                    ? (Number.isFinite(task.orderNum) ? (task.orderNum as number) : Number.POSITIVE_INFINITY)
+                    ? taskOrder
                     : new Date(task.createdAt).getTime();
                 if (!firstTaskId || key < bestKey) {
                     firstTaskId = task.id;
@@ -255,40 +285,62 @@ export function AgendaView() {
             });
             if (firstTaskId) sequentialFirstTasks.add(firstTaskId);
         });
-
-        const overdue = filteredActiveTasks.filter(t => {
-            if (!t.dueDate) return false;
-            const dueDate = safeParseDueDate(t.dueDate);
-            return dueDate && dueDate < now && !t.isFocusedToday && !isDeferred(t);
+        const isSequentialBlocked = (task: Task) => {
+            if (!task.projectId) return false;
+            if (!sequentialProjectIds.has(task.projectId)) return false;
+            return !sequentialFirstTasks.has(task.id);
+        };
+        const schedule = filteredActiveTasks.filter((task) => {
+            if (task.isFocusedToday) return false;
+            if (isSequentialBlocked(task)) return false;
+            const dueDate = safeParseDueDate(task.dueDate);
+            const startDate = safeParseDate(task.startTime);
+            const startReady = !startDate || startDate <= endOfToday;
+            return Boolean(startReady && dueDate && dueDate <= endOfToday)
+                || Boolean(startReady && startDate && startDate <= endOfToday);
         });
-        const dueToday = filteredActiveTasks.filter(t => {
-            if (!t.dueDate) return false;
-            const dueDate = safeParseDueDate(t.dueDate);
-            return dueDate && dueDate.toDateString() === todayStr &&
-                !t.isFocusedToday && !isDeferred(t);
+        const scheduleIds = new Set(schedule.map((task) => task.id));
+        const nextActions = filteredActiveTasks.filter((task) => {
+            if (task.status !== 'next' || task.isFocusedToday) return false;
+            if (isDeferred(task)) return false;
+            if (isSequentialBlocked(task)) return false;
+            return !scheduleIds.has(task.id);
         });
-        const nextActions = filteredActiveTasks.filter(t => {
-            if (t.status !== 'next' || t.isFocusedToday) return false;
-            if (isDeferred(t)) return false;
-            if (t.projectId && sequentialProjectIds.has(t.projectId)) {
-                return sequentialFirstTasks.has(t.id);
-            }
-            return true;
-        });
-
         const reviewDue = reviewDueCandidates.filter(t => !t.isFocusedToday);
+        const scheduleSortTime = (task: Task) => {
+            const due = safeParseDueDate(task.dueDate)?.getTime();
+            const start = safeParseDate(task.startTime)?.getTime();
+            if (typeof due === 'number' && typeof start === 'number') return Math.min(due, start);
+            if (typeof due === 'number') return due;
+            if (typeof start === 'number') return start;
+            return Number.POSITIVE_INFINITY;
+        };
 
         return {
-            overdue: sortWith(overdue, (task) => safeParseDueDate(task.dueDate)?.getTime() ?? Number.POSITIVE_INFINITY),
-            dueToday: sortWith(dueToday, (task) => safeParseDueDate(task.dueDate)?.getTime() ?? Number.POSITIVE_INFINITY),
+            schedule: sortWith(schedule, scheduleSortTime),
             nextActions: sortByProjectOrder(nextActions),
             reviewDue: sortWith(reviewDue, (task) => safeParseDate(task.reviewAt)?.getTime() ?? Number.POSITIVE_INFINITY),
         };
-    }, [filteredActiveTasks, reviewDueCandidates, projects, prioritiesEnabled, sortByProjectOrder]);
+    }, [filteredActiveTasks, reviewDueCandidates, prioritiesEnabled, sortByProjectOrder, sequentialProjectIds]);
+    const nextActionGroups = useMemo(() => {
+        if (nextGroupBy === 'none') return [] as TaskGroup[];
+        if (nextGroupBy === 'area') {
+            return groupTasksByArea({
+                areas,
+                tasks: sections.nextActions,
+                projectMap,
+                generalLabel: resolveText('settings.general', 'General'),
+            });
+        }
+        return groupTasksByContext({
+            tasks: sections.nextActions,
+            noContextLabel: resolveText('contexts.none', 'No context'),
+        });
+    }, [areas, nextGroupBy, projectMap, resolveText, sections.nextActions]);
     const focusedCount = focusedTasks.length;
     const { top3Tasks, remainingCount } = useMemo(() => {
         const byId = new Map<string, Task>();
-        [...sections.overdue, ...sections.dueToday, ...sections.nextActions, ...sections.reviewDue].forEach((task) => {
+        [...sections.schedule, ...sections.nextActions, ...sections.reviewDue].forEach((task) => {
             byId.set(task.id, task);
         });
         const candidates = Array.from(byId.values());
@@ -328,7 +380,10 @@ export function AgendaView() {
         if (task.isFocusedToday) {
             updateTask(taskId, { isFocusedToday: false });
         } else if (focusedCount < 3) {
-            updateTask(taskId, { isFocusedToday: true });
+            updateTask(taskId, {
+                isFocusedToday: true,
+                ...(task.status !== 'next' ? { status: 'next' as const } : {}),
+            });
         }
     };
 
@@ -346,6 +401,7 @@ export function AgendaView() {
             onToggle: () => handleToggleFocus(task.id),
             title,
             ariaLabel: title,
+            alwaysVisible: true,
         };
     }, [focusedCount, handleToggleFocus, t]);
 
@@ -373,6 +429,7 @@ export function AgendaView() {
                             focusToggle={buildFocusToggle(task)}
                             showProjectBadgeInActions={false}
                             compactMetaEnabled={showListDetails}
+                            enableDoubleClickEdit
                         />
                     ))}
                 </div>
@@ -425,9 +482,8 @@ export function AgendaView() {
     const pomodoroTasks = useMemo(() => {
         const ordered = [
             ...focusedTasks,
+            ...sections.schedule,
             ...sections.nextActions,
-            ...sections.dueToday,
-            ...sections.overdue,
             ...sections.reviewDue,
         ];
         const byId = new Map<string, Task>();
@@ -479,6 +535,26 @@ export function AgendaView() {
                         <List className="w-3.5 h-3.5" />
                         {showListDetails ? (t('list.details') || 'Details') : (t('list.detailsOff') || 'Details off')}
                     </button>
+                    <div className="relative">
+                        <select
+                            value={nextGroupBy}
+                            onChange={(event) => setListOptions({ nextGroupBy: event.target.value as NextGroupBy })}
+                            aria-label={resolveText('list.groupBy', 'Group')}
+                            className={cn(
+                                "min-w-[136px] appearance-none text-xs leading-none rounded-full border pl-3 pr-8 py-1.5 transition-colors",
+                                "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground",
+                                "focus:outline-none focus:ring-2 focus:ring-primary/40"
+                            )}
+                        >
+                            <option value="none">{resolveText('list.groupByNone', 'No grouping')}</option>
+                            <option value="context">{resolveText('list.groupByContext', 'Context')}</option>
+                            <option value="area">{resolveText('list.groupByArea', 'Area')}</option>
+                        </select>
+                        <ChevronDown
+                            className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                            aria-hidden="true"
+                        />
+                    </div>
                 </div>
             </header>
 
@@ -509,6 +585,14 @@ export function AgendaView() {
                         </button>
                     </div>
                 </div>
+                <input
+                    type="text"
+                    data-view-filter-input
+                    placeholder={t('common.search')}
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    className="w-full text-sm px-3 py-2 rounded border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
                 {showFiltersPanel && (
                     <div className="space-y-4">
                         <div className="space-y-2">
@@ -604,6 +688,7 @@ export function AgendaView() {
                                         project={task.projectId ? projectMap.get(task.projectId) : undefined}
                                         showProjectBadgeInActions={false}
                                         compactMetaEnabled={showListDetails}
+                                        enableDoubleClickEdit
                                     />
                                 ))}
                             </div>
@@ -623,17 +708,16 @@ export function AgendaView() {
                 </div>
             ) : (
                 <>
-                    {/* Today's Focus Section */}
-                    <div className="bg-gradient-to-r from-yellow-50 to-orange-50 dark:from-yellow-900/40 dark:to-amber-900/25 border border-yellow-200 dark:border-amber-500/30 rounded-xl p-6">
-                        <h3 className="font-bold text-lg flex items-center gap-2 mb-4 text-slate-900 dark:text-amber-100">
-                            <Star className="w-5 h-5 text-yellow-500 fill-yellow-500 dark:text-amber-300 dark:fill-amber-300" />
-                            {t('agenda.todaysFocus')}
-                            <span className="text-sm font-normal text-slate-600 dark:text-amber-200">
-                                ({focusedCount}/3)
-                            </span>
-                        </h3>
+                    {focusedTasks.length > 0 && (
+                        <div className="bg-gradient-to-r from-yellow-50 to-orange-50 dark:from-yellow-900/40 dark:to-amber-900/25 border border-yellow-200 dark:border-amber-500/30 rounded-xl p-6">
+                            <h3 className="font-bold text-lg flex items-center gap-2 mb-4 text-slate-900 dark:text-amber-100">
+                                <Star className="w-5 h-5 text-yellow-500 fill-yellow-500 dark:text-amber-300 dark:fill-amber-300" />
+                                {t('agenda.todaysFocus')}
+                                <span className="text-sm font-normal text-slate-600 dark:text-amber-200">
+                                    ({focusedCount}/3)
+                                </span>
+                            </h3>
 
-                        {focusedTasks.length > 0 ? (
                             <div className="divide-y divide-border/30">
                                 {focusedTasks.map(task => (
                                     <TaskItem
@@ -643,39 +727,69 @@ export function AgendaView() {
                                         focusToggle={buildFocusToggle(task)}
                                         showProjectBadgeInActions={false}
                                         compactMetaEnabled={showListDetails}
+                                        enableDoubleClickEdit
                                     />
                                 ))}
                             </div>
-                        ) : (
-                            <p className="text-muted-foreground text-center py-4 flex items-center justify-center gap-2">
-                                <Star className="w-4 h-4 text-amber-400" />
-                                {t('agenda.focusHint')}
-                            </p>
-                        )}
-                    </div>
+                        </div>
+                    )}
 
                     {/* Other Sections */}
                     <div className="space-y-6">
                         <Section
-                            title={t('agenda.overdue')}
-                            icon={AlertCircle}
-                            tasks={sections.overdue}
-                            color="text-red-600"
-                        />
-
-                        <Section
-                            title={t('agenda.dueToday')}
+                            title={t('focus.schedule') || t('agenda.dueToday')}
                             icon={Calendar}
-                            tasks={sections.dueToday}
+                            tasks={sections.schedule}
                             color="text-yellow-600"
                         />
 
-                        <Section
-                            title={t('agenda.nextActions')}
-                            icon={ArrowRight}
-                            tasks={sections.nextActions}
-                            color="text-blue-600"
-                        />
+                        {nextGroupBy === 'none' ? (
+                            <Section
+                                title={t('agenda.nextActions')}
+                                icon={ArrowRight}
+                                tasks={sections.nextActions}
+                                color="text-blue-600"
+                            />
+                        ) : (
+                            <div className="space-y-3">
+                                <h3 className="font-semibold flex items-center gap-2 text-blue-600">
+                                    <ArrowRight className="w-5 h-5" />
+                                    {t('agenda.nextActions')}
+                                    <span className="text-muted-foreground font-normal">({sections.nextActions.length})</span>
+                                </h3>
+                                <div className="space-y-2">
+                                    {nextActionGroups.map((group) => (
+                                        <div key={group.id} className="rounded-md border border-border/40 bg-card/30">
+                                            <div className={cn(
+                                                'px-3 py-2 text-xs font-semibold uppercase tracking-wide border-b border-border/30',
+                                                group.muted ? 'text-muted-foreground' : 'text-foreground/90',
+                                            )}>
+                                                <span className="inline-flex items-center gap-1.5">
+                                                    {group.dotColor && (
+                                                        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: group.dotColor }} aria-hidden="true" />
+                                                    )}
+                                                    <span>{group.title}</span>
+                                                </span>
+                                                <span className="ml-2 text-muted-foreground">{group.tasks.length}</span>
+                                            </div>
+                                            <div className="divide-y divide-border/30">
+                                                {group.tasks.map((task) => (
+                                                    <TaskItem
+                                                        key={task.id}
+                                                        task={task}
+                                                        project={task.projectId ? projectMap.get(task.projectId) : undefined}
+                                                        focusToggle={buildFocusToggle(task)}
+                                                        showProjectBadgeInActions={false}
+                                                        compactMetaEnabled={showListDetails}
+                                                        enableDoubleClickEdit
+                                                    />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
                         <Section
                             title={t('agenda.reviewDue') || 'Review Due'}
@@ -698,7 +812,7 @@ export function AgendaView() {
                 <div className="text-center py-12 text-muted-foreground">
                     <p className="text-4xl mb-4">✨</p>
                     <p className="text-lg font-medium">{t('agenda.allClear')}</p>
-                    <p>{hasFilters ? t('filters.noMatch') : t('agenda.noTasks')}</p>
+                    <p>{hasTaskFilters ? t('filters.noMatch') : t('agenda.noTasks')}</p>
                 </div>
             )}
             </div>

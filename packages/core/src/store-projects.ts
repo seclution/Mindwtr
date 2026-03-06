@@ -1,6 +1,6 @@
 import type { AppData, Area, Project, Section, Task, TaskStatus } from './types';
 import type { TaskStore } from './store-types';
-import { buildSaveSnapshot, ensureDeviceId, normalizeRevision, normalizeTagId } from './store-helpers';
+import { buildSaveSnapshot, ensureDeviceId, getTaskOrder, normalizeRevision, normalizeTagId } from './store-helpers';
 import { generateUUID as uuidv4 } from './uuid';
 import { clearDerivedCache } from './store-settings';
 
@@ -109,16 +109,21 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
         const changeAt = Date.now();
         const now = new Date().toISOString();
         let snapshot: AppData | null = null;
+        let missingProject = false;
         set((state) => {
             const allProjects = state._allProjects;
             const oldProject = allProjects.find(p => p.id === id);
-            if (!oldProject) return state;
+            if (!oldProject) {
+                missingProject = true;
+                return state;
+            }
             const deviceState = ensureDeviceId(state.settings);
 
             const incomingStatus = updates.status ?? oldProject.status;
             const statusChanged = incomingStatus !== oldProject.status;
 
             let newAllTasks = state._allTasks;
+            let newAllSections = state._allSections;
 
             if (statusChanged && incomingStatus === 'archived') {
                 const taskStatus: TaskStatus = 'archived';
@@ -139,6 +144,18 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
                         };
                     }
                     return task;
+                });
+                newAllSections = newAllSections.map((section) => {
+                    if (section.projectId === id && !section.deletedAt) {
+                        return {
+                            ...section,
+                            deletedAt: now,
+                            updatedAt: now,
+                            rev: normalizeRevision(section.rev) + 1,
+                            revBy: deviceState.deviceId,
+                        };
+                    }
+                    return section;
                 });
             }
 
@@ -174,10 +191,12 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
 
             const newVisibleProjects = newAllProjects.filter(p => !p.deletedAt);
             const newVisibleTasks = newAllTasks.filter(t => !t.deletedAt && t.status !== 'archived');
+            const newVisibleSections = newAllSections.filter((section) => !section.deletedAt);
 
             snapshot = buildSaveSnapshot(state, {
                 tasks: newAllTasks,
                 projects: newAllProjects,
+                sections: newAllSections,
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             });
             return {
@@ -185,10 +204,19 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
                 _allProjects: newAllProjects,
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
+                sections: newVisibleSections,
+                _allSections: newAllSections,
                 lastDataChangeAt: changeAt,
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
+
+        if (missingProject) {
+            const message = 'Project not found';
+            console.warn(`[mindwtr] updateProject skipped: ${id} was not found`);
+            set({ error: message });
+            return;
+        }
 
         if (snapshot) {
             debouncedSave(snapshot, (msg) => set({ error: msg }));
@@ -203,7 +231,13 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
         const changeAt = Date.now();
         const now = new Date().toISOString();
         let snapshot: AppData | null = null;
+        let missingProject = false;
         set((state) => {
+            const target = state._allProjects.find((project) => project.id === id && !project.deletedAt);
+            if (!target) {
+                missingProject = true;
+                return state;
+            }
             const deviceState = ensureDeviceId(state.settings);
             // Soft-delete project
             const newAllProjects = state._allProjects.map((project) =>
@@ -245,6 +279,7 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
             const newVisibleProjects = newAllProjects.filter(p => !p.deletedAt);
             const newVisibleTasks = newAllTasks.filter(t => !t.deletedAt && t.status !== 'archived');
             const newVisibleSections = newAllSections.filter((section) => !section.deletedAt);
+            clearDerivedCache();
             snapshot = buildSaveSnapshot(state, {
                 tasks: newAllTasks,
                 projects: newAllProjects,
@@ -262,6 +297,12 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
+        if (missingProject) {
+            const message = 'Project not found';
+            console.warn(`[mindwtr] deleteProject skipped: ${id} was not found`);
+            set({ error: message });
+            return;
+        }
         if (snapshot) {
             debouncedSave(snapshot, (msg) => set({ error: msg }));
         }
@@ -648,12 +689,22 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
         });
         if (existingAreaId) {
             if (shouldRestoreDeletedArea || (initialProps && Object.keys(initialProps).length > 0)) {
-                await get().updateArea(existingAreaId, {
-                    ...(initialProps ?? {}),
-                    ...(shouldRestoreDeletedArea ? { deletedAt: undefined, name: trimmedName } : {}),
-                });
+                try {
+                    await get().updateArea(existingAreaId, {
+                        ...(initialProps ?? {}),
+                        ...(shouldRestoreDeletedArea ? { deletedAt: undefined, name: trimmedName } : {}),
+                    });
+                } catch {
+                    set({ error: shouldRestoreDeletedArea ? 'Failed to restore area' : 'Failed to update area' });
+                    return null;
+                }
             }
-            return get()._allAreas.find((area) => area.id === existingAreaId && !area.deletedAt) ?? null;
+            const resolvedArea = get()._allAreas.find((area) => area.id === existingAreaId);
+            if (shouldRestoreDeletedArea && (!resolvedArea || resolvedArea.deletedAt)) {
+                set({ error: 'Failed to restore area' });
+                return null;
+            }
+            return resolvedArea && !resolvedArea.deletedAt ? resolvedArea : null;
         }
         if (snapshot) {
             debouncedSave(snapshot, (msg) => set({ error: msg }));
@@ -692,6 +743,7 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
                         return {
                             ...project,
                             areaId: existing.id,
+                            color: mergedArea.color ?? project.color,
                             updatedAt: now,
                             rev: normalizeRevision(project.rev) + 1,
                             revBy: deviceState.deviceId,
@@ -717,6 +769,23 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
             const now = new Date().toISOString();
             const nextOrder = Number.isFinite(updates.order) ? (updates.order as number) : area.order;
             const nextName = updates.name ? updates.name.trim() : area.name;
+            let projectsChanged = false;
+            let newAllProjects = state._allProjects;
+            if (typeof updates.color === 'string') {
+                const nextAreaColor = updates.color;
+                newAllProjects = state._allProjects.map((project) => {
+                    if (project.areaId !== id) return project;
+                    if (project.color === nextAreaColor) return project;
+                    projectsChanged = true;
+                    return {
+                        ...project,
+                        color: nextAreaColor,
+                        updatedAt: now,
+                        rev: normalizeRevision(project.rev) + 1,
+                        revBy: deviceState.deviceId,
+                    };
+                });
+            }
             const newAllAreas = allAreas
                 .map(a => (a.id === id
                     ? {
@@ -732,11 +801,18 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
                 .sort((a, b) => a.order - b.order);
             snapshot = buildSaveSnapshot(state, {
                 areas: newAllAreas,
+                ...(projectsChanged ? { projects: newAllProjects } : {}),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             });
             return {
                 areas: newAllAreas.filter((item) => !item.deletedAt),
                 _allAreas: newAllAreas,
+                ...(projectsChanged
+                    ? {
+                        projects: newAllProjects.filter((item) => !item.deletedAt),
+                        _allProjects: newAllProjects,
+                    }
+                    : {}),
                 lastDataChangeAt: changeAt,
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
@@ -942,8 +1018,8 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
             const remaining = projectTasks
                 .filter((task) => !orderedSet.has(task.id))
                 .sort((a, b) => {
-                    const aOrder = Number.isFinite(a.orderNum) ? (a.orderNum as number) : Number.POSITIVE_INFINITY;
-                    const bOrder = Number.isFinite(b.orderNum) ? (b.orderNum as number) : Number.POSITIVE_INFINITY;
+                    const aOrder = getTaskOrder(a) ?? Number.POSITIVE_INFINITY;
+                    const bOrder = getTaskOrder(b) ?? Number.POSITIVE_INFINITY;
                     if (aOrder !== bOrder) return aOrder - bOrder;
                     return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
                 });
@@ -960,6 +1036,7 @@ export const createProjectActions = ({ set, get, debouncedSave }: ProjectActionC
                 if (!Number.isFinite(nextOrder)) return task;
                 return {
                     ...task,
+                    order: nextOrder as number,
                     orderNum: nextOrder as number,
                     updatedAt: now,
                     rev: normalizeRevision(task.rev) + 1,

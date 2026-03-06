@@ -7,6 +7,7 @@ import { noopStorage } from './storage';
 import { logError } from './logger';
 import type { TaskStore } from './store-types';
 import { sanitizeAppDataForStorage } from './store-helpers';
+import { markCoreStartupPhase } from './startup-profiler';
 import { createProjectActions } from './store-projects';
 import { createSettingsActions } from './store-settings';
 import { createTaskActions } from './store-tasks';
@@ -36,6 +37,52 @@ let pendingSaves: PendingSave[] = [];
 let pendingVersion = 0;
 let savedVersion = 0;
 let saveInFlight: Promise<void> | null = null;
+const MAX_PENDING_SAVES = 100;
+const hasPendingSaveWork = (): boolean => pendingSaves.length > 0 || saveInFlight !== null;
+
+const enforcePendingSaveCap = () => {
+    if (pendingSaves.length <= MAX_PENDING_SAVES) return;
+    const overflow = pendingSaves.length - MAX_PENDING_SAVES;
+    const dropped = pendingSaves.splice(0, overflow);
+    const callbacks = dropped
+        .flatMap((item) => item.onErrorCallbacks)
+        .filter((callback): callback is (msg: string) => void => typeof callback === 'function');
+    const latest = pendingSaves[pendingSaves.length - 1];
+    if (latest && callbacks.length > 0) {
+        latest.onErrorCallbacks.push(...callbacks);
+    }
+    markCoreStartupPhase('core.debounced_save.capped', {
+        dropped: overflow,
+        queueLen: pendingSaves.length,
+    });
+};
+
+const isStartupProfilingEnabled = (): boolean => {
+    const g = globalThis as Record<string, unknown>;
+    return g.__MINDWTR_STARTUP_PROFILING__ === true;
+};
+
+const getDebouncedSaveCaller = (): string | undefined => {
+    if (!isStartupProfilingEnabled()) return undefined;
+    try {
+        const stack = new Error().stack;
+        if (!stack) return undefined;
+        const lines = stack.split('\n').map((line) => line.trim());
+        // 0: Error, 1: getDebouncedSaveCaller, 2: debouncedSave, 3+: caller chain
+        return lines[3] ?? lines[2];
+    } catch {
+        return undefined;
+    }
+};
+
+const toSaveErrorMessage = (error: unknown): string => {
+    const detail = error instanceof Error ? error.message : String(error ?? '');
+    const trimmed = detail.trim();
+    if (!trimmed) return 'Failed to save data';
+    return trimmed.toLowerCase().startsWith('failed to save data')
+        ? trimmed
+        : `Failed to save data: ${trimmed}`;
+};
 
 /**
  * Save data with write coalescing.
@@ -50,10 +97,17 @@ const debouncedSave = (data: AppData, onError?: (msg: string) => void) => {
         data: sanitizeAppDataForStorage(data),
         onErrorCallbacks: onError ? [onError] : [],
     });
+    enforcePendingSaveCap();
+    markCoreStartupPhase('core.debounced_save.enqueued', {
+        version: pendingVersion,
+        queueLen: pendingSaves.length,
+        caller: getDebouncedSaveCaller(),
+    });
     void flushPendingSave().catch((error) => {
         logError('Failed to flush pending save', { scope: 'store', category: 'storage', error });
+        const message = toSaveErrorMessage(error);
         try {
-            useTaskStore.getState().setError('Failed to save data');
+            useTaskStore.getState().setError(message);
         } catch {
             // Ignore if store is not initialized yet
         }
@@ -65,13 +119,21 @@ const debouncedSave = (data: AppData, onError?: (msg: string) => void) => {
  * Call this when the app goes to background or is about to be terminated.
  */
 export const flushPendingSave = async (): Promise<void> => {
+    markCoreStartupPhase('core.flush_pending_save.enter', {
+        queueLen: pendingSaves.length,
+        inFlight: saveInFlight ? 1 : 0,
+    });
     while (true) {
         if (saveInFlight) {
+            markCoreStartupPhase('core.flush_pending_save.await_in_flight');
             await saveInFlight;
             continue;
         }
         const currentQueue = Array.isArray(pendingSaves) ? pendingSaves : [];
-        if (currentQueue.length === 0) return;
+        if (currentQueue.length === 0) {
+            markCoreStartupPhase('core.flush_pending_save.exit_empty');
+            return;
+        }
         pendingSaves = [];
         const queuedSaves = currentQueue.filter((item): item is PendingSave =>
             !!item &&
@@ -82,6 +144,11 @@ export const flushPendingSave = async (): Promise<void> => {
         if (queuedSaves.length === 0) continue;
         const latestSave = queuedSaves[queuedSaves.length - 1];
         if (!latestSave || latestSave.version <= savedVersion) continue;
+        markCoreStartupPhase('core.flush_pending_save.dequeue', {
+            queued: queuedSaves.length,
+            targetVersion: latestSave.version,
+            savedVersion,
+        });
         const targetVersion = latestSave.version;
         const dataToSave = latestSave.data;
         const onErrorCallbacks = queuedSaves
@@ -89,18 +156,24 @@ export const flushPendingSave = async (): Promise<void> => {
             .filter((callback): callback is (msg: string) => void => typeof callback === 'function');
         let saveSucceeded = false;
         saveInFlight = Promise.resolve()
-            .then(() => storage.saveData(dataToSave))
+            .then(() => {
+                markCoreStartupPhase('core.flush_pending_save.storage_save:start', { targetVersion });
+                return storage.saveData(dataToSave);
+            })
             .then(() => {
                 savedVersion = targetVersion;
                 saveSucceeded = true;
+                markCoreStartupPhase('core.flush_pending_save.storage_save:end', { targetVersion });
             })
             .catch((e) => {
+                markCoreStartupPhase('core.flush_pending_save.storage_save:error', { targetVersion });
                 logError('Failed to flush pending save', { scope: 'store', category: 'storage', error: e });
+                const message = toSaveErrorMessage(e);
                 if (onErrorCallbacks.length > 0) {
-                    onErrorCallbacks.forEach((callback) => callback('Failed to save data'));
+                    onErrorCallbacks.forEach((callback) => callback(message));
                 }
                 try {
-                    useTaskStore.getState().setError('Failed to save data');
+                    useTaskStore.getState().setError(message);
                 } catch {
                     // Ignore if store is not initialized yet
                 }
@@ -115,11 +188,17 @@ export const flushPendingSave = async (): Promise<void> => {
                             data: dataToSave,
                             onErrorCallbacks: [],
                         });
+                        enforcePendingSaveCap();
                     }
                 }
             });
         await saveInFlight;
-        if (!saveSucceeded) return;
+        if (!saveSucceeded) {
+            const hasQueuedSaves = pendingSaves.some((item) => item.version > targetVersion);
+            if (hasQueuedSaves) continue;
+            markCoreStartupPhase('core.flush_pending_save.exit_failed');
+            return;
+        }
     }
 };
 
@@ -148,6 +227,7 @@ export const useTaskStore = createWithEqualityFn<TaskStore>()((set, get) => ({
         get,
         debouncedSave,
         flushPendingSave,
+        hasPendingSaveWork,
         getStorage: () => storage,
     }),
     ...createTaskActions({

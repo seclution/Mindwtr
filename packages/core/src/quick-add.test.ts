@@ -15,6 +15,51 @@ describe('quick-add', () => {
         expect(result.props.dueDate).toBe(expectedLocal);
     });
 
+    it('parses /start and /review with the same natural date parser as /due', () => {
+        const now = new Date('2025-01-01T10:00:00Z');
+        const result = parseQuickAdd(
+            'Review proposal /start:tomorrow /review:friday /due:next week',
+            undefined,
+            now
+        );
+
+        expect(result.title).toBe('Review proposal');
+        expect(result.props.startTime).toBe(new Date(2025, 0, 2, 0, 0, 0, 0).toISOString());
+        expect(result.props.reviewAt).toBe(new Date(2025, 0, 3, 0, 0, 0, 0).toISOString());
+        const expectedHour = now.getHours();
+        const expectedMinute = now.getMinutes();
+        expect(result.props.dueDate).toBe(new Date(2025, 0, 8, expectedHour, expectedMinute, 0, 0).toISOString());
+    });
+
+    it('parses abbreviated weekday commands like /start:mon', () => {
+        const now = new Date('2026-02-27T09:40:00Z');
+        const result = parseQuickAdd('Task /start:mon', undefined, now);
+        expect(result.props.startTime).toBe(new Date(2026, 2, 2, 0, 0, 0, 0).toISOString());
+        expect(result.invalidDateCommands).toBeUndefined();
+    });
+
+    it('reports invalid date commands instead of silently dropping them', () => {
+        const now = new Date('2025-01-01T10:00:00Z');
+        const result = parseQuickAdd('Task /start:monx /due:tomorrow', undefined, now);
+        expect(result.invalidDateCommands).toEqual(['/start:monx']);
+        expect(result.props.startTime).toBeUndefined();
+        expect(result.props.dueDate).toBe(new Date(2025, 0, 2, now.getHours(), now.getMinutes(), 0, 0).toISOString());
+    });
+
+    it('parses relative due dates with numbers without treating numbers as time tokens', () => {
+        const now = new Date('2026-03-01T10:30:00Z');
+        const result = parseQuickAdd('Task /due:in 3 days', undefined, now);
+        expect(result.invalidDateCommands).toBeUndefined();
+        expect(result.props.dueDate).toBe(new Date(2026, 2, 4, now.getHours(), now.getMinutes(), 0, 0).toISOString());
+    });
+
+    it('parses ISO due dates without corrupting the date token', () => {
+        const now = new Date('2026-03-01T10:30:00Z');
+        const result = parseQuickAdd('Task /due:2026-03-15', undefined, now);
+        expect(result.invalidDateCommands).toBeUndefined();
+        expect(result.props.dueDate).toBe(new Date(2026, 2, 15, now.getHours(), now.getMinutes(), 0, 0).toISOString());
+    });
+
     it('matches project by title when provided', () => {
         const now = new Date('2025-01-01T10:00:00Z');
         const projects = [

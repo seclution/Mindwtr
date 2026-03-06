@@ -21,6 +21,14 @@ https://github.com/dongdongbh/Mindwtr/issues
 
 If you have a feature request, please open an issue and describe the workflow you’re trying to support.
 
+### Where should I report bugs or request features?
+
+Please use GitHub Issues instead of email so reports stay trackable and searchable:
+https://github.com/dongdongbh/Mindwtr/issues
+
+If Mindwtr is useful to you, support options are listed here:
+https://github.com/dongdongbh/Mindwtr?tab=readme-ov-file#hearts-contributing--support
+
 ### Can I open multiple windows?
 
 Not currently. The desktop app is single-window to keep the local-first SQLite data model safe and consistent. Multi-window support is a common request, but not available yet.
@@ -59,7 +67,11 @@ See [[Data and Sync]] for details.
 
 ### Is there cloud sync?
 
-Mindwtr supports File Sync, WebDAV, and optional Cloud Sync. See [[Data and Sync]].
+Mindwtr supports File Sync, WebDAV, self-hosted Cloud Sync, and Dropbox sync (supported builds). See [[Data and Sync]].
+
+### Does Mindwtr support iCloud sync directly?
+
+Not as a native backend. iCloud Drive can still work indirectly via **File Sync** if you select a writable iCloud folder in the OS file picker. See [[Data and Sync]] for setup details.
 
 ### How do I sync with OneDrive (especially on Android)?
 
@@ -74,10 +86,12 @@ This is the same approach used by local‑first apps like Obsidian.
 
 ### Why doesn’t Mindwtr have a “Sign in with OneDrive / Google Drive” button?
 
-Mindwtr is local‑first and offline‑first. Native cloud integrations require OAuth flows, token storage, and long‑term maintenance.
-They also create strong pressure to add *every* provider (Drive, OneDrive, Dropbox, etc.).
+Mindwtr is local‑first and offline‑first.
 
-File sync keeps your data in your control and avoids a large maintenance and security burden.
+Mindwtr now supports native **Dropbox OAuth** sync in supported builds, but does **not** provide native OneDrive/Google Drive OAuth integration.
+Expanding to every provider adds significant maintenance and compliance overhead.
+
+For OneDrive/Google Drive, File Sync keeps your data in your control and avoids a large maintenance/security burden.
 
 ### Can Mindwtr integrate with email (Gmail/Outlook) or accept forwarded emails?
 
@@ -117,13 +131,15 @@ For Horizons 3–5 (Goals, Vision, Purpose), there isn’t a dedicated entity ye
 
 If you rely on explicit Goal/Vision objects, please open an issue with your desired workflow and review cadence.
 
-### How do I enable Due Date, Priority, or Time Estimate?
+### How do I enable Priority or Estimated Time?
 
-These fields are hidden by default to keep the UI clean. Enable them here:
+Mindwtr uses progressive disclosure, so optional fields are hidden by default.
 
-**Settings → GTD → Task Editor**
+Enable them in:
 
-You can also reorder the fields there.
+**Settings → GTD → Task Editor Layout**
+
+Turn on **Priority** and **Estimated Time** there (and reorder fields if needed).
 
 
 
@@ -346,7 +362,7 @@ Note: This deletes local data.
 - Help with translations
 - Spread the word!
 
-See [[Contributing]].
+See the [Contributing guide](https://github.com/dongdongbh/Mindwtr/blob/main/docs/CONTRIBUTING.md).
 
 ---
 
@@ -355,4 +371,4 @@ See [[Contributing]].
 - [[Getting Started]]
 - [[GTD Overview]]
 - [[Data and Sync]]
-- [[Contributing]]
+- [Contributing (Repository Guide)](https://github.com/dongdongbh/Mindwtr/blob/main/docs/CONTRIBUTING.md)

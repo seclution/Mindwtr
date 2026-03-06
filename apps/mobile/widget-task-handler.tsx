@@ -10,7 +10,9 @@ import {
     WIDGET_DATA_KEY,
     WIDGET_LANGUAGE_KEY,
 } from './lib/widget-data';
+import { getAdaptiveWidgetTaskLimit } from './lib/widget-layout';
 import { logWarn } from './lib/app-log';
+import { getSystemColorSchemeForWidget } from './lib/system-color-scheme';
 
 const DEFAULT_DATA: AppData = { tasks: [], projects: [], sections: [], areas: [], settings: {} };
 // Task completion via widget taps is disabled. Keep handler to render widget payloads only.
@@ -46,7 +48,11 @@ async function loadWidgetContext() {
 
 const widgetTaskHandler: WidgetTaskHandler = async ({ renderWidget, widgetInfo }) => {
     let { data, language } = await loadWidgetContext();
-    const tasksPayload = buildWidgetPayload(data, language);
+    const maxItems = getAdaptiveWidgetTaskLimit(widgetInfo.height);
+    const tasksPayload = buildWidgetPayload(data, language, {
+        systemColorScheme: getSystemColorSchemeForWidget(),
+        maxItems,
+    });
     try {
         renderWidget(buildTasksWidgetTree(tasksPayload));
     } catch (error) {

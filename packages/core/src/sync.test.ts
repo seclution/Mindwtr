@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { mergeAppData, mergeAppDataWithStats, filterDeleted, appendSyncHistory, performSyncCycle } from './sync';
+import { describe, it, expect, vi } from 'vitest';
+import { CLOCK_SKEW_THRESHOLD_MS, mergeAppData, mergeAppDataWithStats, filterDeleted, appendSyncHistory, performSyncCycle } from './sync';
 import { AppData, Task, Project, Attachment, Section, Area } from './types';
 
 describe('Sync Logic', () => {
@@ -89,7 +89,7 @@ describe('Sync Logic', () => {
             expect((merged.tasks[0].attachments || []).map(a => a.id).sort()).toEqual(['att-incoming', 'att-local']);
         });
 
-        it('should preserve local file uri when incoming wins', () => {
+        it('uses winner attachment uri when incoming wins and has a usable uri', () => {
             const localAttachment: Attachment = {
                 id: 'att-1',
                 kind: 'file',
@@ -121,7 +121,7 @@ describe('Sync Logic', () => {
             const merged = mergeAppData(mockAppData([localTask]), mockAppData([incomingTask]));
             const attachment = merged.tasks[0].attachments?.find(a => a.id === 'att-1');
 
-            expect(attachment?.uri).toBe('/local/doc.txt');
+            expect(attachment?.uri).toBe('/incoming/doc.txt');
             expect(attachment?.localStatus).toBe('available');
             expect(attachment?.cloudKey).toBe('attachments/att-1.txt');
         });
@@ -195,6 +195,41 @@ describe('Sync Logic', () => {
             expect(attachment?.cloudKey).toBe('attachments/att-2.txt');
         });
 
+        it('preserves incoming URI when local attachment wins without a usable URI', () => {
+            const localAttachment: Attachment = {
+                id: 'att-uri-fallback',
+                kind: 'file',
+                title: 'doc.txt',
+                uri: '',
+                createdAt: '2023-01-01T00:00:00.000Z',
+                updatedAt: '2023-01-04T00:00:00.000Z',
+            };
+            const incomingAttachment: Attachment = {
+                id: 'att-uri-fallback',
+                kind: 'file',
+                title: 'doc.txt',
+                uri: '/incoming/doc.txt',
+                cloudKey: 'attachments/att-uri-fallback.txt',
+                createdAt: '2023-01-01T00:00:00.000Z',
+                updatedAt: '2023-01-03T00:00:00.000Z',
+            };
+            const localTask: Task = {
+                ...createMockTask('1', '2023-01-04'),
+                attachments: [localAttachment],
+            };
+            const incomingTask: Task = {
+                ...createMockTask('1', '2023-01-03'),
+                attachments: [incomingAttachment],
+            };
+
+            const merged = mergeAppData(mockAppData([localTask]), mockAppData([incomingTask]));
+            const attachment = merged.tasks[0].attachments?.find((item) => item.id === 'att-uri-fallback');
+
+            expect(attachment?.uri).toBe('/incoming/doc.txt');
+            expect(attachment?.localStatus).toBe('available');
+            expect(attachment?.cloudKey).toBe('attachments/att-uri-fallback.txt');
+        });
+
         it('falls back to incoming URI when local attachment is missing', () => {
             const localAttachment: Attachment = {
                 id: 'att-missing',
@@ -229,6 +264,47 @@ describe('Sync Logic', () => {
             expect(attachment?.cloudKey).toBe('attachments/att-missing.txt');
         });
 
+        it('enriches incoming-only attachments with localStatus when uri exists', () => {
+            const incomingAttachment: Attachment = {
+                id: 'att-incoming-only',
+                kind: 'file',
+                title: 'incoming-only.txt',
+                uri: '/incoming/incoming-only.txt',
+                createdAt: '2023-01-01T00:00:00.000Z',
+                updatedAt: '2023-01-03T00:00:00.000Z',
+            };
+
+            const localTask: Task = {
+                ...createMockTask('1', '2023-01-02'),
+                attachments: [],
+            };
+            const incomingTask: Task = {
+                ...createMockTask('1', '2023-01-03'),
+                attachments: [incomingAttachment],
+            };
+
+            const merged = mergeAppData(mockAppData([localTask]), mockAppData([incomingTask]));
+            const attachment = merged.tasks[0].attachments?.find((item) => item.id === 'att-incoming-only');
+
+            expect(attachment?.uri).toBe('/incoming/incoming-only.txt');
+            expect(attachment?.localStatus).toBe('available');
+        });
+
+        it('preserves explicit empty attachment arrays', () => {
+            const localTask: Task = {
+                ...createMockTask('1', '2023-01-02'),
+                attachments: [],
+            };
+            const incomingTask: Task = {
+                ...createMockTask('1', '2023-01-03'),
+                attachments: [],
+            };
+
+            const merged = mergeAppData(mockAppData([localTask]), mockAppData([incomingTask]));
+            expect(Array.isArray(merged.tasks[0].attachments)).toBe(true);
+            expect(merged.tasks[0].attachments).toEqual([]);
+        });
+
         it('should preserve attachment deletions using attachment timestamps', () => {
             const localAttachment: Attachment = {
                 id: 'att-1',
@@ -260,6 +336,43 @@ describe('Sync Logic', () => {
             const merged = mergeAppData(mockAppData([localTask]), mockAppData([incomingTask]));
             const attachment = merged.tasks[0].attachments?.find(a => a.id === 'att-1');
             expect(attachment?.deletedAt).toBe('2023-01-04T00:00:00.000Z');
+        });
+
+        it('does not resurrect cloud metadata for deleted attachments', () => {
+            const localAttachment: Attachment = {
+                id: 'att-1',
+                kind: 'file',
+                title: 'local.txt',
+                createdAt: '2023-01-01T00:00:00.000Z',
+                updatedAt: '2023-01-04T00:00:00.000Z',
+                deletedAt: '2023-01-04T00:00:00.000Z',
+            };
+            const incomingAttachment: Attachment = {
+                id: 'att-1',
+                kind: 'file',
+                title: 'local.txt',
+                uri: '/tmp/incoming.txt',
+                cloudKey: 'attachments/att-1.txt',
+                fileHash: 'hash-1',
+                createdAt: '2023-01-01T00:00:00.000Z',
+                updatedAt: '2023-01-03T00:00:00.000Z',
+            };
+
+            const localTask: Task = {
+                ...createMockTask('1', '2023-01-03'),
+                attachments: [localAttachment],
+            };
+            const incomingTask: Task = {
+                ...createMockTask('1', '2023-01-03'),
+                attachments: [incomingAttachment],
+            };
+
+            const merged = mergeAppData(mockAppData([localTask]), mockAppData([incomingTask]));
+            const attachment = merged.tasks[0].attachments?.find((item) => item.id === 'att-1');
+
+            expect(attachment?.deletedAt).toBe('2023-01-04T00:00:00.000Z');
+            expect(attachment?.cloudKey).toBeUndefined();
+            expect(attachment?.fileHash).toBeUndefined();
         });
 
         it('should merge unique items from both sources', () => {
@@ -387,6 +500,36 @@ describe('Sync Logic', () => {
             expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:03:00.000Z');
         });
 
+        it('keeps newer live update when delete is only 100ms older', () => {
+            const local = mockAppData([
+                createMockTask('1', '2023-01-02T00:00:00.100Z'),
+            ]);
+            const incoming = mockAppData([
+                createMockTask('1', '2023-01-02T00:00:00.000Z', '2023-01-02T00:00:00.000Z'),
+            ]);
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.tasks).toHaveLength(1);
+            expect(merged.tasks[0].deletedAt).toBeUndefined();
+            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:00.100Z');
+        });
+
+        it('keeps newer delete when live update is 100ms older', () => {
+            const local = mockAppData([
+                createMockTask('1', '2023-01-02T00:00:00.100Z', '2023-01-02T00:00:00.100Z'),
+            ]);
+            const incoming = mockAppData([
+                createMockTask('1', '2023-01-02T00:00:00.000Z'),
+            ]);
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.tasks).toHaveLength(1);
+            expect(merged.tasks[0].deletedAt).toBe('2023-01-02T00:00:00.100Z');
+            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:00.100Z');
+        });
+
         it('prefers newer timestamp when revisions tie but revBy differs', () => {
             const localTask = {
                 ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
@@ -450,6 +593,66 @@ describe('Sync Logic', () => {
             expect(result.stats.tasks.conflictIds).toContain('1');
         });
 
+        it('does not count conflict when only purgedAt differs', () => {
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+                purgedAt: '2023-01-03T00:00:00.000Z',
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+            } satisfies Task;
+
+            const result = mergeAppDataWithStats(mockAppData([localTask]), mockAppData([incomingTask]));
+
+            expect(result.data.tasks).toHaveLength(1);
+            expect(result.stats.tasks.conflicts).toBe(0);
+            expect(result.stats.tasks.conflictIds).toHaveLength(0);
+        });
+
+        it('does not count conflict when only revBy differs', () => {
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                rev: 7,
+                revBy: 'device-z',
+            } satisfies Task;
+
+            const result = mergeAppDataWithStats(mockAppData([localTask]), mockAppData([incomingTask]));
+
+            expect(result.data.tasks).toHaveLength(1);
+            expect(result.stats.tasks.conflicts).toBe(0);
+            expect(result.stats.tasks.conflictIds).toHaveLength(0);
+        });
+
+        it('counts conflict when revBy differs and content differs', () => {
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                title: 'omega',
+                rev: 7,
+                revBy: 'device-a',
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                title: 'alpha',
+                rev: 7,
+                revBy: 'device-z',
+            } satisfies Task;
+
+            const result = mergeAppDataWithStats(mockAppData([localTask]), mockAppData([incomingTask]));
+
+            expect(result.data.tasks).toHaveLength(1);
+            expect(result.stats.tasks.conflicts).toBe(1);
+            expect(result.stats.tasks.conflictIds).toContain('1');
+        });
+
         it('resolves equal revision/timestamp conflicts consistently across sync direction', () => {
             const localTask = {
                 ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
@@ -488,6 +691,22 @@ describe('Sync Logic', () => {
             expect(reverse.tasks[0].title).toBe('omega');
         });
 
+        it('resolves order-only legacy drift consistently across sync direction', () => {
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                order: 42,
+                orderNum: 42,
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+            } satisfies Task;
+
+            const forward = mergeAppData(mockAppData([localTask]), mockAppData([incomingTask]));
+            const reverse = mergeAppData(mockAppData([incomingTask]), mockAppData([localTask]));
+
+            expect(forward.tasks[0]).toEqual(reverse.tasks[0]);
+        });
+
         it('prefers tombstone when delete-vs-live operation times are equal', () => {
             const local = mockAppData([
                 createMockTask('1', '2023-01-02T00:00:00.000Z', '2023-01-02T00:05:00.000Z'),
@@ -514,23 +733,40 @@ describe('Sync Logic', () => {
             const merged = mergeAppData(local, incoming);
 
             expect(merged.tasks).toHaveLength(1);
-            expect(merged.tasks[0].deletedAt).toBe('invalid-date');
-            expect(merged.tasks[0].updatedAt).toBe('2023-01-01T00:00:00.000Z');
+            expect(merged.tasks[0].deletedAt).toBeUndefined();
+            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:00.000Z');
         });
 
-        it('uses max(deletedAt, updatedAt) for delete operation time', () => {
+        it('uses deletedAt as delete operation time when deciding delete-vs-live beyond skew window', () => {
             const local = mockAppData([
-                createMockTask('1', '2023-01-02T00:06:00.000Z', '2023-01-02T00:05:00.000Z'),
+                createMockTask('1', '2023-01-02T00:12:00.000Z', '2023-01-02T00:05:00.000Z'),
             ]);
             const incoming = mockAppData([
-                createMockTask('1', '2023-01-02T00:05:30.000Z'),
+                createMockTask('1', '2023-01-02T00:11:00.000Z'),
             ]);
 
             const merged = mergeAppData(local, incoming);
 
             expect(merged.tasks).toHaveLength(1);
-            expect(merged.tasks[0].deletedAt).toBe('2023-01-02T00:05:00.000Z');
-            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:06:00.000Z');
+            expect(merged.tasks[0].deletedAt).toBeUndefined();
+            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:11:00.000Z');
+        });
+
+        it('clamps far-future timestamps during merge conflict evaluation', () => {
+            const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-01-01T00:00:00.000Z').getTime());
+            try {
+                const local = mockAppData([
+                    createMockTask('1', '2099-01-01T00:00:00.000Z'),
+                ]);
+                const incoming = mockAppData([
+                    createMockTask('1', '2026-01-01T00:00:00.000Z'),
+                ]);
+
+                const result = mergeAppDataWithStats(local, incoming);
+                expect(result.stats.tasks.maxClockSkewMs).toBeLessThanOrEqual(CLOCK_SKEW_THRESHOLD_MS);
+            } finally {
+                nowSpy.mockRestore();
+            }
         });
 
         it('prefers newer item when timestamps are within skew threshold', () => {
@@ -541,6 +777,27 @@ describe('Sync Logic', () => {
 
             expect(merged.tasks).toHaveLength(1);
             expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:04:00.000Z');
+        });
+
+        it('treats empty updatedAt as older than a valid epoch timestamp', () => {
+            const local = mockAppData([], [
+                {
+                    ...createMockProject('p1', ''),
+                    title: 'Zulu',
+                },
+            ]);
+            const incoming = mockAppData([], [
+                {
+                    ...createMockProject('p1', '1970-01-01T00:00:00.000Z'),
+                    title: 'Alpha',
+                },
+            ]);
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.projects).toHaveLength(1);
+            expect(merged.projects[0].title).toBe('Alpha');
+            expect(merged.projects[0].updatedAt).toBe('1970-01-01T00:00:00.000Z');
         });
 
         it('normalizes invalid createdAt without rewriting updatedAt', () => {
@@ -665,6 +922,90 @@ describe('Sync Logic', () => {
             expect(merged.settings.theme).toBe('light');
         });
 
+        it('deep-clones merged settings arrays to avoid shared references', () => {
+            const incomingCalendars = [
+                { id: 'cal-1', name: 'Team', url: 'https://calendar.example.com/team.ics', enabled: true },
+            ];
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    externalCalendars: [
+                        { id: 'cal-local', name: 'Local', url: 'https://calendar.example.com/local.ics', enabled: true },
+                    ],
+                    syncPreferencesUpdatedAt: {
+                        externalCalendars: '2024-01-01T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    externalCalendars: incomingCalendars,
+                    syncPreferencesUpdatedAt: {
+                        externalCalendars: '2024-01-02T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.externalCalendars).toEqual(incomingCalendars);
+            expect(merged.settings.externalCalendars).not.toBe(incomingCalendars);
+
+            incomingCalendars[0].name = 'Mutated Incoming';
+            expect(merged.settings.externalCalendars?.[0]?.name).toBe('Team');
+        });
+
+        it('falls back to local values when incoming synced settings are malformed', () => {
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    language: 'en',
+                    weekStart: 'monday',
+                    dateFormat: 'yyyy-MM-dd',
+                    externalCalendars: [
+                        { id: 'cal-local', name: 'Local', url: 'https://calendar.example.com/local.ics', enabled: true },
+                    ],
+                    syncPreferences: {
+                        language: true,
+                        externalCalendars: true,
+                    },
+                    syncPreferencesUpdatedAt: {
+                        preferences: '2024-01-01T00:00:00.000Z',
+                        language: '2024-01-01T00:00:00.000Z',
+                        externalCalendars: '2024-01-01T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    language: 'xx' as AppData['settings']['language'],
+                    weekStart: 'friday' as AppData['settings']['weekStart'],
+                    dateFormat: 123 as unknown as string,
+                    externalCalendars: [
+                        { id: '', name: 'Broken', url: '', enabled: true },
+                    ] as AppData['settings']['externalCalendars'],
+                    syncPreferences: {
+                        language: 'yes' as unknown as boolean,
+                    },
+                    syncPreferencesUpdatedAt: {
+                        preferences: '2024-01-02T00:00:00.000Z',
+                        language: '2024-01-02T00:00:00.000Z',
+                        externalCalendars: '2024-01-02T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.language).toBe('en');
+            expect(merged.settings.weekStart).toBe('monday');
+            expect(merged.settings.dateFormat).toBe('yyyy-MM-dd');
+            expect(merged.settings.externalCalendars).toEqual(local.settings.externalCalendars);
+            expect(merged.settings.syncPreferences).toEqual(local.settings.syncPreferences);
+        });
+
         it('keeps area tombstones so deletions sync across devices', () => {
             const local: AppData = {
                 ...mockAppData(),
@@ -702,11 +1043,17 @@ describe('Sync Logic', () => {
     describe('mergeAppDataWithStats', () => {
         it('should report conflicts and resolution counts', () => {
             const local = mockAppData([
-                createMockTask('1', '2023-01-02'),
+                {
+                    ...createMockTask('1', '2023-01-02'),
+                    title: 'Local title',
+                },
                 createMockTask('2', '2023-01-01'),
             ]);
             const incoming = mockAppData([
-                createMockTask('1', '2023-01-01'), // older -> local wins conflict
+                {
+                    ...createMockTask('1', '2023-01-01'), // older -> local wins conflict
+                    title: 'Incoming title',
+                },
                 createMockTask('3', '2023-01-01'), // incoming only
             ]);
 
@@ -718,12 +1065,66 @@ describe('Sync Logic', () => {
             expect(result.stats.tasks.conflicts).toBe(1);
             expect(result.stats.tasks.resolvedUsingLocal).toBeGreaterThan(0);
         });
+
+        it('does not count conflict when only timestamp differs for legacy items', () => {
+            const local = mockAppData([createMockTask('1', '2026-02-22T22:30:40.000Z')]);
+            const incoming = mockAppData([createMockTask('1', '2026-02-22T22:30:11.000Z')]);
+
+            const result = mergeAppDataWithStats(local, incoming);
+
+            expect(result.stats.tasks.conflicts).toBe(0);
+            expect(result.stats.tasks.maxClockSkewMs).toBe(29000);
+            expect(result.data.tasks[0].updatedAt).toBe('2026-02-22T22:30:40.000Z');
+        });
+
+        it('does not count conflicts for legacy order-field shape differences', () => {
+            const now = '2026-02-22T22:30:40.000Z';
+            const localTask = {
+                ...createMockTask('task-1', now),
+                order: 7,
+                orderNum: 7,
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('task-1', now),
+            } satisfies Task;
+            const localProject = {
+                ...createMockProject('project-1', now),
+                order: 0,
+            } satisfies Project;
+            const incomingProject = {
+                ...createMockProject('project-1', now),
+            } as unknown as Project;
+            const localSection = {
+                ...createMockSection('section-1', 'project-1', now),
+                order: 0,
+            } satisfies Section;
+            const incomingSection = {
+                ...createMockSection('section-1', 'project-1', now),
+            } as unknown as Section;
+            delete (incomingProject as Record<string, unknown>).order;
+            delete (incomingSection as Record<string, unknown>).order;
+
+            const result = mergeAppDataWithStats(
+                mockAppData([localTask], [localProject], [localSection]),
+                mockAppData([incomingTask], [incomingProject], [incomingSection])
+            );
+
+            expect(result.stats.tasks.conflicts).toBe(0);
+            expect(result.stats.projects.conflicts).toBe(0);
+            expect(result.stats.sections.conflicts).toBe(0);
+        });
     });
 
     describe('performSyncCycle', () => {
         it('returns conflict status when merge finds conflicts', async () => {
-            const local = mockAppData([createMockTask('1', '2023-01-02')]);
-            const incoming = mockAppData([createMockTask('1', '2023-01-01')]);
+            const local = mockAppData([{
+                ...createMockTask('1', '2023-01-02'),
+                title: 'Local title',
+            }]);
+            const incoming = mockAppData([{
+                ...createMockTask('1', '2023-01-01'),
+                title: 'Incoming title',
+            }]);
 
             const result = await performSyncCycle({
                 readLocal: async () => local,
@@ -734,6 +1135,48 @@ describe('Sync Logic', () => {
 
             expect(result.status).toBe('conflict');
             expect(result.stats.tasks.conflicts).toBe(1);
+        });
+
+        it('returns success when only order-field shape differs', async () => {
+            const now = '2026-03-01T00:00:00.000Z';
+            const localTask = {
+                ...createMockTask('task-1', now),
+                order: 13,
+                orderNum: 13,
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('task-1', now),
+            } satisfies Task;
+
+            const localProject = {
+                ...createMockProject('project-1', now),
+                order: 0,
+            } satisfies Project;
+            const incomingProject = {
+                ...createMockProject('project-1', now),
+            } as unknown as Project;
+            delete (incomingProject as Record<string, unknown>).order;
+
+            const localSection = {
+                ...createMockSection('section-1', 'project-1', now),
+                order: 0,
+            } satisfies Section;
+            const incomingSection = {
+                ...createMockSection('section-1', 'project-1', now),
+            } as unknown as Section;
+            delete (incomingSection as Record<string, unknown>).order;
+
+            const result = await performSyncCycle({
+                readLocal: async () => mockAppData([localTask], [localProject], [localSection]),
+                readRemote: async () => mockAppData([incomingTask], [incomingProject], [incomingSection]),
+                writeLocal: async () => undefined,
+                writeRemote: async () => undefined,
+            });
+
+            expect(result.status).toBe('success');
+            expect(result.stats.tasks.conflicts).toBe(0);
+            expect(result.stats.projects.conflicts).toBe(0);
+            expect(result.stats.sections.conflicts).toBe(0);
         });
 
         it('fails before writes when merged data is invalid', async () => {
@@ -903,8 +1346,26 @@ describe('Sync Logic', () => {
                 }],
             } as Task;
 
+            const base = mockAppData([oldPurgedTask, oldDeletedTask, taskWithDeletedAttachment]);
+            base.settings = {
+                attachments: {
+                    pendingRemoteDeletes: [
+                        {
+                            cloudKey: 'attachments/stale.bin',
+                            attempts: 5,
+                            lastErrorAt: '2025-01-01T00:00:00.000Z',
+                        },
+                        {
+                            cloudKey: 'attachments/recent.bin',
+                            attempts: 1,
+                            lastErrorAt: '2025-12-20T00:00:00.000Z',
+                        },
+                    ],
+                },
+            };
+
             await performSyncCycle({
-                readLocal: async () => mockAppData([oldPurgedTask, oldDeletedTask, taskWithDeletedAttachment]),
+                readLocal: async () => base,
                 readRemote: async () => null,
                 writeLocal: async (data) => {
                     saved = data;
@@ -919,6 +1380,9 @@ describe('Sync Logic', () => {
             const keptTask = saved!.tasks.find((task) => task.id === 'with-deleted-attachment');
             expect(keptTask).toBeTruthy();
             expect(keptTask!.attachments).toBeUndefined();
+            expect(saved!.settings.attachments?.pendingRemoteDeletes?.map((entry) => entry.cloudKey)).toEqual([
+                'attachments/recent.bin',
+            ]);
         });
 
         it('drops expired remote tombstones before merge so live tasks are preserved', async () => {
@@ -1021,6 +1485,60 @@ describe('Sync Logic', () => {
                 },
             })).rejects.toThrow('local write failed');
             expect(wroteRemote).toBe(false);
+        });
+
+        it('persists pending remote write state until remote write succeeds', async () => {
+            const localWrites: AppData[] = [];
+            let remoteWriteData: AppData | null = null;
+
+            const result = await performSyncCycle({
+                readLocal: async () => mockAppData([createMockTask('1', '2024-01-01T00:00:00.000Z')]),
+                readRemote: async () => mockAppData(),
+                writeLocal: async (data) => {
+                    localWrites.push(data);
+                },
+                writeRemote: async (data) => {
+                    remoteWriteData = data;
+                },
+                now: () => '2026-01-01T00:00:00.000Z',
+            });
+
+            expect(localWrites).toHaveLength(2);
+            expect(localWrites[0].settings.pendingRemoteWriteAt).toBe('2026-01-01T00:00:00.000Z');
+            expect(remoteWriteData?.settings.pendingRemoteWriteAt).toBe('2026-01-01T00:00:00.000Z');
+            expect(localWrites[1].settings.pendingRemoteWriteAt).toBeUndefined();
+            expect(result.data.settings.pendingRemoteWriteAt).toBeUndefined();
+        });
+
+        it('retries pending remote write before reading remote data', async () => {
+            const sequence: string[] = [];
+            const localWithPending = mockAppData([createMockTask('1', '2024-01-01T00:00:00.000Z')]);
+            localWithPending.settings.pendingRemoteWriteAt = '2025-12-31T23:59:59.000Z';
+
+            await performSyncCycle({
+                readLocal: async () => {
+                    sequence.push('read-local');
+                    return localWithPending;
+                },
+                readRemote: async () => {
+                    sequence.push('read-remote');
+                    return mockAppData();
+                },
+                writeLocal: async (data) => {
+                    sequence.push(`write-local:${data.settings.pendingRemoteWriteAt ? 'pending' : 'clear'}`);
+                },
+                writeRemote: async (data) => {
+                    sequence.push(`write-remote:${data.settings.pendingRemoteWriteAt ? 'pending' : 'clear'}`);
+                },
+                now: () => '2026-01-01T00:00:00.000Z',
+            });
+
+            const retryWriteIndex = sequence.indexOf('write-remote:pending');
+            const clearMarkerIndex = sequence.indexOf('write-local:clear');
+            const readRemoteIndex = sequence.indexOf('read-remote');
+            expect(retryWriteIndex).toBeGreaterThan(-1);
+            expect(clearMarkerIndex).toBeGreaterThan(retryWriteIndex);
+            expect(readRemoteIndex).toBeGreaterThan(clearMarkerIndex);
         });
 
         it('reports orchestration steps in order', async () => {

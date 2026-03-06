@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, Modal, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, Modal, TouchableOpacity, ScrollView, StyleSheet, TextInput, ActivityIndicator } from 'react-native';
 import {
     createAIProvider,
     getStaleItems,
@@ -16,21 +16,26 @@ import {
 } from '@mindwtr/core';
 import { useTheme } from '../contexts/theme-context';
 import { useLanguage } from '../contexts/language-context';
+import { useQuickCapture } from '../contexts/quick-capture-context';
 
 import { SwipeableTaskItem } from './swipeable-task-item';
 import { TaskEditModal } from './task-edit-modal';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useThemeColors } from '@/hooks/use-theme-colors';
-import { buildAIConfig, loadAIKey } from '../lib/ai-config';
+import { buildAIConfig, isAIKeyRequired, loadAIKey } from '../lib/ai-config';
 import { logError } from '../lib/app-log';
 import { fetchExternalCalendarEvents } from '../lib/external-calendar';
 
-type ReviewStep = 'intro' | 'inbox' | 'ai' | 'calendar' | 'waiting' | 'projects' | 'someday' | 'completed';
+type ReviewStep = 'inbox' | 'ai' | 'calendar' | 'waiting' | 'contexts' | 'projects' | 'someday' | 'completed';
 type ExternalCalendarDaySummary = {
     dayStart: Date;
     events: ExternalCalendarEvent[];
     totalCount: number;
+};
+type ContextReviewGroup = {
+    context: string;
+    tasks: Task[];
 };
 type CalendarTaskReviewEntry = {
     task: Task;
@@ -50,13 +55,14 @@ export const checkReviewTime = () => {
 
 // Get text labels based on language
 const getReviewLabels = (lang: string) => {
-    if (lang === 'zh') {
+    if (lang === 'zh' || lang === 'zh-Hant') {
         return {
             weeklyReview: '周回顾',
             inbox: '收集箱',
             ai: 'AI 洞察',
             calendar: '日历',
             waiting: '等待中',
+            contexts: '情境',
             projects: '项目',
             someday: '将来/也许',
             done: '完成!',
@@ -86,8 +92,15 @@ const getReviewLabels = (lang: string) => {
             startLabel: '开始',
             allDay: '全天',
             more: '更多',
+            less: '收起',
+            addTask: '添加任务',
+            addTaskPlaceholder: '输入任务标题',
+            cancel: '取消',
+            add: '添加',
             waitingDesc: '跟进等待项目',
             waitingGuide: '检查每个等待项：是否需要跟进？已完成可以标记完成，需要再次跟进可以加注释。',
+            contextsDesc: '回顾你的情境，确保每个情境下有清晰的下一步行动。',
+            contextsEmpty: '没有带有活动任务的情境。',
             nothingWaiting: '没有等待项目',
             projectsDesc: '检查项目状态',
             projectsGuide: '确保每个活跃项目都有明确的下一步行动。没有下一步的项目会卡住！',
@@ -112,6 +125,7 @@ const getReviewLabels = (lang: string) => {
         ai: 'AI Insight',
         calendar: 'Calendar',
         waiting: 'Waiting For',
+        contexts: 'Contexts',
         projects: 'Projects',
         someday: 'Someday/Maybe',
         done: 'Done!',
@@ -141,8 +155,15 @@ const getReviewLabels = (lang: string) => {
         startLabel: 'Start',
         allDay: 'All day',
         more: 'more',
+        less: 'less',
+        addTask: 'Add task',
+        addTaskPlaceholder: 'Enter task title',
+        cancel: 'Cancel',
+        add: 'Add',
         waitingDesc: 'Follow Up on Waiting Items',
         waitingGuide: 'Check each item: need to follow up? Mark done if resolved. Add notes for context.',
+        contextsDesc: 'Review your contexts and make sure each one has clear next actions.',
+        contextsEmpty: 'No contexts with active tasks.',
         nothingWaiting: 'Nothing waiting - all clear!',
         projectsDesc: 'Review Your Projects',
         projectsGuide: 'Each active project needs a clear next action. Projects without next actions get stuck!',
@@ -163,11 +184,12 @@ const getReviewLabels = (lang: string) => {
 };
 
 export function ReviewModal({ visible, onClose }: ReviewModalProps) {
-    const { tasks, projects, areas, updateTask, deleteTask, settings, batchUpdateTasks } = useTaskStore();
+    const { tasks, projects, areas, updateTask, deleteTask, settings, batchUpdateTasks, addTask } = useTaskStore();
     const areaById = useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
     const { isDark } = useTheme();
     const { language } = useLanguage();
-    const [currentStep, setCurrentStep] = useState<ReviewStep>('intro');
+    const { openQuickCapture } = useQuickCapture();
+    const [currentStep, setCurrentStep] = useState<ReviewStep>('inbox');
     const [editingTask, setEditingTask] = useState<Task | null>(null);
     const [showEditModal, setShowEditModal] = useState(false);
     const [expandedProject, setExpandedProject] = useState<string | null>(null);
@@ -179,15 +201,19 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
     const [externalCalendarEvents, setExternalCalendarEvents] = useState<ExternalCalendarEvent[]>([]);
     const [externalCalendarLoading, setExternalCalendarLoading] = useState(false);
     const [externalCalendarError, setExternalCalendarError] = useState<string | null>(null);
+    const [expandedExternalDays, setExpandedExternalDays] = useState<Set<string>>(new Set());
+    const [expandedContextGroups, setExpandedContextGroups] = useState<Set<string>>(new Set());
+    const [projectTaskPrompt, setProjectTaskPrompt] = useState<{ projectId: string; projectTitle: string } | null>(null);
+    const [projectTaskTitle, setProjectTaskTitle] = useState('');
 
     const labels = getReviewLabels(language);
     const tc = useThemeColors();
     const aiEnabled = settings?.ai?.enabled === true;
+    const includeContextStep = settings?.gtd?.weeklyReview?.includeContextStep !== false;
     const aiProvider = (settings?.ai?.provider ?? 'openai') as AIProviderId;
 
     const steps = useMemo<{ id: ReviewStep; title: string; icon: string }[]>(() => {
         const list: { id: ReviewStep; title: string; icon: string }[] = [
-            { id: 'intro', title: labels.weeklyReview, icon: '🔄' },
             { id: 'inbox', title: labels.inbox, icon: '📥' },
         ];
         if (aiEnabled) {
@@ -196,12 +222,17 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
         list.push(
             { id: 'calendar', title: labels.calendar, icon: '📅' },
             { id: 'waiting', title: labels.waiting, icon: '⏳' },
+        );
+        if (includeContextStep) {
+            list.push({ id: 'contexts', title: labels.contexts, icon: '🏷️' });
+        }
+        list.push(
             { id: 'projects', title: labels.projects, icon: '📂' },
             { id: 'someday', title: labels.someday, icon: '💭' },
             { id: 'completed', title: labels.done, icon: '✅' },
         );
         return list;
-    }, [aiEnabled, labels]);
+    }, [aiEnabled, includeContextStep, labels]);
 
     const currentStepIndex = steps.findIndex(s => s.id === currentStep);
     const safeStepIndex = currentStepIndex >= 0 ? currentStepIndex : 0;
@@ -228,7 +259,9 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
     };
 
     const handleClose = () => {
-        setCurrentStep('intro');
+        setCurrentStep('inbox');
+        setExpandedExternalDays(new Set());
+        setExpandedContextGroups(new Set());
         onClose();
     };
 
@@ -243,6 +276,59 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
 
     const handleDelete = (taskId: string) => {
         deleteTask(taskId);
+    };
+
+    const openReviewQuickAdd = (initialProps?: Partial<Task>) => {
+        openQuickCapture({ initialProps });
+    };
+
+    const openProjectTaskPrompt = (projectId: string, projectTitle: string) => {
+        setProjectTaskPrompt({ projectId, projectTitle });
+        setProjectTaskTitle('');
+    };
+
+    const closeProjectTaskPrompt = () => {
+        setProjectTaskPrompt(null);
+        setProjectTaskTitle('');
+    };
+
+    const submitProjectTask = async () => {
+        const title = projectTaskTitle.trim();
+        const targetProject = projectTaskPrompt;
+        if (!title || !targetProject) return;
+        try {
+            await addTask(title, { projectId: targetProject.projectId, status: 'next' });
+            closeProjectTaskPrompt();
+        } catch (error) {
+            void logError(error, {
+                scope: 'review',
+                extra: { message: 'Failed to add task from project review', projectId: targetProject.projectId },
+            });
+        }
+    };
+
+    const toggleExternalDayExpanded = (dayKey: string) => {
+        setExpandedExternalDays((prev) => {
+            const next = new Set(prev);
+            if (next.has(dayKey)) {
+                next.delete(dayKey);
+            } else {
+                next.add(dayKey);
+            }
+            return next;
+        });
+    };
+
+    const toggleContextGroupExpanded = (contextKey: string) => {
+        setExpandedContextGroups((prev) => {
+            const next = new Set(prev);
+            if (next.has(contextKey)) {
+                next.delete(contextKey);
+            } else {
+                next.add(contextKey);
+            }
+            return next;
+        });
     };
 
     useEffect(() => {
@@ -320,7 +406,7 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
             return;
         }
         const apiKey = await loadAIKey(aiProvider);
-        if (!apiKey) {
+        if (isAIKeyRequired(settings) && !apiKey) {
             setAiError('Missing API key. Add it in Settings.');
             return;
         }
@@ -424,13 +510,33 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
             if (dayEvents.length > 0) {
                 summaries.push({
                     dayStart,
-                    events: dayEvents.slice(0, 2),
+                    events: dayEvents,
                     totalCount: dayEvents.length,
                 });
             }
         }
         return summaries;
     }, [externalCalendarEvents]);
+    const contextReviewGroups = useMemo<ContextReviewGroup[]>(() => {
+        const groups = new Map<string, Task[]>();
+        tasks.forEach((task) => {
+            if (task.deletedAt) return;
+            if (task.status === 'done' || task.status === 'archived' || task.status === 'reference') return;
+            (task.contexts ?? []).forEach((contextValue) => {
+                const normalized = contextValue.trim();
+                if (!normalized) return;
+                const existing = groups.get(normalized) ?? [];
+                existing.push(task);
+                groups.set(normalized, existing);
+            });
+        });
+        return Array.from(groups.entries())
+            .map(([context, contextTasks]) => ({
+                context,
+                tasks: contextTasks.sort((a, b) => a.title.localeCompare(b.title)),
+            }))
+            .sort((a, b) => (b.tasks.length - a.tasks.length) || a.context.localeCompare(b.context));
+    }, [tasks]);
 
     const renderTaskList = (taskList: Task[]) => (
         <ScrollView style={styles.taskList}>
@@ -450,7 +556,12 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
 
     const renderExternalCalendarList = (days: ExternalCalendarDaySummary[]) => {
         if (externalCalendarLoading) {
-            return <Text style={[styles.calendarEventMeta, { color: tc.secondaryText }]}>{labels.loading}</Text>;
+            return (
+                <View style={styles.loadingRow}>
+                    <ActivityIndicator size="small" color={tc.tint} />
+                    <Text style={[styles.calendarEventMeta, { color: tc.secondaryText }]}>{labels.loading}</Text>
+                </View>
+            );
         }
         if (externalCalendarError) {
             return <Text style={[styles.calendarEventMeta, { color: tc.secondaryText }]}>{externalCalendarError}</Text>;
@@ -462,10 +573,16 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
             <View style={styles.calendarEventList}>
                 {days.map((day) => (
                     <View key={day.dayStart.toISOString()} style={[styles.calendarDayCard, { borderColor: tc.border }]}>
+                        {(() => {
+                            const dayKey = day.dayStart.toISOString();
+                            const isExpanded = expandedExternalDays.has(dayKey);
+                            const visibleEvents = isExpanded ? day.events : day.events.slice(0, 2);
+                            return (
+                                <>
                         <Text style={[styles.calendarDayTitle, { color: tc.secondaryText }]}>
-                            {safeFormatDate(day.dayStart, 'EEE, MMM d')} · {day.totalCount}
+                            {safeFormatDate(day.dayStart, 'EEEE, PP')} · {day.totalCount}
                         </Text>
-                        {day.events.map((event) => {
+                        {visibleEvents.map((event) => {
                             const start = safeParseDate(event.start);
                             const timeLabel = event.allDay || !start ? labels.allDay : safeFormatDate(start, 'HH:mm');
                             return (
@@ -479,11 +596,18 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                                 </View>
                             );
                         })}
-                        {day.totalCount > day.events.length && (
-                            <Text style={[styles.calendarEventMeta, { color: tc.secondaryText }]}>
-                                +{day.totalCount - day.events.length} {labels.more}
-                            </Text>
+                        {day.totalCount > 2 && (
+                            <TouchableOpacity onPress={() => toggleExternalDayExpanded(dayKey)}>
+                                <Text style={[styles.calendarEventMeta, styles.calendarToggleText, { color: tc.secondaryText }]}>
+                                    {isExpanded
+                                        ? labels.less
+                                        : `+${day.totalCount - visibleEvents.length} ${labels.more}`}
+                                </Text>
+                            </TouchableOpacity>
                         )}
+                                </>
+                            );
+                        })()}
                     </View>
                 ))}
             </View>
@@ -504,7 +628,7 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                             {entry.task.title}
                         </Text>
                         <Text style={[styles.calendarEventMeta, { color: tc.secondaryText }]}>
-                            {(entry.kind === 'due' ? labels.dueLabel : labels.startLabel)} · {safeFormatDate(entry.date, 'MMM d, HH:mm')}
+                            {(entry.kind === 'due' ? labels.dueLabel : labels.startLabel)} · {safeFormatDate(entry.date, 'Pp')}
                         </Text>
                     </View>
                 ))}
@@ -514,24 +638,6 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
 
     const renderStepContent = () => {
         switch (currentStep) {
-            case 'intro':
-                return (
-                    <View style={styles.centerContent}>
-                        <Text style={styles.bigIcon}>🔄</Text>
-                        <Text style={[styles.heading, { color: tc.text }]}>
-                            {labels.timeFor}
-                        </Text>
-                        <Text style={[styles.description, { color: tc.secondaryText }]}>
-                            {labels.timeForDesc}
-                        </Text>
-                        <TouchableOpacity style={styles.primaryButton} onPress={nextStep}>
-                            <Text style={styles.primaryButtonText}>
-                                {labels.startReview} →
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
-                );
-
             case 'inbox':
                 return (
                     <View style={styles.stepContent}>
@@ -646,10 +752,20 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
 
             case 'calendar':
                 return (
-                    <View style={styles.stepContent}>
+                    <ScrollView
+                        style={styles.stepContent}
+                        contentContainerStyle={styles.calendarStepContent}
+                        showsVerticalScrollIndicator
+                    >
                         <Text style={[styles.stepTitle, { color: tc.text }]}>
                             📅 {labels.calendar}
                         </Text>
+                        <TouchableOpacity
+                            style={[styles.reviewAddTaskButton, { borderColor: tc.border }]}
+                            onPress={() => openReviewQuickAdd({ status: 'inbox' })}
+                        >
+                            <Text style={[styles.reviewAddTaskButtonText, { color: tc.text }]}>{labels.addTask}</Text>
+                        </TouchableOpacity>
                         <Text style={[styles.hint, { color: tc.secondaryText }]}>
                             {labels.calendarDesc}
                         </Text>
@@ -661,7 +777,7 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                             <Text style={[styles.calendarColumnTitle, { color: tc.secondaryText }]}>{labels.calendarTasks}</Text>
                             {renderCalendarTaskList(calendarReviewItems)}
                         </View>
-                    </View>
+                    </ScrollView>
                 );
 
             case 'waiting':
@@ -681,6 +797,65 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                             </View>
                         ) : (
                             renderTaskList(orderedWaitingTasks)
+                        )}
+                    </View>
+                );
+
+            case 'contexts':
+                return (
+                    <View style={styles.stepContent}>
+                        <Text style={[styles.stepTitle, { color: tc.text }]}>
+                            🏷️ {labels.contexts}
+                        </Text>
+                        <Text style={[styles.hint, { color: tc.secondaryText }]}>
+                            {labels.contextsDesc}
+                        </Text>
+                        {contextReviewGroups.length === 0 ? (
+                            <View style={styles.emptyState}>
+                                <Text style={[styles.emptyText, { color: tc.secondaryText }]}>
+                                    {labels.contextsEmpty}
+                                </Text>
+                            </View>
+                        ) : (
+                            <ScrollView style={styles.taskList}>
+                                {contextReviewGroups.map((group) => (
+                                    <View key={group.context} style={[styles.contextGroupCard, { borderColor: tc.border, backgroundColor: tc.cardBg }]}>
+                                        <View style={styles.contextGroupHeader}>
+                                            <Text style={[styles.contextGroupTitle, { color: tc.text }]}>{group.context}</Text>
+                                            <Text style={[styles.contextGroupCount, { color: tc.secondaryText }]}>{group.tasks.length}</Text>
+                                        </View>
+                                        {(() => {
+                                            const contextKey = group.context;
+                                            const isExpanded = expandedContextGroups.has(contextKey);
+                                            const visibleTasks = isExpanded ? group.tasks : group.tasks.slice(0, 4);
+                                            return (
+                                                <>
+                                                    {visibleTasks.map((task) => (
+                                                        <TouchableOpacity
+                                                            key={`${group.context}-${task.id}`}
+                                                            style={[styles.contextTaskRow, { borderTopColor: tc.border }]}
+                                                            onPress={() => handleTaskPress(task)}
+                                                        >
+                                                            <Text style={[styles.contextTaskTitle, { color: tc.text }]} numberOfLines={1}>
+                                                                {task.title}
+                                                            </Text>
+                                                        </TouchableOpacity>
+                                                    ))}
+                                                    {group.tasks.length > 4 && (
+                                                        <TouchableOpacity onPress={() => toggleContextGroupExpanded(contextKey)}>
+                                                            <Text style={[styles.contextMoreText, { color: tc.secondaryText }]}>
+                                                                {isExpanded
+                                                                    ? labels.less
+                                                                    : `+${group.tasks.length - visibleTasks.length} ${labels.more}`}
+                                                            </Text>
+                                                        </TouchableOpacity>
+                                                    )}
+                                                </>
+                                            );
+                                        })()}
+                                    </View>
+                                ))}
+                            </ScrollView>
                         )}
                     </View>
                 );
@@ -717,6 +892,17 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                                                 <View style={styles.projectHeader}>
                                                     <View style={[styles.projectDot, { backgroundColor: (project.areaId ? areaById.get(project.areaId)?.color : undefined) || tc.tint }]} />
                                                     <Text style={[styles.projectTitle, { color: tc.text }]}>{project.title}</Text>
+                                                    <TouchableOpacity
+                                                        style={[styles.reviewProjectAddTaskButton, { borderColor: tc.border }]}
+                                                        onPress={(event) => {
+                                                            event.stopPropagation();
+                                                            openProjectTaskPrompt(project.id, project.title);
+                                                        }}
+                                                    >
+                                                        <Text style={[styles.reviewProjectAddTaskButtonText, { color: tc.text }]}>
+                                                            {labels.addTask}
+                                                        </Text>
+                                                    </TouchableOpacity>
                                                     <View style={[styles.statusBadge, { backgroundColor: hasNextAction ? '#10B98120' : '#EF444420' }]}>
                                                         <Text style={[styles.statusText, { color: hasNextAction ? '#10B981' : '#EF4444' }]}>
                                                             {hasNextAction ? labels.hasNext : labels.needsAction}
@@ -824,7 +1010,7 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                     </View>
 
                     {/* Navigation */}
-                    {currentStep !== 'intro' && currentStep !== 'completed' && (
+                    {currentStep !== 'completed' && (
                         <View style={[styles.footer, { borderTopColor: tc.border }]}>
                             <TouchableOpacity style={styles.backButton} onPress={prevStep}>
                                 <Text style={[styles.backButtonText, { color: tc.secondaryText }]}>← {labels.back}</Text>
@@ -844,6 +1030,54 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                     onSave={(taskId, updates) => updateTask(taskId, updates)}
                     defaultTab="view"
                 />
+
+                <Modal
+                    visible={Boolean(projectTaskPrompt)}
+                    transparent
+                    animationType="fade"
+                    onRequestClose={closeProjectTaskPrompt}
+                >
+                    <View style={styles.promptBackdrop}>
+                        <View style={[styles.promptCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
+                            <Text style={[styles.promptTitle, { color: tc.text }]}>{labels.addTask}</Text>
+                            <Text style={[styles.promptProject, { color: tc.secondaryText }]}>
+                                {projectTaskPrompt?.projectTitle}
+                            </Text>
+                            <TextInput
+                                value={projectTaskTitle}
+                                onChangeText={setProjectTaskTitle}
+                                placeholder={labels.addTaskPlaceholder}
+                                placeholderTextColor={tc.secondaryText}
+                                autoFocus
+                                style={[styles.promptInput, { color: tc.text, borderColor: tc.border, backgroundColor: tc.bg }]}
+                                returnKeyType="done"
+                                onSubmitEditing={() => {
+                                    void submitProjectTask();
+                                }}
+                            />
+                            <View style={styles.promptActions}>
+                                <TouchableOpacity
+                                    style={[styles.promptButton, { borderColor: tc.border }]}
+                                    onPress={closeProjectTaskPrompt}
+                                >
+                                    <Text style={[styles.promptButtonText, { color: tc.text }]}>{labels.cancel}</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.promptButtonPrimary,
+                                        { opacity: projectTaskTitle.trim().length > 0 ? 1 : 0.5 },
+                                    ]}
+                                    onPress={() => {
+                                        void submitProjectTask();
+                                    }}
+                                    disabled={projectTaskTitle.trim().length === 0}
+                                >
+                                    <Text style={styles.promptButtonPrimaryText}>{labels.add}</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    </View>
+                </Modal>
             </GestureHandlerRootView>
         </Modal>
     );
@@ -916,6 +1150,9 @@ const styles = StyleSheet.create({
     },
     stepContent: {
         flex: 1,
+    },
+    calendarStepContent: {
+        paddingBottom: 20,
     },
     stepTitle: {
         fontSize: 24,
@@ -1024,6 +1261,27 @@ const styles = StyleSheet.create({
     calendarEventMeta: {
         fontSize: 12,
     },
+    loadingRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    calendarToggleText: {
+        textDecorationLine: 'underline',
+        marginTop: 2,
+    },
+    reviewAddTaskButton: {
+        alignSelf: 'flex-start',
+        borderWidth: 1,
+        borderRadius: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        marginBottom: 10,
+    },
+    reviewAddTaskButtonText: {
+        fontSize: 13,
+        fontWeight: '600',
+    },
     projectItem: {
         padding: 12,
         borderRadius: 8,
@@ -1045,6 +1303,109 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '600',
         flex: 1,
+    },
+    reviewProjectAddTaskButton: {
+        borderWidth: 1,
+        borderRadius: 8,
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        marginRight: 8,
+    },
+    reviewProjectAddTaskButtonText: {
+        fontSize: 12,
+        fontWeight: '600',
+    },
+    contextGroupCard: {
+        borderWidth: 1,
+        borderRadius: 10,
+        marginBottom: 10,
+        overflow: 'hidden',
+    },
+    contextGroupHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+    },
+    contextGroupTitle: {
+        fontSize: 14,
+        fontWeight: '700',
+    },
+    contextGroupCount: {
+        fontSize: 12,
+        fontWeight: '600',
+    },
+    contextTaskRow: {
+        borderTopWidth: 1,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+    },
+    contextTaskTitle: {
+        fontSize: 13,
+        fontWeight: '500',
+    },
+    contextMoreText: {
+        fontSize: 12,
+        paddingHorizontal: 10,
+        paddingBottom: 8,
+        paddingTop: 2,
+    },
+    promptBackdrop: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 20,
+    },
+    promptCard: {
+        width: '100%',
+        borderRadius: 12,
+        borderWidth: 1,
+        padding: 16,
+    },
+    promptTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+    },
+    promptProject: {
+        marginTop: 4,
+        fontSize: 13,
+    },
+    promptInput: {
+        marginTop: 12,
+        borderWidth: 1,
+        borderRadius: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 10,
+        fontSize: 15,
+    },
+    promptActions: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        gap: 8,
+        marginTop: 14,
+    },
+    promptButton: {
+        borderWidth: 1,
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+    },
+    promptButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    promptButtonPrimary: {
+        backgroundColor: '#3B82F6',
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+    },
+    promptButtonPrimaryText: {
+        color: '#FFFFFF',
+        fontSize: 14,
+        fontWeight: '600',
     },
     statusBadge: {
         paddingHorizontal: 8,

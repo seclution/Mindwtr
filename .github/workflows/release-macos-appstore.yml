@@ -6,13 +6,13 @@ on:
       upload:
         description: Upload to App Store Connect
         required: false
-        type: string
-        default: 'true'
+        type: boolean
+        default: true
       submit_for_review:
         description: Submit build for review after upload
         required: false
-        type: string
-        default: 'true'
+        type: boolean
+        default: true
       testflight_group:
         description: TestFlight external group for review-blocked uploads
         required: false
@@ -23,22 +23,25 @@ on:
       upload:
         description: Upload to App Store Connect
         required: false
-        default: 'true'
+        type: boolean
+        default: true
       submit_for_review:
         description: Submit build for review after upload
         required: false
-        default: 'true'
+        type: boolean
+        default: true
       testflight_group:
         description: TestFlight external group for review-blocked uploads
         required: false
+        type: string
         default: 'external_testing'
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: release-macos-appstore-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   macos-appstore:
@@ -46,12 +49,13 @@ jobs:
     timeout-minutes: 90
     env:
       EXPECTED_BUNDLE_ID: tech.dongdongbh.mindwtr
+      VITE_DROPBOX_APP_KEY: ${{ vars.VITE_DROPBOX_APP_KEY || secrets.VITE_DROPBOX_APP_KEY }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
+        uses: ruby/setup-ruby@09a7688d3b55cf0e976497ff046b70949eeaccfd # v1
         with:
           ruby-version: '3.3'
 
@@ -59,22 +63,25 @@ jobs:
         run: gem install fastlane --no-document
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
           targets: aarch64-apple-darwin
 
+      - name: Install Intel Rust target
+        run: rustup target add x86_64-apple-darwin
+
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
         with:
           workspaces: apps/desktop/src-tauri
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
         with:
           bun-version: "1.x"
 
@@ -214,19 +221,135 @@ jobs:
           cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/mindwtr-mas.provisionprofile"
           cp "$PROFILE_PATH" apps/desktop/src-tauri/embedded.provisionprofile
 
-      - name: Build signed macOS app bundle (App Store)
+      - name: Resolve macOS version metadata
         env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.MAS_SIGNING_IDENTITY }}
-          CFLAGS: -march=armv8.5-a+i8mm
-          CXXFLAGS: -march=armv8.5-a+i8mm
-          CMAKE_C_FLAGS: -march=armv8.5-a+i8mm
-          CMAKE_CXX_FLAGS: -march=armv8.5-a+i8mm
-          TAURI_LOG_LEVEL: debug
+          IOS_ASC_KEY_ID: ${{ secrets.IOS_ASC_KEY_ID }}
+          IOS_ASC_ISSUER_ID: ${{ secrets.IOS_ASC_ISSUER_ID }}
+          IOS_ASC_PRIVATE_KEY: ${{ secrets.IOS_ASC_PRIVATE_KEY }}
         run: |
           set -euo pipefail
+
+          APP_VERSION="$(jq -r '.version // empty' apps/desktop/src-tauri/tauri.conf.json)"
+          if [ -z "${APP_VERSION}" ]; then
+            echo "::error::Missing version in apps/desktop/src-tauri/tauri.conf.json"
+            exit 1
+          fi
+
+          LOCAL_MIN_BUILD=1
+          EXISTING_BUNDLE_VERSION="$(jq -r '.bundle.macOS.bundleVersion // empty' apps/desktop/src-tauri/tauri.appstore.conf.json)"
+          if [[ "${EXISTING_BUNDLE_VERSION}" =~ ^[0-9]+$ ]]; then
+            LOCAL_MIN_BUILD="$((EXISTING_BUNDLE_VERSION + 1))"
+          fi
+
+          APPSTORE_APP_ID=""
+          REMOTE_MAX_BUILD=0
+          REMOTE_LOOKUP_STATUS="skipped"
+
+          ASC_KEY_ID="$(printf '%s' "$IOS_ASC_KEY_ID" | tr -d '\r\n\t ')"
+          ASC_ISSUER_ID="$(printf '%s' "$IOS_ASC_ISSUER_ID" | tr -d '\r\n\t ')"
+          KEY_PATH="$RUNNER_TEMP/macos-asc-key-versioning.p8"
+          bash scripts/ci/write-asc-private-key.sh "$IOS_ASC_PRIVATE_KEY" "$KEY_PATH"
+
+          if ! openssl pkey -in "$KEY_PATH" -noout >/dev/null 2>&1; then
+            echo "::warning::IOS_ASC_PRIVATE_KEY is not a valid .p8 key; skipping remote build-number lookup."
+            REMOTE_LOOKUP_STATUS="invalid_key"
+          else
+            ASC_API_TMP_PREFIX="asc-macos-versioning"
+            source scripts/ci/asc-api-utils.sh
+
+            if ! ASC_TOKEN="$(
+              node scripts/ci/generate-asc-jwt.js "$ASC_KEY_ID" "$ASC_ISSUER_ID" "$KEY_PATH"
+            )"; then
+              echo "::warning::Failed to generate App Store Connect JWT from IOS_ASC_* secrets."
+              REMOTE_LOOKUP_STATUS="invalid_jwt"
+            fi
+
+            APP_LOOKUP_JSON_FILE="$RUNNER_TEMP/asc-macos-app-lookup.json"
+            if [ "${REMOTE_LOOKUP_STATUS}" != "invalid_jwt" ]; then
+              if api_get "$APP_LOOKUP_JSON_FILE" -G \
+                -H "Authorization: Bearer ${ASC_TOKEN}" \
+                --data-urlencode "filter[bundleId]=${EXPECTED_BUNDLE_ID}" \
+                --data-urlencode "limit=1" \
+                "https://api.appstoreconnect.apple.com/v1/apps"; then
+                APPSTORE_APP_ID="$(jq -r '.data[0].id // empty' "$APP_LOOKUP_JSON_FILE")"
+                if [ -n "${APPSTORE_APP_ID}" ]; then
+                  BUILDS_JSON_FILE="$RUNNER_TEMP/asc-macos-builds-page.json"
+                  if api_get "$BUILDS_JSON_FILE" -G \
+                    -H "Authorization: Bearer ${ASC_TOKEN}" \
+                    --data-urlencode "filter[app]=${APPSTORE_APP_ID}" \
+                    --data-urlencode "limit=200" \
+                    "https://api.appstoreconnect.apple.com/v1/builds"; then
+                    while : ; do
+                      PAGE_MAX="$(jq -r '[.data[]?.attributes.version | select(type=="string") | select(test("^[0-9]+$")) | tonumber] | max // 0' "$BUILDS_JSON_FILE")"
+                      if [ "${PAGE_MAX}" -gt "${REMOTE_MAX_BUILD}" ]; then
+                        REMOTE_MAX_BUILD="${PAGE_MAX}"
+                      fi
+                      NEXT_URL="$(jq -r '.links.next // empty' "$BUILDS_JSON_FILE")"
+                      if [ -z "${NEXT_URL}" ]; then
+                        REMOTE_LOOKUP_STATUS="ok"
+                        break
+                      fi
+                      if ! api_get "$BUILDS_JSON_FILE" -g -H "Authorization: Bearer ${ASC_TOKEN}" "$NEXT_URL"; then
+                        REMOTE_LOOKUP_STATUS="api_error"
+                        break
+                      fi
+                    done
+                  else
+                    REMOTE_LOOKUP_STATUS="api_error"
+                  fi
+                else
+                  echo "::warning::App Store Connect app lookup returned no app for bundle id ${EXPECTED_BUNDLE_ID}."
+                  REMOTE_LOOKUP_STATUS="no_app"
+                fi
+              else
+                REMOTE_LOOKUP_STATUS="api_error"
+              fi
+            fi
+          fi
+
+          REMOTE_MIN_BUILD="$((REMOTE_MAX_BUILD + 1))"
+          FINAL_BUILD_NUMBER="${LOCAL_MIN_BUILD}"
+          if [ "${REMOTE_MIN_BUILD}" -gt "${FINAL_BUILD_NUMBER}" ]; then
+            FINAL_BUILD_NUMBER="${REMOTE_MIN_BUILD}"
+          fi
+
+          echo "APP_VERSION=${APP_VERSION}" >> "$GITHUB_ENV"
+          echo "APP_BUILD_NUMBER=${FINAL_BUILD_NUMBER}" >> "$GITHUB_ENV"
+          echo "APPSTORE_APP_ID=${APPSTORE_APP_ID:-}" >> "$GITHUB_ENV"
+          echo "Resolved macOS build number: ${FINAL_BUILD_NUMBER} (remote max: ${REMOTE_MAX_BUILD}, remote lookup: ${REMOTE_LOOKUP_STATUS}, local floor: ${LOCAL_MIN_BUILD})"
+
+          APPSTORE_CONFIG_PATH="apps/desktop/src-tauri/tauri.appstore.conf.json"
+          APP_BUILD_NUMBER="${FINAL_BUILD_NUMBER}" APPSTORE_CONFIG_PATH="${APPSTORE_CONFIG_PATH}" node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          const filePath = path.resolve(process.env.APPSTORE_CONFIG_PATH);
+          const buildNumber = process.env.APP_BUILD_NUMBER;
+          const config = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+          config.bundle = config.bundle || {};
+          config.bundle.macOS = config.bundle.macOS || {};
+          config.bundle.macOS.bundleVersion = String(buildNumber);
+          fs.writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n');
+          console.log(`Updated ${filePath} bundle.macOS.bundleVersion -> ${buildNumber}`);
+          NODE
+
+      - name: Build signed macOS app bundle (App Store)
+        timeout-minutes: 45
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.MAS_SIGNING_IDENTITY }}
+          VITE_ANALYTICS_HEARTBEAT_URL: ${{ secrets.ANALYTICS_HEARTBEAT_URL }}
+          TAURI_LOG_LEVEL: debug
+          SOURCE_DATE_EPOCH: "1"
+        run: |
+          set -euo pipefail
+          # rust-cache can restore stale CMake cache where GGML_NATIVE stayed ON.
+          # Clear whisper-rs-sys build dirs so GGML_NATIVE_DEFAULT=OFF is applied.
+          if [ -d apps/desktop/src-tauri/target ]; then
+            find apps/desktop/src-tauri/target -type d -path '*/build/whisper-rs-sys-*' -prune -exec rm -rf {} +
+          fi
           cd apps/desktop
           cargo tauri build \
-            --target aarch64-apple-darwin \
+            --target universal-apple-darwin \
             --bundles app \
             --config src-tauri/tauri.appstore.conf.json
 
@@ -251,7 +374,7 @@ jobs:
           security default-keychain -s "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple:,codesign:,productbuild:,pkgbuild: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          APP_PATH="$(find apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -n 1)"
+          APP_PATH="$(find apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -n 1)"
           if [ -z "${APP_PATH:-}" ]; then
             echo "::error::Built .app bundle not found"
             exit 1
@@ -306,14 +429,15 @@ jobs:
           ls -la "$PKG_DIR"
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mindwtr-macos-appstore-pkg
           path: ${{ env.PKG_PATH }}
           if-no-files-found: error
+          retention-days: 28
 
       - name: Prepare Fastlane metadata
-        if: ${{ (inputs.upload || 'true') == 'true' }}
+        if: ${{ inputs.upload }}
         env:
           RELEASE_BODY: ${{ github.event.release.body || '' }}
           APP_SUPPORT_URL: "https://github.com/dongdongbh/Mindwtr/issues"
@@ -321,101 +445,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          FASTLANE_METADATA_DIR="$RUNNER_TEMP/fastlane_metadata"
-          rm -rf "$FASTLANE_METADATA_DIR"
-          mkdir -p "$FASTLANE_METADATA_DIR"
-          if [ -f "metadata/copyright.txt" ]; then
-            cp "metadata/copyright.txt" "$FASTLANE_METADATA_DIR/copyright.txt"
-          fi
-
-          map_metadata() {
-            local src_locale="$1"
-            local dst_locale="$2"
-            local src_dir="metadata/$src_locale"
-            local dst_dir="$FASTLANE_METADATA_DIR/$dst_locale"
-
-            if [ ! -d "$src_dir" ]; then
-              echo "Skipping $src_locale (missing metadata folder)"
-              return
-            fi
-
-            mkdir -p "$dst_dir"
-
-            if [ -f "$src_dir/description.txt" ]; then
-              cp "$src_dir/description.txt" "$dst_dir/description.txt"
-            elif [ -f "$src_dir/full_description.txt" ]; then
-              cp "$src_dir/full_description.txt" "$dst_dir/description.txt"
-            fi
-            if [ -f "$src_dir/name.txt" ]; then
-              cp "$src_dir/name.txt" "$dst_dir/name.txt"
-            elif [ -f "$src_dir/title.txt" ]; then
-              cp "$src_dir/title.txt" "$dst_dir/name.txt"
-            fi
-            if [ -f "$src_dir/subtitle.txt" ]; then
-              cp "$src_dir/subtitle.txt" "$dst_dir/subtitle.txt"
-            elif [ -f "$src_dir/short_description.txt" ]; then
-              cp "$src_dir/short_description.txt" "$dst_dir/subtitle.txt"
-            fi
-            if [ -f "$src_dir/keywords.txt" ]; then
-              cp "$src_dir/keywords.txt" "$dst_dir/keywords.txt"
-            fi
-            if [ -f "$src_dir/support_url.txt" ]; then
-              cp "$src_dir/support_url.txt" "$dst_dir/support_url.txt"
-            elif [ -n "${APP_SUPPORT_URL:-}" ]; then
-              printf '%s\n' "$APP_SUPPORT_URL" > "$dst_dir/support_url.txt"
-            fi
-            if [ -f "$src_dir/marketing_url.txt" ]; then
-              cp "$src_dir/marketing_url.txt" "$dst_dir/marketing_url.txt"
-            elif [ -n "${APP_MARKETING_URL:-}" ]; then
-              printf '%s\n' "$APP_MARKETING_URL" > "$dst_dir/marketing_url.txt"
-            fi
-
-            if [ -f "$src_dir/release_notes.txt" ]; then
-              cp "$src_dir/release_notes.txt" "$dst_dir/release_notes.txt"
-              echo "Release notes source for $src_locale: release_notes.txt"
-              return
-            fi
-
-            if [ -d "$src_dir/changelogs" ]; then
-              local latest_log=""
-              latest_log="$(
-                ls -1 "$src_dir/changelogs" 2>/dev/null \
-                  | sed -E 's/\.txt$//' \
-                  | grep -E '^[0-9]+$' \
-                  | sort -n \
-                  | tail -n 1 || true
-              )"
-              if [ -n "$latest_log" ] && [ -f "$src_dir/changelogs/${latest_log}.txt" ]; then
-                cp "$src_dir/changelogs/${latest_log}.txt" "$dst_dir/release_notes.txt"
-                echo "Release notes source for $src_locale: changelogs/${latest_log}.txt"
-                return
-              fi
-            fi
-
-            if [ -n "${RELEASE_BODY:-}" ]; then
-              printf '%s\n' "$RELEASE_BODY" > "$dst_dir/release_notes.txt"
-              echo "Release notes source for $src_locale: github release body"
-              return
-            fi
-
-            echo "No release notes found for $src_locale"
-          }
-
-          map_metadata "en-US" "en-US"
-          map_metadata "es-ES" "es-ES"
-          map_metadata "zh-CN" "zh-Hans"
-
+          export FASTLANE_METADATA_DIR="$RUNNER_TEMP/fastlane_metadata"
+          scripts/ci/prepare-fastlane-metadata.sh
           echo "FASTLANE_METADATA_PATH=$FASTLANE_METADATA_DIR" >> "$GITHUB_ENV"
-          echo "Generated fastlane metadata files:"
-          find "$FASTLANE_METADATA_DIR" -type f | sort
 
       - name: Resolve App Store review submission flag
-        if: ${{ (inputs.upload || 'true') == 'true' }}
+        if: ${{ inputs.upload }}
+        timeout-minutes: 10
         env:
           IOS_ASC_KEY_ID: ${{ secrets.IOS_ASC_KEY_ID }}
           IOS_ASC_ISSUER_ID: ${{ secrets.IOS_ASC_ISSUER_ID }}
           IOS_ASC_PRIVATE_KEY: ${{ secrets.IOS_ASC_PRIVATE_KEY }}
-          REQUESTED_SUBMIT_FOR_REVIEW: ${{ inputs.submit_for_review || 'true' }}
+          REQUESTED_SUBMIT_FOR_REVIEW: ${{ inputs.submit_for_review && 'true' || 'false' }}
         run: |
           set -euo pipefail
 
@@ -493,6 +534,7 @@ jobs:
             echo "EFFECTIVE_SUBMIT_FOR_REVIEW=false" >> "$GITHUB_ENV"
             echo "ENABLE_TESTFLIGHT_EXTERNAL_RELEASE=true" >> "$GITHUB_ENV"
             echo "SKIP_APP_VERSION_UPDATE_FOR_UPLOAD=true" >> "$GITHUB_ENV"
+            echo "SKIP_METADATA_FOR_UPLOAD=true" >> "$GITHUB_ENV"
             exit 0
           fi
 
@@ -505,13 +547,15 @@ jobs:
           fi
 
       - name: Upload package to App Store Connect
-        if: ${{ (inputs.upload || 'true') == 'true' }}
+        if: ${{ inputs.upload }}
+        timeout-minutes: 30
         env:
           IOS_ASC_KEY_ID: ${{ secrets.IOS_ASC_KEY_ID }}
           IOS_ASC_ISSUER_ID: ${{ secrets.IOS_ASC_ISSUER_ID }}
           IOS_ASC_PRIVATE_KEY: ${{ secrets.IOS_ASC_PRIVATE_KEY }}
           SUBMIT_FOR_REVIEW: ${{ env.EFFECTIVE_SUBMIT_FOR_REVIEW || 'false' }}
           SKIP_APP_VERSION_UPDATE: ${{ env.SKIP_APP_VERSION_UPDATE_FOR_UPLOAD || 'false' }}
+          SKIP_METADATA: ${{ env.SKIP_METADATA_FOR_UPLOAD || 'false' }}
           FASTLANE_SKIP_UPDATE_CHECK: "1"
           FASTLANE_HIDE_CHANGELOG: "1"
           FASTLANE_OPT_OUT_USAGE: "1"
@@ -547,12 +591,13 @@ jobs:
                 platform: "osx",
                 pkg: ENV.fetch("PKG_PATH"),
                 metadata_path: ENV.fetch("FASTLANE_METADATA_PATH"),
+                skip_metadata: ENV.fetch("SKIP_METADATA", "false") == "true",
                 skip_screenshots: true,
                 skip_app_version_update: ENV.fetch("SKIP_APP_VERSION_UPDATE", "false") == "true",
                 force: true,
                 run_precheck_before_submit: false,
                 submit_for_review: ENV.fetch("SUBMIT_FOR_REVIEW", "false") == "true",
-                automatic_release: false
+                automatic_release: true
               )
             end
           end
@@ -560,8 +605,9 @@ jobs:
 
           ASC_KEY_PATH="$ASC_KEY_PATH" fastlane mac upload_app_store
 
-      - name: Distribute upload to TestFlight external group when review is active
-        if: ${{ (inputs.upload || 'true') == 'true' && env.ENABLE_TESTFLIGHT_EXTERNAL_RELEASE == 'true' }}
+      - name: Distribute upload to TestFlight external group
+        if: ${{ inputs.upload }}
+        timeout-minutes: 30
         env:
           IOS_ASC_KEY_ID: ${{ secrets.IOS_ASC_KEY_ID }}
           IOS_ASC_ISSUER_ID: ${{ secrets.IOS_ASC_ISSUER_ID }}
@@ -577,11 +623,30 @@ jobs:
           ASC_KEY_PATH="$RUNNER_TEMP/macos-asc-key-fastlane-testflight.p8"
           bash scripts/ci/write-asc-private-key.sh "$IOS_ASC_PRIVATE_KEY" "$ASC_KEY_PATH"
 
+          WHAT_TO_TEST_FILE="metadata/en-US/release_notes.txt"
+          DEFAULT_WHAT_TO_TEST="Bug fixes, performance improvements, and sync stability updates."
+          WHAT_TO_TEST=""
+          if [ -f "$WHAT_TO_TEST_FILE" ]; then
+            WHAT_TO_TEST="$(tr '\n' ' ' < "$WHAT_TO_TEST_FILE" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+          fi
+          if [ -z "${WHAT_TO_TEST}" ]; then
+            WHAT_TO_TEST="$DEFAULT_WHAT_TO_TEST"
+          fi
+          export TESTFLIGHT_WHAT_TO_TEST="$WHAT_TO_TEST"
+          echo "Using TestFlight What to Test: ${TESTFLIGHT_WHAT_TO_TEST}"
+
           mkdir -p fastlane
           cat <<'EOF' > fastlane/Fastfile
           opt_out_usage
 
           lane :distribute_external_group do
+            beta_review_locked_error = lambda do |error|
+              message = error.to_s
+              message.match?(/cannot accept new beta review submission/i) ||
+                message.match?(/another build.*beta review/i) ||
+                message.match?(/same train.*beta review/i)
+            end
+
             api_key = app_store_connect_api_key(
               key_id: ENV.fetch("IOS_ASC_KEY_ID"),
               issuer_id: ENV.fetch("IOS_ASC_ISSUER_ID"),
@@ -599,11 +664,43 @@ jobs:
               build_number: ENV.fetch("APP_BUILD_NUMBER"),
               distribute_external: true,
               groups: [ENV.fetch("TESTFLIGHT_EXTERNAL_GROUP")],
-              notify_external_testers: false,
-              skip_submission: true,
+              notify_external_testers: true,
+              changelog: ENV.fetch("TESTFLIGHT_WHAT_TO_TEST"),
+              submit_beta_review: true,
+              skip_submission: false,
               skip_waiting_for_build_processing: false,
               wait_processing_timeout_duration: 1800
             )
+          rescue => e
+            if beta_review_locked_error.call(e)
+              UI.important("Another TestFlight build is already in beta review for this train. Skipping beta review submission for this run.")
+              begin
+                upload_to_testflight(
+                  api_key: api_key,
+                  app_identifier: ENV.fetch("EXPECTED_BUNDLE_ID"),
+                  app_platform: "osx",
+                  distribute_only: true,
+                  app_version: ENV.fetch("APP_VERSION"),
+                  build_number: ENV.fetch("APP_BUILD_NUMBER"),
+                  distribute_external: true,
+                  groups: [ENV.fetch("TESTFLIGHT_EXTERNAL_GROUP")],
+                  notify_external_testers: true,
+                  changelog: ENV.fetch("TESTFLIGHT_WHAT_TO_TEST"),
+                  submit_beta_review: false,
+                  skip_submission: true,
+                  skip_waiting_for_build_processing: false,
+                  wait_processing_timeout_duration: 1800
+                )
+              rescue => retry_error
+                if beta_review_locked_error.call(retry_error)
+                  UI.important("Beta review lock is still active. Continuing without failing this workflow.")
+                else
+                  raise retry_error
+                end
+              end
+            else
+              raise e
+            end
           end
           EOF
 

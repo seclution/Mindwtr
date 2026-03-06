@@ -1,8 +1,8 @@
 import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Modal, Alert, Pressable, ScrollView, SectionList, Dimensions, Platform, Keyboard, ActionSheetIOS } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Modal, Alert, Pressable, ScrollView, SectionList, Dimensions, Platform, Keyboard, ActionSheetIOS, Image } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { Area, Attachment, generateUUID, Project, PRESET_TAGS, Task, TaskStatus, useTaskStore, validateAttachmentForUpload } from '@mindwtr/core';
+import { Area, Attachment, DEFAULT_PROJECT_COLOR, generateUUID, getAttachmentDisplayTitle, normalizeLinkAttachmentInput, Project, PRESET_TAGS, Task, TaskStatus, useTaskStore, validateAttachmentForUpload } from '@mindwtr/core';
 import { Trash2 } from 'lucide-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -45,6 +45,7 @@ export default function ProjectsScreen() {
   const [showReviewPicker, setShowReviewPicker] = useState(false);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [linkModalVisible, setLinkModalVisible] = useState(false);
+  const [imagePreviewAttachment, setImagePreviewAttachment] = useState<Attachment | null>(null);
   const [linkInput, setLinkInput] = useState('');
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [showAreaPicker, setShowAreaPicker] = useState(false);
@@ -90,13 +91,13 @@ export default function ProjectsScreen() {
   };
 
   const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
-  const colorDisplayByHex: Record<string, { name: string; swatch: string }> = {
-    '#3b82f6': { name: 'Blue', swatch: '🔵' },
-    '#10b981': { name: 'Green', swatch: '🟢' },
-    '#f59e0b': { name: 'Amber', swatch: '🟠' },
-    '#ef4444': { name: 'Red', swatch: '🔴' },
-    '#8b5cf6': { name: 'Purple', swatch: '🟣' },
-    '#ec4899': { name: 'Pink', swatch: '🩷' },
+  const colorDisplayByHex: Record<string, { nameKey: string; swatch: string }> = {
+    '#3b82f6': { nameKey: 'projects.colorBlue', swatch: '🔵' },
+    '#10b981': { nameKey: 'projects.colorGreen', swatch: '🟢' },
+    '#f59e0b': { nameKey: 'projects.colorAmber', swatch: '🟠' },
+    '#ef4444': { nameKey: 'projects.colorRed', swatch: '🔴' },
+    '#8b5cf6': { nameKey: 'projects.colorPurple', swatch: '🟣' },
+    '#ec4899': { nameKey: 'projects.colorPink', swatch: '🩷' },
   };
 
   const sortedAreas = useMemo(() => [...areas].sort((a, b) => a.order - b.order), [areas]);
@@ -353,7 +354,7 @@ export default function ProjectsScreen() {
           ? selectedAreaFilter
           : undefined;
       const areaColor = inferredAreaId ? areaById.get(inferredAreaId)?.color : undefined;
-      addProject(newProjectTitle, areaColor || '#94a3b8', {
+      addProject(newProjectTitle, areaColor || DEFAULT_PROJECT_COLOR, {
         areaId: inferredAreaId,
       });
       setNewProjectTitle('');
@@ -456,8 +457,9 @@ export default function ProjectsScreen() {
                     options: [
                       t('common.cancel'),
                       ...colors.map((color) => {
-                        const colorMeta = colorDisplayByHex[color] ?? { name: color.toUpperCase(), swatch: '◯' };
-                        return `${colorMeta.swatch} ${colorMeta.name}`;
+                        const colorMeta = colorDisplayByHex[color] ?? { nameKey: '', swatch: '◯' };
+                        const colorName = colorMeta.nameKey ? t(colorMeta.nameKey) : color.toUpperCase();
+                        return `${colorMeta.swatch} ${colorName}`;
                       }),
                     ],
                     cancelButtonIndex: 0,
@@ -533,8 +535,9 @@ export default function ProjectsScreen() {
                   options: [
                     t('common.cancel'),
                     ...colors.map((color) => {
-                      const colorMeta = colorDisplayByHex[color] ?? { name: color.toUpperCase(), swatch: '◯' };
-                      return `${area.color === color ? '✓ ' : ''}${colorMeta.swatch} ${colorMeta.name}`;
+                      const colorMeta = colorDisplayByHex[color] ?? { nameKey: '', swatch: '◯' };
+                      const colorName = colorMeta.nameKey ? t(colorMeta.nameKey) : color.toUpperCase();
+                      return `${area.color === color ? '✓ ' : ''}${colorMeta.swatch} ${colorName}`;
                     }),
                   ],
                   cancelButtonIndex: 0,
@@ -734,6 +737,12 @@ export default function ProjectsScreen() {
       item.id === id ? { ...item, localStatus: status } : item
     );
 
+  const isImageAttachment = useCallback((attachment: Attachment) => {
+    const mime = attachment.mimeType?.toLowerCase();
+    if (mime?.startsWith('image/')) return true;
+    return /\.(png|jpg|jpeg|gif|webp|heic|heif)$/i.test(attachment.uri);
+  }, []);
+
   const openAttachment = async (attachment: Attachment) => {
     const shouldDownload = attachment.kind === 'file'
       && attachment.cloudKey
@@ -777,6 +786,10 @@ export default function ProjectsScreen() {
       Linking.openURL(resolved.uri).catch((error) => logProjectError('Failed to open attachment URL', error));
       return;
     }
+    if (isImageAttachment(resolved)) {
+      setImagePreviewAttachment(resolved);
+      return;
+    }
 
     const available = await Sharing.isAvailableAsync().catch((error) => {
       void logWarn('[Sharing] availability check failed', {
@@ -791,6 +804,12 @@ export default function ProjectsScreen() {
       Linking.openURL(resolved.uri).catch((error) => logProjectError('Failed to open attachment URL', error));
     }
   };
+
+  useEffect(() => {
+    if (!selectedProject) {
+      setImagePreviewAttachment(null);
+    }
+  }, [selectedProject]);
 
   const downloadAttachment = async (attachment: Attachment) => {
     if (!selectedProject) return;
@@ -875,14 +894,14 @@ export default function ProjectsScreen() {
 
   const confirmAddProjectLink = () => {
     if (!selectedProject) return;
-    const url = linkInput.trim();
-    if (!url) return;
+    const normalized = normalizeLinkAttachmentInput(linkInput);
+    if (!normalized.uri) return;
     const now = new Date().toISOString();
     const attachment: Attachment = {
       id: generateUUID(),
-      kind: 'link',
-      title: url,
-      uri: url,
+      kind: normalized.kind,
+      title: normalized.title,
+      uri: normalized.uri,
       createdAt: now,
       updatedAt: now,
     };
@@ -1359,7 +1378,7 @@ export default function ProjectsScreen() {
                                     disabled={isDownloading}
                                   >
                                     <Text style={[styles.attachmentTitle, { color: tc.tint }]} numberOfLines={1}>
-                                      {attachment.title}
+                                      {getAttachmentDisplayTitle(attachment)}
                                     </Text>
                                     <AttachmentProgressIndicator attachmentId={attachment.id} />
                                   </TouchableOpacity>
@@ -1478,6 +1497,9 @@ export default function ProjectsScreen() {
               autoCapitalize="none"
               autoCorrect={false}
             />
+            <Text style={[styles.linkModalHint, { color: tc.secondaryText }]}>
+              {t('attachments.linkInputHint')}
+            </Text>
             <View style={styles.linkModalButtons}>
               <TouchableOpacity
                 onPress={() => {
@@ -1498,6 +1520,34 @@ export default function ProjectsScreen() {
             </View>
           </View>
         </View>
+      </Modal>
+      <Modal
+        visible={Boolean(imagePreviewAttachment)}
+        transparent
+        animationType="fade"
+        presentationStyle={overlayModalPresentation}
+        onRequestClose={() => setImagePreviewAttachment(null)}
+      >
+        <Pressable style={styles.overlay} onPress={() => setImagePreviewAttachment(null)}>
+          <Pressable
+            style={[styles.previewCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}
+            onPress={(event) => event.stopPropagation()}
+          >
+            <View style={styles.previewHeader}>
+              <Text style={[styles.previewTitle, { color: tc.text }]} numberOfLines={1}>
+                {imagePreviewAttachment?.title || t('attachments.title')}
+              </Text>
+              <TouchableOpacity onPress={() => setImagePreviewAttachment(null)} style={styles.smallButton}>
+                <Text style={[styles.smallButtonText, { color: tc.secondaryText }]}>{t('common.close')}</Text>
+              </TouchableOpacity>
+            </View>
+            {imagePreviewAttachment?.uri ? (
+              <Image source={{ uri: imagePreviewAttachment.uri }} style={styles.previewImage} resizeMode="contain" />
+            ) : (
+              <Text style={[styles.helperText, { color: tc.secondaryText }]}>{t('attachments.missing')}</Text>
+            )}
+          </Pressable>
+        </Pressable>
       </Modal>
       <Modal
         visible={showAreaPicker}
@@ -2165,11 +2215,41 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 16,
   },
+  linkModalHint: {
+    fontSize: 12,
+    marginTop: 8,
+  },
   linkModalButtons: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: 12,
     marginTop: 14,
+  },
+  previewCard: {
+    width: '100%',
+    maxWidth: 520,
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  previewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  previewTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  previewImage: {
+    width: '100%',
+    height: 360,
+    backgroundColor: '#000',
   },
   areaManagerList: {
     paddingBottom: 8,

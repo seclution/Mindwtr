@@ -96,8 +96,8 @@ export interface Area {
     order: number; // For sorting in the sidebar
     rev?: number; // Monotonic revision counter for sync conflict resolution
     revBy?: string; // Device identifier that issued the revision
-    createdAt?: string;
-    updatedAt?: string;
+    createdAt: string;
+    updatedAt: string;
     deletedAt?: string; // Soft-delete tombstone for cross-device area deletion
 }
 
@@ -165,7 +165,8 @@ export interface Task {
     updatedAt: string;
     deletedAt?: string; // Soft-delete: if set, this item is considered deleted
     purgedAt?: string; // Permanently removed from trash, kept for sync tombstone
-    orderNum?: number; // Manual ordering within a project (for sequential projects)
+    order?: number; // Manual ordering within a project (for sequential projects)
+    orderNum?: number; // Legacy alias kept for backward compatibility with older payloads
 }
 
 export interface SavedSearch {
@@ -174,6 +175,13 @@ export interface SavedSearch {
     query: string;
     sort?: string;
     groupBy?: string;
+}
+
+export interface PendingRemoteAttachmentDelete {
+    cloudKey: string;
+    title?: string;
+    attempts?: number;
+    lastErrorAt?: string;
 }
 
 import type { MergeStats, SyncHistoryEntry } from './sync';
@@ -199,9 +207,13 @@ export interface AppData {
                 projectFirst?: boolean;
                 scheduleEnabled?: boolean;
             };
+            weeklyReview?: {
+                includeContextStep?: boolean;
+            };
         };
         attachments?: {
             lastCleanupAt?: string;
+            pendingRemoteDeletes?: PendingRemoteAttachmentDelete[];
         };
         features?: {
             priorities?: boolean;
@@ -212,19 +224,21 @@ export interface AppData {
             density?: 'comfortable' | 'compact';
         };
         theme?: 'light' | 'dark' | 'system' | 'eink' | 'nord' | 'sepia' | 'material3-light' | 'material3-dark' | 'oled';
-        language?: 'en' | 'zh' | 'es' | 'hi' | 'ar' | 'de' | 'ru' | 'ja' | 'fr' | 'pt' | 'ko' | 'it' | 'tr' | 'system';
+        language?: 'en' | 'zh' | 'zh-Hant' | 'es' | 'hi' | 'ar' | 'de' | 'ru' | 'ja' | 'fr' | 'pt' | 'pl' | 'ko' | 'it' | 'tr' | 'nl' | 'system';
         weekStart?: 'monday' | 'sunday';
         dateFormat?: string;
         syncPreferences?: SettingsSyncPreferences;
         syncPreferencesUpdatedAt?: SettingsSyncUpdatedAt;
         externalCalendars?: ExternalCalendarSubscription[];
         keybindingStyle?: 'vim' | 'emacs';
+        globalQuickAddShortcut?: string;
         window?: {
             decorations?: boolean;
             closeBehavior?: 'ask' | 'tray' | 'quit';
             showTray?: boolean;
         };
         notificationsEnabled?: boolean;
+        undoNotificationsEnabled?: boolean;
         reviewAtNotificationsEnabled?: boolean;
         dailyDigestMorningEnabled?: boolean;
         dailyDigestMorningTime?: string; // HH:mm
@@ -237,6 +251,7 @@ export interface AppData {
             enabled?: boolean;
             provider?: 'gemini' | 'openai' | 'anthropic';
             apiKey?: string;
+            baseUrl?: string;
             model?: string;
             reasoningEffort?: 'low' | 'medium' | 'high';
             thinkingBudget?: number;
@@ -257,6 +272,7 @@ export interface AppData {
         lastSyncAt?: string;
         lastSyncStatus?: 'idle' | 'syncing' | 'success' | 'error' | 'conflict';
         lastSyncError?: string;
+        pendingRemoteWriteAt?: string;
         lastSyncStats?: MergeStats;
         lastSyncHistory?: SyncHistoryEntry[];
         diagnostics?: {

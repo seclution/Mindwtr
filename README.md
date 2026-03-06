@@ -6,9 +6,11 @@
 
 English | [中文](./README_zh.md)
 
-A complete Getting Things Done (GTD) productivity system for desktop and mobile. *Mind Like Water.*
+The free, open-source, cross-platform GTD app. Local-first, no account required. *Mind Like Water.*
 
 *New to GTD? Read [GTD in 15 minutes](https://hamberg.no/gtd) for a quick introduction.*
+
+[Install](#installation) · [Getting Started](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started) · [Data & Sync](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync)
 
 [![CI](https://github.com/dongdongbh/Mindwtr/actions/workflows/ci.yml/badge.svg)](https://github.com/dongdongbh/Mindwtr/actions/workflows/ci.yml)
 [![GitHub license](https://img.shields.io/github/license/dongdongbh/Mindwtr?color=brightgreen)](LICENSE)
@@ -36,7 +38,14 @@ A complete Getting Things Done (GTD) productivity system for desktop and mobile.
   <a href="https://apps.apple.com/app/mindwtr/id6758597144" target="_blank">
     <img src="https://tools.applemediaservices.com/api/badges/download-on-the-app-store/black/en-us?size=250x83"
          align="center"
-         alt="Download on the App Store"
+         alt="App Store"
+         style="height: 50px"
+         height="50" />
+  </a>
+  <a href="https://apt.izzysoft.de/fdroid/index/apk/tech.dongdongbh.mindwtr" target="_blank">
+    <img src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroidButtonGreyBorder_nofont.png"
+         align="center"
+         alt="Get it on IzzyOnDroid"
          style="height: 50px"
          height="50" />
   </a>
@@ -61,6 +70,24 @@ A complete Getting Things Done (GTD) productivity system for desktop and mobile.
   </p>
 </div>
 
+## Why Mindwtr (Quick Comparison)
+
+Mindwtr is built for people who want a complete GTD system without lock-in. Here is a brief, respectful comparison with mainstream task apps and GTD-focused alternatives.
+
+| Capability | Mindwtr | Todoist | TickTick | Everdo | NirvanaHQ |
+|---|---|---|---|---|---|
+| Open source | ✅ | ❌ | ❌ | ❌ | ❌ |
+| GTD-native workflow | ✅ | ⚠️ | ⚠️ | ✅ | ✅ |
+| All major platforms (desktop + mobile + web, incl. Linux desktop) | ✅ | ✅ | ✅ | ⚠️ | ⚠️ |
+| Local-first + no account required | ✅ | ❌ | ❌ | ✅ | ❌ |
+| AI assistant (BYOK + local LLM) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Flexible sync (WebDAV / Dropbox / self-hosted / local file) | ✅ | ❌ | ❌ | ⚠️ | ❌ |
+| Completely free | ✅ | ❌ | ❌ | ❌ | ❌ |
+
+Legend: `✅` = yes, `❌` = no, `⚠️` = partial/limited support.
+
+*Checked against official product docs/pages on February 25, 2026. If any entry is outdated, feel free to open an issue/PR with sources.*
+
 ## Philosophy
 
 Mindwtr is built to be **simple by default and powerful when you need it**. We focus on reducing cognitive load, cutting the fat, and keeping you in flow. That means:
@@ -73,13 +100,23 @@ Mindwtr is built to be **simple by default and powerful when you need it**. We f
 
 ## Features
 
+- GTD workflow end-to-end: Capture, Clarify, Organize, Reflect, Engage.
+- Focus view combines time-based agenda with next actions.
+- Local-first data model with flexible sync options.
+- Optional AI copilot (BYOK + local/self-hosted compatible models).
+- Cross-platform apps for desktop and mobile, plus PWA.
+- Built-in automation with CLI, REST API, and MCP server.
+
+<details>
+<summary>See all features</summary>
+
 ### GTD Workflow
 - **Capture** - Quick add tasks from anywhere (global hotkey, tray, share sheet, voice)
 - **Clarify** - Guided inbox processing with 2-minute rule
 - **Organize** - Projects, contexts, and status lists
 - **Reflect** - Weekly review wizard with reminders
 - **Engage** - Context-filtered next actions
-- **AI Assist (Optional)** - Clarify, break down, and review with BYOK AI (OpenAI, Gemini, Claude)
+- **AI Assist (Optional)** - Clarify, break down, and review with BYOK AI (OpenAI, Gemini, Claude, or local/self-hosted OpenAI-compatible LLMs)
 
 ### Views
 - 📥 **Inbox** - Capture zone with processing wizard
@@ -110,10 +147,10 @@ Mindwtr is built to be **simple by default and powerful when you need it**. We f
 - 📅 **Weekly Review** - Customizable weekly reminder
 
 ### Data & Sync
-- 📁 **File Sync** - Dropbox, Google Drive, Syncthing, etc.
-- 🌐 **WebDAV Sync** - Nextcloud, ownCloud, self-hosted
+- 🔄 **Sync Options** - See the [Data & Sync wiki](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync) for supported backends and setup
+- ☁️ **Dropbox OAuth Sync (Optional)** - Native Dropbox App Folder sync in supported non-FOSS builds
 - 📤 **Export/Backup** - Export data to JSON
-- 🗓️ **External Calendars (ICS)** - View-only calendar overlay
+- 🗓️ **External Calendars (System + ICS)** - Mobile reads system calendars; desktop supports ICS subscriptions
 
 ### Automation
 - 🔌 **CLI** - Add, list, complete, search from terminal
@@ -127,28 +164,18 @@ Mindwtr is built to be **simple by default and powerful when you need it**. We f
 - 📲 **Android Widget** - Home screen focus/next widget
 - ⌨️ **Keyboard Shortcuts** - Vim and Emacs presets
 - 🎨 **Themes** - Light/Dark
-- 🌍 **i18n** - English, Chinese, Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Korean, Italian, Turkish
+- 🌍 **i18n** - English, Chinese (Simplified), Chinese (Traditional), Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Polish, Korean, Italian, Turkish, Dutch
 - 🐳 **Docker** - Run the PWA + self-hosted sync server with Docker
 
-## Requirements
-
-### End Users
-- Desktop builds from package managers/app stores do not require Bun or Node.js.
-- Mobile users can install from App Store / Google Play directly.
-
-### Building From Source
-- **Bun**: `>= 1.1` (workspace install, scripts, tests)
-- **Node.js**: `>= 18` (recommended for tooling compatibility)
-- **Rust toolchain** + platform WebView dependencies (for Tauri desktop builds)
-- **Android Studio/SDK** and/or **Xcode** (for React Native mobile builds)
+</details>
 
 ## Installation
 
 ### Desktop (Linux)
 
-**Arch Linux (AUR):**
+**Arch Linux (AUR, prebuilt recommended):**
 <a href="https://aur.archlinux.org/packages/mindwtr-bin">
-  <img src="https://img.shields.io/aur/version/mindwtr-bin?logo=arch-linux&logoColor=white&color=1793d1&label=AUR" alt="AUR Version">
+  <img src="https://img.shields.io/aur/version/mindwtr-bin?logo=arch-linux&logoColor=white&color=1793d1&label=mindwtr-bin" alt="AUR mindwtr-bin Version">
 </a>
 
 ```bash
@@ -157,6 +184,19 @@ yay -S mindwtr-bin
 
 # Using paru
 paru -S mindwtr-bin
+```
+
+**Arch Linux (AUR, build from source):**
+<a href="https://aur.archlinux.org/packages/mindwtr">
+  <img src="https://img.shields.io/aur/version/mindwtr?logo=arch-linux&logoColor=white&color=1793d1&label=mindwtr" alt="AUR mindwtr Version">
+</a>
+
+```bash
+# Using yay
+yay -S mindwtr
+
+# Using paru
+paru -S mindwtr
 ```
 
 **Debian / Ubuntu (APT repo, recommended):**
@@ -214,13 +254,13 @@ scoop bucket add mindwtr https://github.com/dongdongbh/homebrew-mindwtr
 scoop install mindwtr
 ```
 
-**Other methods:** `.msi` / `.exe` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases).
+**Other methods:** `.exe` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases).
 
 ### Desktop (macOS)
 
 **Mac App Store (recommended):**
 <a href="https://apps.apple.com/app/mindwtr/id6758597144">
-  <img src="https://tools.applemediaservices.com/api/badges/download-on-the-mac-app-store/black/en-us?size=250x83" alt="Download on the Mac App Store">
+  <img src="https://img.shields.io/badge/Mac_App_Store-Install-0A84FF?logo=apple&logoColor=white" alt="Mac App Store">
 </a>
 
 Install from the Mac App Store: [Mindwtr on Mac App Store](https://apps.apple.com/app/mindwtr/id6758597144).
@@ -242,12 +282,20 @@ brew install --cask mindwtr
 <a href="https://play.google.com/store/apps/details?id=tech.dongdongbh.mindwtr">
   <img src="https://img.shields.io/badge/Google_Play-Install-414141?logo=googleplay&logoColor=white" alt="Get it on Google Play">
 </a>
+<a href="https://apt.izzysoft.de/fdroid/index/apk/tech.dongdongbh.mindwtr">
+  <img src="https://img.shields.io/endpoint?url=https://apt.izzysoft.de/fdroid/api/v1/shield/tech.dongdongbh.mindwtr&label=IzzyOnDroid" alt="IzzyOnDroid">
+</a>
+
+Install with IzzyOnDroid:
+1. Install an F-Droid-compatible client (Droid-ify, Neo Store, or F-Droid).
+2. Add the IzzyOnDroid repository: `https://apt.izzysoft.de/fdroid/repo`.
+3. Open [Mindwtr on IzzyOnDroid](https://apt.izzysoft.de/fdroid/index/apk/tech.dongdongbh.mindwtr) and install.
 
 Other methods: APK from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases).
 
 **iOS:**
 <a href="https://apps.apple.com/app/mindwtr/id6758597144">
-  <img src="https://tools.applemediaservices.com/api/badges/download-on-the-app-store/black/en-us?size=250x83" alt="Download on the App Store">
+  <img src="https://img.shields.io/badge/App_Store-iOS-0A84FF?logo=apple&logoColor=white" alt="App Store">
 </a>
 
 Available on the App Store: [Mindwtr for iOS](https://apps.apple.com/app/mindwtr/id6758597144).
@@ -262,9 +310,7 @@ To ensure Mindwtr's continued existence and future development, your support is 
 Run the web app (PWA) and the self-hosted sync server with Docker:
 - Guide: [`docker/README.md`](docker/README.md)
 
-Install guides:
-- 🚀 [Getting Started](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started)
-- 📚 [All platforms & package managers](https://github.com/dongdongbh/Mindwtr/wiki)
+Install guides: 🚀 [Getting Started](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started)
 
 ## Community
 
@@ -272,23 +318,27 @@ Mindwtr is shaped by its users and contributors. Thank you for helping improve i
 
 ### :hearts: Contributing & Support
 
-If you want to get involved, start with [CONTRIBUTING.md](CONTRIBUTING.md).
+If you want to get involved, start with [CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 You can help in several ways:
 
 1. **Spread the word:** Share Mindwtr with friends and communities, and support it on [Product Hunt](https://www.producthunt.com/products/mindwtr) and [AlternativeTo](https://alternativeto.net/software/mindwtr/).
 2. **Leave store reviews:** A good rating/review on the [App Store](https://apps.apple.com/app/mindwtr/id6758597144), [Google Play](https://play.google.com/store/apps/details?id=tech.dongdongbh.mindwtr), or [Microsoft Store](https://apps.microsoft.com/detail/9n0v5b0b6frx?ocid=webpdpshare) helps a lot.
-3. **Share on social platforms:** Post about Mindwtr on [X](https://twitter.com/intent/tweet?text=I%20like%20Mindwtr%20https%3A%2F%2Fgithub.com%2Fdongdongbh%2FMindwtr), [Reddit](https://www.reddit.com/submit?url=https%3A%2F%2Fgithub.com%2Fdongdongbh%2FMindwtr&title=I%20like%20Mindwtr), or [LinkedIn](https://www.linkedin.com/shareArticle?mini=true&url=https%3A%2F%2Fgithub.com%2Fdongdongbh%2FMindwtr&title=I%20like%20Mindwtr).
+3. **Star and share:** Star the repo and post about Mindwtr on [X](https://twitter.com/intent/tweet?text=I%20like%20Mindwtr%20https%3A%2F%2Fgithub.com%2Fdongdongbh%2FMindwtr), [Reddit](https://www.reddit.com/submit?url=https%3A%2F%2Fgithub.com%2Fdongdongbh%2FMindwtr&title=I%20like%20Mindwtr), or [LinkedIn](https://www.linkedin.com/shareArticle?mini=true&url=https%3A%2F%2Fgithub.com%2Fdongdongbh%2FMindwtr&title=I%20like%20Mindwtr).
 4. **Report bugs and request features:** Open issues on [GitHub Issues](https://github.com/dongdongbh/Mindwtr/issues).
 5. **Join the community chat:** Come to [Discord](https://discord.gg/ahhFxuDBb4).
-6. **Contribute code/docs:** Open a pull request and follow the [contribution guide](docs/CONTRIBUTING.md) and commit conventions.
-7. **Sponsor the project:** Support ongoing development via [GitHub Sponsors](https://github.com/sponsors/dongdongbh) or [Ko-fi](https://ko-fi.com/D1D01T20WK).
+6. **Help with translations:** Contribute locale updates in [`packages/core/src/i18n/locales/`](packages/core/src/i18n/locales/).
+7. **Contribute code/docs:** Open a pull request and follow the [contribution guide](docs/CONTRIBUTING.md) and commit conventions.
+8. **Pick and build:** Community members are welcome to pick any item in the [Roadmap](#roadmap) or any open issue and submit a PR.
+9. **Sponsor the project:** Support ongoing development via [GitHub Sponsors](https://github.com/sponsors/dongdongbh) or [Ko-fi](https://ko-fi.com/D1D01T20WK).
 
 ## Roadmap
 
 - 📦 Add to Flathub
 - 🤖 Add to F-Droid
-- 📱 Improve iOS experience
+- ☁️ Native iCloud/CloudKit sync (Apple ecosystem)
+- 🗣️ iOS Reminders Inbox import (Siri capture -> Mindwtr Inbox)
+- 🔗 Obsidian integration (task deep links)
 - ✉️ Email to Inbox
 
 ## Documentation
@@ -297,3 +347,4 @@ You can help in several ways:
 - 🚀 [Getting Started](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started)
 - ❓ [FAQ](https://github.com/dongdongbh/Mindwtr/wiki/FAQ)
 - 🔄 [Data & Sync](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync)
+- 📝 [Release Notes Index](docs/release-notes/README.md)

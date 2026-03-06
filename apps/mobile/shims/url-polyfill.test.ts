@@ -20,6 +20,15 @@ describe('URL Polyfill Shim', () => {
         expect(shim.URLSearchParams).toBeDefined();
     });
 
+    test('does not mutate existing timer globals', async () => {
+        vi.resetModules();
+        const originalSetImmediate = (globalThis as any).setImmediate;
+        const originalClearImmediate = (globalThis as any).clearImmediate;
+        await import('./url-polyfill');
+        expect((globalThis as any).setImmediate).toBe(originalSetImmediate);
+        expect((globalThis as any).clearImmediate).toBe(originalClearImmediate);
+    });
+
     test('shimmed URL has createObjectURL that is safe (mocked environment)', async () => {
         // 1. Reset modules to ensure fresh execution of shim logic
         vi.resetModules();

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Mindwtr",
     "slug": "mindwtr",
-    "version": "0.6.14",
+    "version": "0.7.1",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "mindwtr",
@@ -14,7 +14,9 @@
       "bundleIdentifier": "tech.dongdongbh.mindwtr",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Mindwtr uses the microphone to capture voice notes.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "UIFileSharingEnabled": true
       },
       "buildNumber": "4"
     },
@@ -25,7 +27,7 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "versionCode": 34,
+      "versionCode": 45,
       "package": "tech.dongdongbh.mindwtr",
       "permissions": [
         "RECORD_AUDIO",
@@ -33,11 +35,12 @@
       ],
       "blockedPermissions": [
         "android.permission.CAMERA",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE"
       ],
-      "edgeToEdgeEnabled": false,
+      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
     "web": {
@@ -46,7 +49,6 @@
     },
     "plugins": [
       "./plugins/expo-router",
-      "expo-notifications",
       [
         "expo-splash-screen",
         {
@@ -65,12 +67,12 @@
           "widgets": [
             {
               "name": "TasksWidget",
-              "label": "Mindwtr Focus",
-              "description": "Today's focus and next actions",
-              "minWidth": "160dp",
-              "minHeight": "160dp",
-              "targetCellWidth": 2,
-              "targetCellHeight": 2,
+              "label": "Mindwtr",
+              "description": "Inbox, focus, and quick capture",
+              "minWidth": "180dp",
+              "minHeight": "180dp",
+              "targetCellWidth": 3,
+              "targetCellHeight": 3,
               "resizeMode": "horizontal|vertical",
               "previewImage": "./assets/images/widget-preview.png"
             }
@@ -106,8 +108,18 @@
           }
         }
       ],
+      "./plugins/ios-widgets-and-shortcuts",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Mindwtr needs calendar access to show your events alongside tasks."
+        }
+      ],
       "expo-secure-store",
-      "./plugins/android-manifest-fixes"
+      "./plugins/android-app-shortcuts",
+      "./plugins/android-manifest-fixes",
+      "./plugins/android-startup-trace",
+      "./plugins/patch-alarm-notification-gradle"
     ],
     "experiments": {
       "typedRoutes": true

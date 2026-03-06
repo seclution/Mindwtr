@@ -50,6 +50,9 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 ### Data & Sync
 - [[Data and Sync]] — Storage locations and sync setup
 - [[Sync Algorithm]] — Conflict rules, tombstones, and merge behavior
+- [[Cloud Sync]] — Self-hosted cloud sync backend overview
+- [[Dropbox Sync]] — Native Dropbox OAuth sync setup
+- [[Cloud Deployment]] — Cloud deployment and operations runbook
 - [[Calendar Integration]] — External calendars (ICS)
 - [[AI Assistant]] — Optional BYOK assistant
 - [[Reusable Lists]] — Templates and checklist reset
@@ -60,9 +63,11 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 - [[Developer Guide]] — Development setup and overview
 - [[Architecture]] — Technical architecture and design
 - [[Core API]] — `@mindwtr/core` package documentation
+- [[MCP Server]] — Local MCP server setup and tool usage
 - [[Deployment Guide]] — Platform deployment entry points
 - [[Performance Guide]] — Performance-focused implementation notes
-- [[Contributing]] — How to contribute to Mindwtr
+- [Release Notes (Repository)](https://github.com/dongdongbh/Mindwtr/tree/main/docs/release-notes) — Version-by-version release notes
+- [Contributing (Repository Guide)](https://github.com/dongdongbh/Mindwtr/blob/main/docs/CONTRIBUTING.md) — How to contribute to Mindwtr
 
 ---
 
@@ -88,7 +93,7 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 | 🔄 **Sync Options**    | File, WebDAV, Cloud, Local API                     |
 | 📲 **Android Widget**  | Home screen focus/next widget                      |
 | 🌐 **Web App (PWA)**   | Offline-capable browser version                    |
-| 🌍 **i18n**            | EN, 中文, ES, HI, AR, DE, RU, JA, FR, PT, KO, IT, TR |
+| 🌍 **i18n**            | EN, 中文, ES, HI, AR, DE, RU, JA, FR, PT, PL, KO, IT, TR, NL |
 | 🖥️ **Cross-Platform**  | Desktop (Tauri) + Mobile (React Native)            |
 
 ## 📱 Feature Parity Matrix
@@ -124,6 +129,7 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 - **New to GTD?** Start with [[GTD Overview]]
 - **Installing the app?** See [[Getting Started]]
 - **Want to contribute?** Check [[Developer Guide]]
+- **Latest release:** [v0.7.1 notes](https://github.com/dongdongbh/Mindwtr/blob/main/docs/release-notes/0.7.1.md)
 
 ---
 

@@ -43,6 +43,25 @@ export const isRetryableError = (error: unknown): boolean => {
     );
 };
 
+export const isWebdavInvalidJsonError = (error: unknown): boolean => {
+    const message = error instanceof Error ? error.message : String(error || '');
+    const normalized = message.toLowerCase();
+    return (
+        normalized.includes('invalid webdav response') ||
+        normalized.includes('webdav get failed: invalid json') ||
+        normalized.includes('unexpected end of input') ||
+        normalized.includes('unexpected end of json input') ||
+        normalized.includes('unexpected eof') ||
+        normalized.includes('eof while parsing') ||
+        normalized.includes('error decoding response body')
+    );
+};
+
+export const isRetryableWebdavReadError = (error: unknown): boolean => {
+    if (isRetryableError(error)) return true;
+    return isWebdavInvalidJsonError(error);
+};
+
 export async function withRetry<T>(
     operation: () => Promise<T>,
     options: RetryOptions = {}

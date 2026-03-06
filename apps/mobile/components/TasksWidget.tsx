@@ -4,59 +4,59 @@ import { FlexWidget, TextWidget } from 'react-native-android-widget';
 import type { TasksWidgetPayload } from '../lib/widget-data';
 
 export function buildTasksWidgetTree(payload: TasksWidgetPayload) {
-    const { headerTitle, inboxLabel, inboxCount, items, emptyMessage, captureLabel } = payload;
-    const children: React.ReactElement[] = [
+    const { headerTitle, subtitle, items, emptyMessage, captureLabel, focusUri, quickCaptureUri, palette } = payload;
+    const contentChildren: React.ReactElement[] = [
         React.createElement(TextWidget, {
             key: 'header',
             text: headerTitle,
-            style: { color: '#F9FAFB', fontSize: 14, fontWeight: '600' },
+            style: { color: palette.text, fontSize: 13, fontWeight: '600' },
+            maxLines: 1,
+            truncate: 'END',
+            clickAction: 'OPEN_URI',
+            clickActionData: { uri: focusUri },
         }),
         React.createElement(TextWidget, {
-            key: 'inbox',
-            text: `${inboxLabel}: ${inboxCount}`,
-            style: { color: '#CBD5F5', fontSize: 11, marginTop: 4 },
+            key: 'subtitle',
+            text: subtitle,
+            style: { color: palette.mutedText, fontSize: 10, marginTop: 2 },
+            clickAction: 'OPEN_URI',
+            clickActionData: { uri: focusUri },
         }),
     ];
 
     if (items.length > 0) {
         items.forEach((item, index) => {
-            children.push(
+            contentChildren.push(
                 React.createElement(TextWidget, {
                     key: `item-${item.id}`,
                     text: `• ${item.title}`,
-                    style: { color: '#F8FAFC', fontSize: 12, marginTop: index === 0 ? 10 : 6 },
+                    style: {
+                        color: palette.text,
+                        fontSize: 12,
+                        marginTop: index === 0 ? 7 : 4,
+                    },
                     maxLines: 1,
                     truncate: 'END',
+                    clickAction: 'OPEN_URI',
+                    clickActionData: { uri: focusUri },
                 })
             );
         });
     } else {
-        children.push(
+        contentChildren.push(
             React.createElement(TextWidget, {
                 key: 'empty',
                 text: emptyMessage,
-                style: { color: '#CBD5F5', fontSize: 12, marginTop: 10 },
+                style: {
+                    color: palette.mutedText,
+                    fontSize: 11,
+                    marginTop: 7,
+                },
+                clickAction: 'OPEN_URI',
+                clickActionData: { uri: focusUri },
             })
         );
     }
-
-    children.push(
-        React.createElement(TextWidget, {
-            key: 'capture',
-            text: captureLabel,
-            style: {
-                color: '#FFFFFF',
-                fontSize: 12,
-                fontWeight: '600',
-                backgroundColor: '#2563EB',
-                paddingVertical: 6,
-                paddingHorizontal: 10,
-                marginTop: 12,
-            },
-            clickAction: 'OPEN_URI',
-            clickActionData: { uri: 'mindwtr:///capture-quick' },
-        })
-    );
 
     return React.createElement(
         FlexWidget,
@@ -65,11 +65,37 @@ export function buildTasksWidgetTree(payload: TasksWidgetPayload) {
                 width: 'match_parent',
                 height: 'match_parent',
                 padding: 12,
-                backgroundColor: '#111827',
+                backgroundColor: palette.background,
+                justifyContent: 'space-between',
+            },
+        },
+        React.createElement(
+            FlexWidget,
+            {
+                key: 'content',
+                style: {
+                    width: 'match_parent',
+                    flex: 1,
+                },
+            },
+            ...contentChildren
+        ),
+        React.createElement(TextWidget, {
+            key: 'capture-bottom',
+            text: captureLabel,
+            style: {
+                color: palette.onAccent,
+                fontSize: 11,
+                fontWeight: '600',
+                backgroundColor: palette.accent,
+                paddingVertical: 5,
+                paddingHorizontal: 9,
+                marginTop: 8,
+                borderRadius: 999,
+                textAlign: 'center',
             },
             clickAction: 'OPEN_URI',
-            clickActionData: { uri: 'mindwtr:///focus' },
-        },
-        ...children
+            clickActionData: { uri: quickCaptureUri },
+        })
     );
 }

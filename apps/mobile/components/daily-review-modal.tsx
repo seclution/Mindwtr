@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { View, Text, Modal, TouchableOpacity, ScrollView, StyleSheet, Platform } from 'react-native';
 import { router } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
     useTaskStore,
@@ -26,7 +26,7 @@ import { InboxProcessingModal } from './inbox-processing-modal';
 import { ErrorBoundary } from './ErrorBoundary';
 import { fetchExternalCalendarEvents } from '../lib/external-calendar';
 
-type DailyReviewStep = 'intro' | 'today' | 'focus' | 'inbox' | 'waiting' | 'complete';
+type DailyReviewStep = 'today' | 'focus' | 'inbox' | 'waiting' | 'complete';
 
 interface DailyReviewModalProps {
     visible: boolean;
@@ -42,8 +42,9 @@ function DailyReviewFlow({ onClose }: { onClose: () => void }) {
     const { isDark } = useTheme();
     const { t } = useLanguage();
     const tc = useThemeColors();
+    const insets = useSafeAreaInsets();
 
-    const [currentStep, setCurrentStep] = useState<DailyReviewStep>('intro');
+    const [currentStep, setCurrentStep] = useState<DailyReviewStep>('today');
     const [editingTask, setEditingTask] = useState<Task | null>(null);
     const [isTaskModalVisible, setIsTaskModalVisible] = useState(false);
     const [showInboxProcessing, setShowInboxProcessing] = useState(false);
@@ -180,7 +181,6 @@ function DailyReviewFlow({ onClose }: { onClose: () => void }) {
     }, [activeTasks, sortBy]);
 
     const steps: { id: DailyReviewStep; title: string; description: string }[] = [
-        { id: 'intro', title: t('dailyReview.introTitle'), description: t('dailyReview.introDesc') },
         { id: 'today', title: t('dailyReview.todayStep'), description: t('dailyReview.todayDesc') },
         { id: 'focus', title: t('dailyReview.focusStep'), description: t('dailyReview.focusDesc') },
         { id: 'inbox', title: t('dailyReview.inboxStep'), description: t('dailyReview.inboxDesc') },
@@ -262,19 +262,6 @@ function DailyReviewFlow({ onClose }: { onClose: () => void }) {
 
     const renderStep = () => {
         switch (currentStep) {
-            case 'intro':
-                return (
-                    <View style={styles.centerContent}>
-                        <Text style={styles.bigIcon}>🧭</Text>
-                        <Text style={[styles.heading, { color: tc.text }]}>{t('dailyReview.title')}</Text>
-                        <Text style={[styles.description, { color: tc.secondaryText }]}>{t('dailyReview.introDesc')}</Text>
-                        <TouchableOpacity style={[styles.primaryButton, { backgroundColor: tc.tint }]} onPress={next}>
-                            <Text style={styles.primaryButtonText}>
-                                {t('dailyReview.start')} →
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
-                );
             case 'today': {
                 const topTasks = [...overdueTasks, ...dueTodayTasks].slice(0, 8);
                 const totalToday = overdueTasks.length + dueTodayTasks.length;
@@ -290,13 +277,13 @@ function DailyReviewFlow({ onClose }: { onClose: () => void }) {
                         <View style={styles.calendarGrid}>
                             <View style={[styles.calendarCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
                                 <Text style={[styles.calendarCardTitle, { color: tc.secondaryText }]}>
-                                    {safeFormatDate(today, 'MMM d')} · {t('calendar.events')}
+                                    {safeFormatDate(today, 'P')} · {t('calendar.events')}
                                 </Text>
                                 {renderExternalEventList(todayEvents)}
                             </View>
                             <View style={[styles.calendarCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
                                 <Text style={[styles.calendarCardTitle, { color: tc.secondaryText }]}>
-                                    {safeFormatDate(tomorrow, 'MMM d')} · {t('calendar.events')}
+                                    {safeFormatDate(tomorrow, 'P')} · {t('calendar.events')}
                                 </Text>
                                 {renderExternalEventList(tomorrowEvents)}
                             </View>
@@ -328,7 +315,7 @@ function DailyReviewFlow({ onClose }: { onClose: () => void }) {
                                 <Text style={[styles.emptyText, { color: tc.secondaryText }]}>{t('agenda.focusHint')}</Text>
                             </View>
                         ) : (
-                            renderTaskList(focusCandidates.slice(0, 8), { showFocusToggle: true, hideStatusBadge: true })
+                            renderTaskList(focusCandidates.slice(0, 8), { hideStatusBadge: true })
                         )}
                     </View>
                 );
@@ -422,8 +409,17 @@ function DailyReviewFlow({ onClose }: { onClose: () => void }) {
 
                 <View style={styles.content}>{renderStep()}</View>
 
-                {currentStep !== 'intro' && currentStep !== 'complete' && (
-                    <View style={[styles.footer, { borderTopColor: tc.border, backgroundColor: tc.cardBg }]}>
+                {currentStep !== 'complete' && (
+                    <View
+                        style={[
+                            styles.footer,
+                            {
+                                borderTopColor: tc.border,
+                                backgroundColor: tc.cardBg,
+                                paddingBottom: 14 + Math.max(insets.bottom, 8),
+                            },
+                        ]}
+                    >
                         <TouchableOpacity
                             onPress={back}
                             disabled={currentIndex === 0}

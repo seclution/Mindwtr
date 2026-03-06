@@ -6,13 +6,13 @@ on:
       upload:
         description: Upload to App Store Connect
         required: false
-        type: string
-        default: 'true'
+        type: boolean
+        default: true
       submit_for_review:
         description: Submit build for review after upload
         required: false
-        type: string
-        default: 'true'
+        type: boolean
+        default: true
       testflight_group:
         description: TestFlight external group for review-blocked uploads
         required: false
@@ -23,63 +23,97 @@ on:
       upload:
         description: Upload to App Store Connect
         required: false
-        default: 'true'
+        type: boolean
+        default: true
       submit_for_review:
         description: Submit build for review after upload
         required: false
-        default: 'false'
+        type: boolean
+        default: false
       testflight_group:
         description: TestFlight external group for review-blocked uploads
         required: false
+        type: string
         default: 'external_testing'
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: release-ios-appstore-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   ios-appstore:
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 90
     env:
       EXPECTED_TEAM_ID: 5X9JC5PL7T
       EXPECTED_BUNDLE_ID: tech.dongdongbh.mindwtr
+      EXPECTED_WIDGET_BUNDLE_ID: tech.dongdongbh.mindwtr.MindwtrWidgets
+      EXPECTED_APP_GROUP: group.tech.dongdongbh.mindwtr
+      ANALYTICS_HEARTBEAT_URL: ${{ secrets.ANALYTICS_HEARTBEAT_URL }}
+      DROPBOX_APP_KEY: ${{ vars.DROPBOX_APP_KEY || secrets.DROPBOX_APP_KEY }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
+        uses: ruby/setup-ruby@09a7688d3b55cf0e976497ff046b70949eeaccfd # v1
         with:
           ruby-version: '3.3'
 
       - name: Install Fastlane
         run: gem install fastlane --no-document
 
-      - name: Select Xcode
+      - name: Select Xcode (iOS 26 SDK required)
         run: |
           set -euo pipefail
           XCODE_26_PATH="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1 || true)"
           if [ -n "${XCODE_26_PATH:-}" ]; then
             sudo xcode-select -s "$XCODE_26_PATH"
+          else
+            XCODE_FALLBACK_PATH="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+            if [ -n "${XCODE_FALLBACK_PATH:-}" ]; then
+              echo "::warning::No Xcode_26*.app found; falling back to latest available: ${XCODE_FALLBACK_PATH}"
+              sudo xcode-select -s "$XCODE_FALLBACK_PATH"
+            else
+              echo "::warning::No explicit Xcode*.app found; using runner default Xcode."
+            fi
           fi
+
+          echo "Selected DEVELOPER_DIR: $(xcode-select -p)"
           xcodebuild -version
-          if ! xcodebuild -showsdks | grep -q "iphoneos26"; then
-            echo "::error::iOS 26 SDK not found on runner. Current SDKs:"
+
+          IOS_SDK_VERSION="$(xcodebuild -showsdks | awk '/-sdk iphoneos/{gsub(/iphoneos/, "", $NF); ver=$NF} END{print ver}')"
+          if [ -z "${IOS_SDK_VERSION:-}" ]; then
+            echo "::error::No iPhoneOS SDK found on runner. Current SDKs:"
             xcodebuild -showsdks
             exit 1
           fi
 
+          IOS_SDK_MAJOR="${IOS_SDK_VERSION%%.*}"
+          if ! [[ "${IOS_SDK_MAJOR}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unable to parse iPhoneOS SDK version: ${IOS_SDK_VERSION}"
+            xcodebuild -showsdks
+            exit 1
+          fi
+
+          if [ "${IOS_SDK_MAJOR}" -lt 26 ]; then
+            echo "::error::Detected iPhoneOS SDK ${IOS_SDK_VERSION}. App Store Connect requires iOS 26 SDK or later (ITMS-90725)."
+            echo "::error::Install/select Xcode 26+ on the runner before uploading."
+            exit 1
+          fi
+
+          echo "Using iPhoneOS SDK ${IOS_SDK_VERSION}"
+
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
         with:
           bun-version: "1.x"
 
@@ -91,6 +125,7 @@ jobs:
           IOS_DISTRIBUTION_CERT: ${{ secrets.IOS_DISTRIBUTION_CERT }}
           IOS_DISTRIBUTION_CERT_PWD: ${{ secrets.IOS_DISTRIBUTION_CERT_PWD }}
           IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+          IOS_WIDGET_PROVISIONING_PROFILE: ${{ secrets.IOS_WIDGET_PROVISIONING_PROFILE }}
           IOS_ASC_KEY_ID: ${{ secrets.IOS_ASC_KEY_ID }}
           IOS_ASC_ISSUER_ID: ${{ secrets.IOS_ASC_ISSUER_ID }}
           IOS_ASC_PRIVATE_KEY: ${{ secrets.IOS_ASC_PRIVATE_KEY }}
@@ -103,6 +138,9 @@ jobs:
               missing=1
             fi
           done
+          if [ -z "${IOS_WIDGET_PROVISIONING_PROFILE:-}" ]; then
+            echo "::warning::IOS_WIDGET_PROVISIONING_PROFILE is not set. Falling back to IOS_PROVISIONING_PROFILE for MindwtrWidgets."
+          fi
           for key in IOS_ASC_KEY_ID IOS_ASC_ISSUER_ID IOS_ASC_PRIVATE_KEY; do
             if [ -z "${!key:-}" ]; then
               echo "::error::Missing required App Store Connect API secret: $key"
@@ -268,38 +306,83 @@ jobs:
       - name: Install and validate provisioning profile
         env:
           IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+          IOS_WIDGET_PROVISIONING_PROFILE: ${{ secrets.IOS_WIDGET_PROVISIONING_PROFILE }}
         run: |
           set -euo pipefail
 
+          profile_field() {
+            local plist_path="$1"
+            local key_path="$2"
+            /usr/libexec/PlistBuddy -c "Print $key_path" "$plist_path" 2>/dev/null || true
+          }
 
-          PROFILE_PATH="$RUNNER_TEMP/mindwtr-ios.mobileprovision"
-          PROFILE_PLIST="$RUNNER_TEMP/mindwtr-ios-profile.plist"
-          bash scripts/ci/decode-base64-to-file.sh "$IOS_PROVISIONING_PROFILE" "$PROFILE_PATH"
-          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+          verify_profile_bundle() {
+            local app_id="$1"
+            local expected_bundle="$2"
+            local profile_label="$3"
+            local expected_id="${EXPECTED_TEAM_ID}.${expected_bundle}"
+            local wildcard_id="${EXPECTED_TEAM_ID}.*"
+            if [ "$app_id" != "$expected_id" ] && [ "$app_id" != "$wildcard_id" ]; then
+              echo "::error::${profile_label} application-identifier (${app_id}) does not match expected (${expected_id}) or wildcard (${wildcard_id})."
+              exit 1
+            fi
+          }
 
-          PROFILE_UUID="$(/usr/libexec/PlistBuddy -c 'Print UUID' "$PROFILE_PLIST")"
-          PROFILE_NAME="$(/usr/libexec/PlistBuddy -c 'Print Name' "$PROFILE_PLIST")"
-          PROFILE_TEAM_ID="$(/usr/libexec/PlistBuddy -c 'Print TeamIdentifier:0' "$PROFILE_PLIST")"
-          PROFILE_APP_ID="$(/usr/libexec/PlistBuddy -c 'Print Entitlements:application-identifier' "$PROFILE_PLIST")"
+          APP_PROFILE_PATH="$RUNNER_TEMP/mindwtr-ios-app.mobileprovision"
+          APP_PROFILE_PLIST="$RUNNER_TEMP/mindwtr-ios-app-profile.plist"
+          WIDGET_PROFILE_PATH="$RUNNER_TEMP/mindwtr-ios-widget.mobileprovision"
+          WIDGET_PROFILE_PLIST="$RUNNER_TEMP/mindwtr-ios-widget-profile.plist"
 
-          if [ "$PROFILE_TEAM_ID" != "$EXPECTED_TEAM_ID" ]; then
-            echo "::error::Profile TeamIdentifier ($PROFILE_TEAM_ID) does not match expected team ($EXPECTED_TEAM_ID)."
+          bash scripts/ci/decode-base64-to-file.sh "$IOS_PROVISIONING_PROFILE" "$APP_PROFILE_PATH"
+          security cms -D -i "$APP_PROFILE_PATH" > "$APP_PROFILE_PLIST"
+          if [ -n "${IOS_WIDGET_PROVISIONING_PROFILE:-}" ]; then
+            bash scripts/ci/decode-base64-to-file.sh "$IOS_WIDGET_PROVISIONING_PROFILE" "$WIDGET_PROFILE_PATH"
+          else
+            cp "$APP_PROFILE_PATH" "$WIDGET_PROFILE_PATH"
+          fi
+          security cms -D -i "$WIDGET_PROFILE_PATH" > "$WIDGET_PROFILE_PLIST"
+
+          APP_PROFILE_UUID="$(profile_field "$APP_PROFILE_PLIST" "UUID")"
+          APP_PROFILE_NAME="$(profile_field "$APP_PROFILE_PLIST" "Name")"
+          APP_PROFILE_TEAM_ID="$(profile_field "$APP_PROFILE_PLIST" "TeamIdentifier:0")"
+          APP_PROFILE_APP_ID="$(profile_field "$APP_PROFILE_PLIST" "Entitlements:application-identifier")"
+          APP_PROFILE_GROUPS="$(profile_field "$APP_PROFILE_PLIST" "Entitlements:com.apple.security.application-groups")"
+
+          if [ "$APP_PROFILE_TEAM_ID" != "$EXPECTED_TEAM_ID" ]; then
+            echo "::error::App profile TeamIdentifier (${APP_PROFILE_TEAM_ID}) does not match expected team (${EXPECTED_TEAM_ID})."
+            exit 1
+          fi
+          verify_profile_bundle "$APP_PROFILE_APP_ID" "$EXPECTED_BUNDLE_ID" "App profile"
+          if ! printf '%s\n' "$APP_PROFILE_GROUPS" | grep -Fq "$EXPECTED_APP_GROUP"; then
+            echo "::error::App profile (${APP_PROFILE_NAME}) is missing App Group ${EXPECTED_APP_GROUP}. Recreate the profile with App Groups enabled and re-upload IOS_PROVISIONING_PROFILE."
             exit 1
           fi
 
-          EXPECTED_APP_ID="${EXPECTED_TEAM_ID}.${EXPECTED_BUNDLE_ID}"
-          WILDCARD_APP_ID="${EXPECTED_TEAM_ID}.*"
-          if [ "$PROFILE_APP_ID" != "$EXPECTED_APP_ID" ] && [ "$PROFILE_APP_ID" != "$WILDCARD_APP_ID" ]; then
-            echo "::error::Profile application-identifier ($PROFILE_APP_ID) does not match expected ($EXPECTED_APP_ID)."
+          WIDGET_PROFILE_UUID="$(profile_field "$WIDGET_PROFILE_PLIST" "UUID")"
+          WIDGET_PROFILE_NAME="$(profile_field "$WIDGET_PROFILE_PLIST" "Name")"
+          WIDGET_PROFILE_TEAM_ID="$(profile_field "$WIDGET_PROFILE_PLIST" "TeamIdentifier:0")"
+          WIDGET_PROFILE_APP_ID="$(profile_field "$WIDGET_PROFILE_PLIST" "Entitlements:application-identifier")"
+          WIDGET_PROFILE_GROUPS="$(profile_field "$WIDGET_PROFILE_PLIST" "Entitlements:com.apple.security.application-groups")"
+
+          if [ "$WIDGET_PROFILE_TEAM_ID" != "$EXPECTED_TEAM_ID" ]; then
+            echo "::error::Widget profile TeamIdentifier (${WIDGET_PROFILE_TEAM_ID}) does not match expected team (${EXPECTED_TEAM_ID})."
+            exit 1
+          fi
+          verify_profile_bundle "$WIDGET_PROFILE_APP_ID" "$EXPECTED_WIDGET_BUNDLE_ID" "Widget profile"
+          if ! printf '%s\n' "$WIDGET_PROFILE_GROUPS" | grep -Fq "$EXPECTED_APP_GROUP"; then
+            echo "::error::Widget profile (${WIDGET_PROFILE_NAME}) is missing App Group ${EXPECTED_APP_GROUP}. Recreate the extension profile with App Groups enabled and re-upload IOS_WIDGET_PROVISIONING_PROFILE."
             exit 1
           fi
 
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          cp "$APP_PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$APP_PROFILE_UUID.mobileprovision"
+          cp "$WIDGET_PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$WIDGET_PROFILE_UUID.mobileprovision"
 
-          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
-          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
-          echo "PROFILE_TEAM_ID=$PROFILE_TEAM_ID" >> "$GITHUB_ENV"
+          echo "APP_PROFILE_UUID=$APP_PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "APP_PROFILE_NAME=$APP_PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "APP_PROFILE_TEAM_ID=$APP_PROFILE_TEAM_ID" >> "$GITHUB_ENV"
+          echo "WIDGET_PROFILE_UUID=$WIDGET_PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "WIDGET_PROFILE_NAME=$WIDGET_PROFILE_NAME" >> "$GITHUB_ENV"
 
       - name: Generate iOS native project if missing
         run: |
@@ -308,6 +391,17 @@ jobs:
             cd apps/mobile
             npx expo prebuild --platform ios --non-interactive --no-install
           fi
+
+      - name: Cache CocoaPods dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            apps/mobile/ios/Pods
+            ~/Library/Caches/CocoaPods
+            ~/.cocoapods/repos
+          key: ${{ runner.os }}-cocoapods-${{ hashFiles('apps/mobile/ios/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cocoapods-
 
       - name: Install CocoaPods dependencies
         run: |
@@ -351,17 +445,19 @@ jobs:
               printf '%s\n' '<plist version="1.0">'
               printf '%s\n' '<dict>'
               printf '%s\n' '    <key>method</key>'
-              printf '%s\n' '    <string>app-store</string>'
+              printf '%s\n' '    <string>app-store-connect</string>'
               printf '%s\n' '    <key>destination</key>'
               printf '%s\n' '    <string>export</string>'
               printf '%s\n' '    <key>signingStyle</key>'
               printf '%s\n' '    <string>manual</string>'
               printf '%s\n' '    <key>teamID</key>'
-              printf '    <string>%s</string>\n' "$PROFILE_TEAM_ID"
+              printf '    <string>%s</string>\n' "$APP_PROFILE_TEAM_ID"
               printf '%s\n' '    <key>provisioningProfiles</key>'
               printf '%s\n' '    <dict>'
               printf '        <key>%s</key>\n' "$EXPECTED_BUNDLE_ID"
-              printf '        <string>%s</string>\n' "$PROFILE_NAME"
+              printf '        <string>%s</string>\n' "$APP_PROFILE_NAME"
+              printf '        <key>%s</key>\n' "$EXPECTED_WIDGET_BUNDLE_ID"
+              printf '        <string>%s</string>\n' "$WIDGET_PROFILE_NAME"
               printf '%s\n' '    </dict>'
               printf '%s\n' '    <key>stripSwiftSymbols</key>'
               printf '%s\n' '    <true/>'
@@ -371,12 +467,168 @@ jobs:
               printf '%s\n' '</plist>'
             } > "$EXPORT_OPTIONS_PATH"
           fi
+
+          # Normalize ExportOptions for CI signing so stale IOS_EXPORT_OPTIONS
+          # secrets cannot override app/widget provisioning profile mapping.
+          /usr/libexec/PlistBuddy -c "Set :method app-store-connect" "$EXPORT_OPTIONS_PATH" \
+            || /usr/libexec/PlistBuddy -c "Add :method string app-store-connect" "$EXPORT_OPTIONS_PATH"
+          /usr/libexec/PlistBuddy -c "Set :destination export" "$EXPORT_OPTIONS_PATH" \
+            || /usr/libexec/PlistBuddy -c "Add :destination string export" "$EXPORT_OPTIONS_PATH"
+          /usr/libexec/PlistBuddy -c "Set :signingStyle manual" "$EXPORT_OPTIONS_PATH" \
+            || /usr/libexec/PlistBuddy -c "Add :signingStyle string manual" "$EXPORT_OPTIONS_PATH"
+          /usr/libexec/PlistBuddy -c "Set :teamID $APP_PROFILE_TEAM_ID" "$EXPORT_OPTIONS_PATH" \
+            || /usr/libexec/PlistBuddy -c "Add :teamID string $APP_PROFILE_TEAM_ID" "$EXPORT_OPTIONS_PATH"
+
+          /usr/libexec/PlistBuddy -c "Delete :provisioningProfiles" "$EXPORT_OPTIONS_PATH" || true
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$EXPORT_OPTIONS_PATH"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$EXPECTED_BUNDLE_ID string $APP_PROFILE_NAME" "$EXPORT_OPTIONS_PATH"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$EXPECTED_WIDGET_BUNDLE_ID string $WIDGET_PROFILE_NAME" "$EXPORT_OPTIONS_PATH"
+
           echo "EXPORT_OPTIONS_PATH=$EXPORT_OPTIONS_PATH" >> "$GITHUB_ENV"
 
+      - name: Apply CI signing settings to Xcode project
+        run: |
+          set -euo pipefail
+          export PROJECT_FILE="apps/mobile/ios/Mindwtr.xcodeproj/project.pbxproj"
+          ruby <<'RUBY'
+          project_file = ENV.fetch('PROJECT_FILE')
+          targets = {
+            'Mindwtr' => {
+              bundle: ENV.fetch('EXPECTED_BUNDLE_ID'),
+              profile_name: ENV.fetch('APP_PROFILE_NAME'),
+              profile_uuid: ENV.fetch('APP_PROFILE_UUID')
+            },
+            'MindwtrWidgets' => {
+              bundle: ENV.fetch('EXPECTED_WIDGET_BUNDLE_ID'),
+              profile_name: ENV.fetch('WIDGET_PROFILE_NAME'),
+              profile_uuid: ENV.fetch('WIDGET_PROFILE_UUID')
+            }
+          }
+          team_id = ENV.fetch('EXPECTED_TEAM_ID')
+          signing_identity = ENV.fetch('IOS_SIGNING_IDENTITY')
+
+          lines = File.readlines(project_file, chomp: false)
+
+          # Map XCBuildConfiguration IDs to target names via XCConfigurationList entries.
+          config_to_target = {}
+          i = 0
+          while i < lines.length
+            m = lines[i].match(/^\s*([A-F0-9]{24})\s*\/\*\s*Build configuration list for PBXNativeTarget \"([^\"]+)\"\s*\*\/\s*=\s*\{/)
+            if m
+              target_name = m[2]
+              if targets.key?(target_name)
+                j = i + 1
+                in_build_configs = false
+                while j < lines.length
+                  in_build_configs = true if lines[j].match?(/^\s*buildConfigurations\s*=\s*\(/)
+                  if in_build_configs
+                    lines[j].scan(/([A-F0-9]{24})\s*\/\*.*?\*\//) do |cfg|
+                      config_to_target[cfg[0]] = target_name
+                    end
+                    break if lines[j].match?(/^\s*\);\s*$/)
+                  end
+                  break if lines[j].match?(/^\s*};\s*$/) && !in_build_configs
+                  j += 1
+                end
+              end
+            end
+            i += 1
+          end
+
+          if config_to_target.empty?
+            puts "DEBUG: Could not map any build configurations to Mindwtr targets."
+            lines.each do |line|
+              if line.include?('Build configuration list for PBXNativeTarget')
+                puts "DEBUG: #{line.strip}"
+              end
+            end
+            abort("No target build configuration IDs resolved in #{project_file}.")
+          end
+
+          modified_blocks = 0
+          i = 0
+          while i < lines.length
+            m = lines[i].match(/^\s*([A-F0-9]{24})\s*\/\*.*?\*\/\s*=\s*\{/)
+            if m
+              config_id = m[1]
+              target_name = config_to_target[config_id]
+              if target_name
+                target_info = targets.fetch(target_name)
+
+                # Find buildSettings block boundaries for this XCBuildConfiguration block.
+                bs_start = nil
+                j = i + 1
+                while j < lines.length
+                  if lines[j].match?(/^\s*buildSettings\s*=\s*\{/)
+                    bs_start = j
+                    break
+                  end
+                  break if lines[j].match?(/^\s*};\s*$/)
+                  j += 1
+                end
+
+                if bs_start
+                  brace_depth = lines[bs_start].count('{') - lines[bs_start].count('}')
+                  k = bs_start + 1
+                  while k < lines.length && brace_depth > 0
+                    brace_depth += lines[k].count('{') - lines[k].count('}')
+                    k += 1
+                  end
+                  bs_end = k - 1
+
+                  if brace_depth == 0 && bs_end > bs_start
+                    block = lines[(bs_start + 1)...bs_end]
+                    indent = block.find { |line| line.match?(/\S/) }&.match(/^\s*/)&.to_s || "\t\t\t\t\t"
+                    updates = {
+                      'CODE_SIGN_STYLE' => 'Manual',
+                      'DEVELOPMENT_TEAM' => team_id,
+                      'CODE_SIGN_IDENTITY' => "\"#{signing_identity}\"",
+                      'PROVISIONING_PROFILE_SPECIFIER' => "\"#{target_info[:profile_name]}\"",
+                      'PROVISIONING_PROFILE' => "\"#{target_info[:profile_uuid]}\"",
+                      'PRODUCT_BUNDLE_IDENTIFIER' => "\"#{target_info[:bundle]}\""
+                    }
+
+                    updates.each do |key, value|
+                      replacement = "#{indent}#{key} = #{value};\n"
+                      idx = block.index { |line| line.match?(/^\s*#{Regexp.escape(key)}\s*=/) }
+                      if idx
+                        block[idx] = replacement
+                      else
+                        block << replacement
+                      end
+                    end
+
+                    lines[(bs_start + 1)...bs_end] = block
+                    modified_blocks += 1
+                  end
+                end
+              end
+            end
+            i += 1
+          end
+
+          if modified_blocks == 0
+            abort("No signing blocks were updated in #{project_file}.")
+          end
+
+          File.write(project_file, lines.join)
+          puts "Updated signing settings in #{modified_blocks} buildSettings blocks."
+          RUBY
+          if command -v rg >/dev/null 2>&1; then
+            rg -n 'PRODUCT_BUNDLE_IDENTIFIER = "|CODE_SIGN_STYLE =|DEVELOPMENT_TEAM =|CODE_SIGN_IDENTITY =|PROVISIONING_PROFILE_SPECIFIER =' "$PROJECT_FILE" | sed -n '1,120p'
+          else
+            grep -nE 'PRODUCT_BUNDLE_IDENTIFIER = "|CODE_SIGN_STYLE =|DEVELOPMENT_TEAM =|CODE_SIGN_IDENTITY =|PROVISIONING_PROFILE_SPECIFIER =' "$PROJECT_FILE" | sed -n '1,120p'
+          fi
+
       - name: Archive iOS app
+        timeout-minutes: 25
         run: |
           set -euo pipefail
           ARCHIVE_PATH="$RUNNER_TEMP/Mindwtr.xcarchive"
+          ARCHIVE_LOG="$RUNNER_TEMP/ios-xcodebuild-archive.log"
+          echo "ARCHIVE_LOG=$ARCHIVE_LOG" >> "$GITHUB_ENV"
+
+          set +e
           xcodebuild \
             -workspace "apps/mobile/ios/Mindwtr.xcworkspace" \
             -scheme "Mindwtr" \
@@ -384,15 +636,25 @@ jobs:
             -sdk "iphoneos" \
             -destination "generic/platform=iOS" \
             -archivePath "$ARCHIVE_PATH" \
+            DEVELOPMENT_TEAM="$EXPECTED_TEAM_ID" \
             CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="$PROFILE_TEAM_ID" \
-            PRODUCT_BUNDLE_IDENTIFIER="$EXPECTED_BUNDLE_ID" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
             CODE_SIGN_IDENTITY="$IOS_SIGNING_IDENTITY" \
-            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
             MARKETING_VERSION="$APP_VERSION" \
             CURRENT_PROJECT_VERSION="$APP_BUILD_NUMBER" \
-            clean archive
+            clean archive >"$ARCHIVE_LOG" 2>&1
+          ARCHIVE_STATUS=$?
+          set -e
+
+          if [ "$ARCHIVE_STATUS" -ne 0 ]; then
+            echo "::group::xcodebuild archive error summary"
+            grep -E "(^| )error:|\\*\\* ARCHIVE FAILED \\*\\*|The following build commands failed|Provisioning|CodeSign|No profiles|conflicting provisioning settings" "$ARCHIVE_LOG" | tail -n 200 || true
+            echo "::endgroup::"
+            echo "::group::xcodebuild archive tail (last 200 lines)"
+            tail -n 200 "$ARCHIVE_LOG" || true
+            echo "::endgroup::"
+            exit "$ARCHIVE_STATUS"
+          fi
+
           ARCHIVE_INFO_PLIST="$ARCHIVE_PATH/Products/Applications/Mindwtr.app/Info.plist"
           if [ ! -f "$ARCHIVE_INFO_PLIST" ]; then
             echo "::error::Archived app Info.plist not found: $ARCHIVE_INFO_PLIST"
@@ -409,13 +671,31 @@ jobs:
           echo "ARCHIVE_PATH=$ARCHIVE_PATH" >> "$GITHUB_ENV"
 
       - name: Export IPA
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           EXPORT_PATH="$RUNNER_TEMP/ios-export"
+          EXPORT_LOG="$RUNNER_TEMP/ios-xcodebuild-export.log"
+          echo "EXPORT_LOG=$EXPORT_LOG" >> "$GITHUB_ENV"
+
+          set +e
           xcodebuild -exportArchive \
             -archivePath "$ARCHIVE_PATH" \
             -exportPath "$EXPORT_PATH" \
-            -exportOptionsPlist "$EXPORT_OPTIONS_PATH"
+            -exportOptionsPlist "$EXPORT_OPTIONS_PATH" >"$EXPORT_LOG" 2>&1
+          EXPORT_STATUS=$?
+          set -e
+
+          if [ "$EXPORT_STATUS" -ne 0 ]; then
+            echo "::group::xcodebuild export error summary"
+            grep -E "(^| )error:|\\*\\* EXPORT FAILED \\*\\*|The following build commands failed|Provisioning|CodeSign|No profiles" "$EXPORT_LOG" | tail -n 200 || true
+            echo "::endgroup::"
+            echo "::group::xcodebuild export tail (last 200 lines)"
+            tail -n 200 "$EXPORT_LOG" || true
+            echo "::endgroup::"
+            exit "$EXPORT_STATUS"
+          fi
+
           IPA_PATH="$(find "$EXPORT_PATH" -maxdepth 1 -name '*.ipa' | head -n 1)"
           if [ -z "${IPA_PATH:-}" ]; then
             echo "::error::IPA was not generated."
@@ -424,110 +704,83 @@ jobs:
           echo "IPA_PATH=$IPA_PATH" >> "$GITHUB_ENV"
           ls -la "$EXPORT_PATH"
 
+      - name: Verify IPA code-sign entitlements
+        run: |
+          set -euo pipefail
+          IPA_INSPECT_DIR="$RUNNER_TEMP/ios-ipa-inspect"
+          rm -rf "$IPA_INSPECT_DIR"
+          mkdir -p "$IPA_INSPECT_DIR"
+          unzip -q "$IPA_PATH" -d "$IPA_INSPECT_DIR"
+
+          APP_PATH="$(find "$IPA_INSPECT_DIR/Payload" -maxdepth 1 -name '*.app' | head -n 1)"
+          if [ -z "${APP_PATH:-}" ]; then
+            echo "::error::Unable to locate .app payload inside IPA."
+            exit 1
+          fi
+
+          WIDGET_PATH="$APP_PATH/PlugIns/MindwtrWidgets.appex"
+          if [ ! -d "$WIDGET_PATH" ]; then
+            echo "::error::Widget extension not found in IPA at $WIDGET_PATH."
+            exit 1
+          fi
+
+          APP_ENTITLEMENTS="$RUNNER_TEMP/ios-app-entitlements.plist"
+          WIDGET_ENTITLEMENTS="$RUNNER_TEMP/ios-widget-entitlements.plist"
+
+          codesign -d --entitlements :- "$APP_PATH" > "$APP_ENTITLEMENTS" 2>/dev/null || true
+          codesign -d --entitlements :- "$WIDGET_PATH" > "$WIDGET_ENTITLEMENTS" 2>/dev/null || true
+
+          if ! grep -q "<plist" "$APP_ENTITLEMENTS"; then
+            echo "::error::App bundle is missing signed entitlements."
+            exit 1
+          fi
+
+          if ! grep -q "<plist" "$WIDGET_ENTITLEMENTS"; then
+            echo "::error::Widget extension is missing signed entitlements."
+            echo "::error::Ensure archive/export are code-signed for MindwtrWidgets (bundle $EXPECTED_WIDGET_BUNDLE_ID) with a valid provisioning profile."
+            exit 1
+          fi
+
+          if ! grep -q "$EXPECTED_APP_GROUP" "$APP_ENTITLEMENTS"; then
+            echo "::error::App entitlements missing expected App Group: $EXPECTED_APP_GROUP."
+            exit 1
+          fi
+
+          if ! grep -q "$EXPECTED_APP_GROUP" "$WIDGET_ENTITLEMENTS"; then
+            echo "::error::Widget entitlements missing expected App Group: $EXPECTED_APP_GROUP."
+            exit 1
+          fi
+
+
+      - name: Upload iOS xcodebuild logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mindwtr-ios-xcodebuild-logs
+          path: ${{ runner.temp }}/ios-xcodebuild-*.log
+          if-no-files-found: warn
+          retention-days: 28
+
       - name: Prepare Fastlane metadata
-        if: ${{ (inputs.upload || 'true') == 'true' }}
+        if: ${{ inputs.upload }}
         env:
           RELEASE_BODY: ${{ github.event.release.body || '' }}
           APP_SUPPORT_URL: "https://github.com/dongdongbh/Mindwtr/issues"
           APP_MARKETING_URL: "https://github.com/dongdongbh/Mindwtr"
         run: |
           set -euo pipefail
-
-          FASTLANE_METADATA_DIR="$RUNNER_TEMP/fastlane_metadata"
-          rm -rf "$FASTLANE_METADATA_DIR"
-          mkdir -p "$FASTLANE_METADATA_DIR"
-          if [ -f "metadata/copyright.txt" ]; then
-            cp "metadata/copyright.txt" "$FASTLANE_METADATA_DIR/copyright.txt"
-          fi
-
-          map_metadata() {
-            local src_locale="$1"
-            local dst_locale="$2"
-            local src_dir="metadata/$src_locale"
-            local dst_dir="$FASTLANE_METADATA_DIR/$dst_locale"
-
-            if [ ! -d "$src_dir" ]; then
-              echo "Skipping $src_locale (missing metadata folder)"
-              return
-            fi
-
-            mkdir -p "$dst_dir"
-
-            if [ -f "$src_dir/description.txt" ]; then
-              cp "$src_dir/description.txt" "$dst_dir/description.txt"
-            elif [ -f "$src_dir/full_description.txt" ]; then
-              cp "$src_dir/full_description.txt" "$dst_dir/description.txt"
-            fi
-            if [ -f "$src_dir/name.txt" ]; then
-              cp "$src_dir/name.txt" "$dst_dir/name.txt"
-            elif [ -f "$src_dir/title.txt" ]; then
-              cp "$src_dir/title.txt" "$dst_dir/name.txt"
-            fi
-            if [ -f "$src_dir/subtitle.txt" ]; then
-              cp "$src_dir/subtitle.txt" "$dst_dir/subtitle.txt"
-            elif [ -f "$src_dir/short_description.txt" ]; then
-              cp "$src_dir/short_description.txt" "$dst_dir/subtitle.txt"
-            fi
-            if [ -f "$src_dir/keywords.txt" ]; then
-              cp "$src_dir/keywords.txt" "$dst_dir/keywords.txt"
-            fi
-            if [ -f "$src_dir/support_url.txt" ]; then
-              cp "$src_dir/support_url.txt" "$dst_dir/support_url.txt"
-            elif [ -n "${APP_SUPPORT_URL:-}" ]; then
-              printf '%s\n' "$APP_SUPPORT_URL" > "$dst_dir/support_url.txt"
-            fi
-            if [ -f "$src_dir/marketing_url.txt" ]; then
-              cp "$src_dir/marketing_url.txt" "$dst_dir/marketing_url.txt"
-            elif [ -n "${APP_MARKETING_URL:-}" ]; then
-              printf '%s\n' "$APP_MARKETING_URL" > "$dst_dir/marketing_url.txt"
-            fi
-
-            if [ -f "$src_dir/release_notes.txt" ]; then
-              cp "$src_dir/release_notes.txt" "$dst_dir/release_notes.txt"
-              echo "Release notes source for $src_locale: release_notes.txt"
-              return
-            fi
-
-            if [ -d "$src_dir/changelogs" ]; then
-              local latest_log=""
-              latest_log="$(
-                ls -1 "$src_dir/changelogs" 2>/dev/null \
-                  | sed -E 's/\.txt$//' \
-                  | grep -E '^[0-9]+$' \
-                  | sort -n \
-                  | tail -n 1 || true
-              )"
-              if [ -n "$latest_log" ] && [ -f "$src_dir/changelogs/${latest_log}.txt" ]; then
-                cp "$src_dir/changelogs/${latest_log}.txt" "$dst_dir/release_notes.txt"
-                echo "Release notes source for $src_locale: changelogs/${latest_log}.txt"
-                return
-              fi
-            fi
-
-            if [ -n "${RELEASE_BODY:-}" ]; then
-              printf '%s\n' "$RELEASE_BODY" > "$dst_dir/release_notes.txt"
-              echo "Release notes source for $src_locale: github release body"
-              return
-            fi
-
-            echo "No release notes found for $src_locale"
-          }
-
-          map_metadata "en-US" "en-US"
-          map_metadata "es-ES" "es-ES"
-          map_metadata "zh-CN" "zh-Hans"
-
+          export FASTLANE_METADATA_DIR="$RUNNER_TEMP/fastlane_metadata"
+          scripts/ci/prepare-fastlane-metadata.sh
           echo "FASTLANE_METADATA_PATH=$FASTLANE_METADATA_DIR" >> "$GITHUB_ENV"
-          echo "Generated fastlane metadata files:"
-          find "$FASTLANE_METADATA_DIR" -type f | sort
 
       - name: Resolve App Store review submission flag
-        if: ${{ (inputs.upload || 'true') == 'true' }}
+        if: ${{ inputs.upload }}
+        timeout-minutes: 10
         env:
           IOS_ASC_KEY_ID: ${{ secrets.IOS_ASC_KEY_ID }}
           IOS_ASC_ISSUER_ID: ${{ secrets.IOS_ASC_ISSUER_ID }}
           IOS_ASC_PRIVATE_KEY: ${{ secrets.IOS_ASC_PRIVATE_KEY }}
-          REQUESTED_SUBMIT_FOR_REVIEW: ${{ inputs.submit_for_review || 'true' }}
+          REQUESTED_SUBMIT_FOR_REVIEW: ${{ inputs.submit_for_review && 'true' || 'false' }}
         run: |
           set -euo pipefail
 
@@ -617,7 +870,8 @@ jobs:
           fi
 
       - name: Upload IPA to App Store Connect
-        if: ${{ (inputs.upload || 'true') == 'true' }}
+        if: ${{ inputs.upload }}
+        timeout-minutes: 30
         env:
           IOS_ASC_KEY_ID: ${{ secrets.IOS_ASC_KEY_ID }}
           IOS_ASC_ISSUER_ID: ${{ secrets.IOS_ASC_ISSUER_ID }}
@@ -651,13 +905,14 @@ jobs:
               deliver(
                 api_key: api_key,
                 ipa: ENV.fetch("IPA_PATH"),
+                app_version: ENV.fetch("APP_VERSION"),
                 metadata_path: ENV.fetch("FASTLANE_METADATA_PATH"),
                 skip_screenshots: true,
-                skip_app_version_update: true,
+                skip_app_version_update: false,
                 force: true,
                 run_precheck_before_submit: false,
                 submit_for_review: ENV.fetch("SUBMIT_FOR_REVIEW", "false") == "true",
-                automatic_release: false
+                automatic_release: true
               )
             end
           end
@@ -665,8 +920,9 @@ jobs:
 
           ASC_KEY_PATH="$ASC_KEY_PATH" fastlane ios upload_app_store
 
-      - name: Distribute upload to TestFlight external group when review is active
-        if: ${{ (inputs.upload || 'true') == 'true' && env.ENABLE_TESTFLIGHT_EXTERNAL_RELEASE == 'true' }}
+      - name: Distribute upload to TestFlight external group
+        if: ${{ inputs.upload }}
+        timeout-minutes: 30
         env:
           IOS_ASC_KEY_ID: ${{ secrets.IOS_ASC_KEY_ID }}
           IOS_ASC_ISSUER_ID: ${{ secrets.IOS_ASC_ISSUER_ID }}
@@ -682,6 +938,18 @@ jobs:
           ASC_KEY_PATH="$RUNNER_TEMP/ios-asc-key-fastlane-testflight.p8"
           bash scripts/ci/write-asc-private-key.sh "$IOS_ASC_PRIVATE_KEY" "$ASC_KEY_PATH"
 
+          WHAT_TO_TEST_FILE="metadata/en-US/release_notes.txt"
+          DEFAULT_WHAT_TO_TEST="Bug fixes, performance improvements, and sync stability updates."
+          WHAT_TO_TEST=""
+          if [ -f "$WHAT_TO_TEST_FILE" ]; then
+            WHAT_TO_TEST="$(tr '\n' ' ' < "$WHAT_TO_TEST_FILE" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+          fi
+          if [ -z "${WHAT_TO_TEST}" ]; then
+            WHAT_TO_TEST="$DEFAULT_WHAT_TO_TEST"
+          fi
+          export TESTFLIGHT_WHAT_TO_TEST="$WHAT_TO_TEST"
+          echo "Using TestFlight What to Test: ${TESTFLIGHT_WHAT_TO_TEST}"
+
           mkdir -p fastlane
           cat <<'EOF' > fastlane/Fastfile
           opt_out_usage
@@ -689,6 +957,13 @@ jobs:
 
           platform :ios do
             lane :distribute_external_group do
+              beta_review_locked_error = lambda do |error|
+                message = error.to_s
+                message.match?(/cannot accept new beta review submission/i) ||
+                message.match?(/another build.*beta review/i) ||
+                  message.match?(/same train.*beta review/i)
+              end
+
               api_key = app_store_connect_api_key(
                 key_id: ENV.fetch("IOS_ASC_KEY_ID"),
                 issuer_id: ENV.fetch("IOS_ASC_ISSUER_ID"),
@@ -706,11 +981,43 @@ jobs:
                 build_number: ENV.fetch("APP_BUILD_NUMBER"),
                 distribute_external: true,
                 groups: [ENV.fetch("TESTFLIGHT_EXTERNAL_GROUP")],
-                notify_external_testers: false,
-                skip_submission: true,
+                notify_external_testers: true,
+                changelog: ENV.fetch("TESTFLIGHT_WHAT_TO_TEST"),
+                submit_beta_review: true,
+                skip_submission: false,
                 skip_waiting_for_build_processing: false,
                 wait_processing_timeout_duration: 1800
               )
+            rescue => e
+              if beta_review_locked_error.call(e)
+                UI.important("Another TestFlight build is already in beta review for this train. Skipping beta review submission for this run.")
+                begin
+                  upload_to_testflight(
+                    api_key: api_key,
+                    app_identifier: ENV.fetch("EXPECTED_BUNDLE_ID"),
+                    app_platform: "ios",
+                    distribute_only: true,
+                    app_version: ENV.fetch("APP_VERSION"),
+                    build_number: ENV.fetch("APP_BUILD_NUMBER"),
+                    distribute_external: true,
+                    groups: [ENV.fetch("TESTFLIGHT_EXTERNAL_GROUP")],
+                    notify_external_testers: true,
+                    changelog: ENV.fetch("TESTFLIGHT_WHAT_TO_TEST"),
+                    submit_beta_review: false,
+                    skip_submission: true,
+                    skip_waiting_for_build_processing: false,
+                    wait_processing_timeout_duration: 1800
+                  )
+                rescue => retry_error
+                  if beta_review_locked_error.call(retry_error)
+                    UI.important("Beta review lock is still active. Continuing without failing this workflow.")
+                  else
+                    raise retry_error
+                  end
+                end
+              else
+                raise e
+              end
             end
           end
           EOF
@@ -719,11 +1026,12 @@ jobs:
           ASC_KEY_PATH="$ASC_KEY_PATH" fastlane ios distribute_external_group
 
       - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mindwtr-ios-appstore-ipa
           path: ${{ env.IPA_PATH }}
           if-no-files-found: error
+          retention-days: 28
 
       - name: Cleanup signing files
         if: always()

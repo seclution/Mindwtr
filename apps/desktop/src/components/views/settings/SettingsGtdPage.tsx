@@ -43,13 +43,16 @@ type Labels = {
     taskEditorFieldReviewAt: string;
     taskEditorFieldAttachments: string;
     taskEditorFieldChecklist: string;
-    taskEditorFieldTextDirection: string;
     featurePriorities: string;
     featurePrioritiesDesc: string;
     featureTimeEstimates: string;
     featureTimeEstimatesDesc: string;
     featurePomodoro: string;
     featurePomodoroDesc: string;
+    weeklyReviewConfig: string;
+    weeklyReviewConfigDesc: string;
+    weeklyReviewIncludeContextsStep: string;
+    weeklyReviewIncludeContextsStepDesc: string;
     visible: string;
     hidden: string;
 };
@@ -78,6 +81,7 @@ export function SettingsGtdPage({
         const dayLabelMap: Record<Language, string> = {
             en: 'days',
             zh: '天',
+            'zh-Hant': '天',
             es: 'días',
             hi: 'दिन',
             ar: 'أيام',
@@ -86,6 +90,8 @@ export function SettingsGtdPage({
             ja: translateText('days', 'ja'),
             fr: translateText('days', 'fr'),
             pt: translateText('days', 'pt'),
+            pl: translateText('days', 'pl'),
+            nl: translateText('days', 'nl'),
             ko: translateText('days', 'ko'),
             it: translateText('days', 'it'),
             tr: translateText('days', 'tr'),
@@ -109,7 +115,6 @@ export function SettingsGtdPage({
         'priority',
         'contexts',
         'description',
-        'textDirection',
         'tags',
         'timeEstimate',
         'recurrence',
@@ -149,8 +154,7 @@ export function SettingsGtdPage({
     const inboxTwoMinuteFirst = inboxProcessing.twoMinuteFirst === true;
     const inboxProjectFirst = inboxProcessing.projectFirst === true;
     const inboxScheduleEnabled = inboxProcessing.scheduleEnabled !== false;
-    const prioritiesEnabled = safeSettings.features?.priorities === true;
-    const timeEstimatesEnabled = safeSettings.features?.timeEstimates === true;
+    const includeContextStep = safeSettings.gtd?.weeklyReview?.includeContextStep !== false;
     const pomodoroEnabled = safeSettings.features?.pomodoro === true;
     const fieldLabel = (fieldId: TaskEditorFieldId) => {
         switch (fieldId) {
@@ -184,8 +188,6 @@ export function SettingsGtdPage({
                 return t.taskEditorFieldAttachments;
             case 'checklist':
                 return t.taskEditorFieldChecklist;
-            case 'textDirection':
-                return t.taskEditorFieldTextDirection;
             default:
                 return fieldId;
         }
@@ -232,6 +234,17 @@ export function SettingsGtdPage({
             },
         }).then(showSaved).catch((error) => reportError('Failed to update inbox processing settings', error));
     };
+    const updateWeeklyReviewConfig = (partial: NonNullable<AppData['settings']['gtd']>['weeklyReview']) => {
+        updateSettings({
+            gtd: {
+                ...(safeSettings.gtd ?? {}),
+                weeklyReview: {
+                    ...(safeSettings.gtd?.weeklyReview ?? {}),
+                    ...partial,
+                },
+            },
+        }).then(showSaved).catch((error) => reportError('Failed to update weekly review settings', error));
+    };
     const moveFieldInGroup = (fieldId: TaskEditorFieldId, delta: number, groupFields: TaskEditorFieldId[]) => {
         const groupOrder = taskEditorOrder.filter((id) => groupFields.includes(id));
         const fromIndex = groupOrder.indexOf(fieldId);
@@ -252,7 +265,7 @@ export function SettingsGtdPage({
         { id: 'basic', title: translateText('Basic', language), fields: ['status', 'project', 'section', 'area', 'dueDate'] },
         { id: 'scheduling', title: translateText('Scheduling', language), fields: ['startTime', 'recurrence', 'reviewAt'] },
         { id: 'organization', title: translateText('Organization', language), fields: ['contexts', 'tags', 'priority', 'timeEstimate'] },
-        { id: 'details', title: translateText('Details', language), fields: ['description', 'textDirection', 'attachments', 'checklist'] },
+        { id: 'details', title: translateText('Details', language), fields: ['description', 'attachments', 'checklist'] },
     ];
 
     return (
@@ -290,66 +303,6 @@ export function SettingsGtdPage({
                 <div className="p-4">
                     <div className="text-sm font-medium">{t.features}</div>
                     <div className="text-xs text-muted-foreground mt-1">{t.featuresDesc}</div>
-                </div>
-                <div className="p-4 flex items-center justify-between gap-6">
-                    <div className="min-w-0">
-                        <div className="text-sm font-medium">{t.featurePriorities}</div>
-                        <div className="text-xs text-muted-foreground mt-1">{t.featurePrioritiesDesc}</div>
-                    </div>
-                    <button
-                        type="button"
-                        role="switch"
-                        aria-checked={prioritiesEnabled}
-                        onClick={() => {
-                            updateSettings({
-                                features: {
-                                    ...(safeSettings.features ?? {}),
-                                    priorities: !prioritiesEnabled,
-                                },
-                            }).then(showSaved).catch((error) => reportError('Failed to update feature flags', error));
-                        }}
-                        className={cn(
-                            'relative inline-flex h-5 w-9 items-center rounded-full border transition-colors',
-                            prioritiesEnabled ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
-                        )}
-                    >
-                        <span
-                            className={cn(
-                                'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
-                                prioritiesEnabled ? 'translate-x-4' : 'translate-x-1'
-                            )}
-                        />
-                    </button>
-                </div>
-                <div className="p-4 flex items-center justify-between gap-6">
-                    <div className="min-w-0">
-                        <div className="text-sm font-medium">{t.featureTimeEstimates}</div>
-                        <div className="text-xs text-muted-foreground mt-1">{t.featureTimeEstimatesDesc}</div>
-                    </div>
-                    <button
-                        type="button"
-                        role="switch"
-                        aria-checked={timeEstimatesEnabled}
-                        onClick={() => {
-                            updateSettings({
-                                features: {
-                                    ...(safeSettings.features ?? {}),
-                                    timeEstimates: !timeEstimatesEnabled,
-                                },
-                            }).then(showSaved).catch((error) => reportError('Failed to update feature flags', error));
-                        }}
-                        className={cn(
-                            'relative inline-flex h-5 w-9 items-center rounded-full border transition-colors',
-                            timeEstimatesEnabled ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
-                        )}
-                    >
-                        <span
-                            className={cn(
-                                'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
-                                timeEstimatesEnabled ? 'translate-x-4' : 'translate-x-1'
-                            )}
-                        />
-                    </button>
                 </div>
                 <div className="p-4 flex items-center justify-between gap-6">
                     <div className="min-w-0">
@@ -463,77 +416,115 @@ export function SettingsGtdPage({
                 ) : null}
             </div>
             <div className="bg-card border border-border rounded-lg divide-y divide-border">
-                <div className="p-4">
-                    <div className="text-sm font-medium">{t.inboxProcessing}</div>
-                    <div className="text-xs text-muted-foreground mt-1">{t.inboxProcessingDesc}</div>
+                <div className="p-4 flex items-center justify-between gap-6">
+                    <div className="min-w-0">
+                        <div className="text-sm font-medium">{t.weeklyReviewConfig}</div>
+                        <div className="text-xs text-muted-foreground mt-1">{t.weeklyReviewConfigDesc}</div>
+                    </div>
                 </div>
                 <div className="p-4 flex items-center justify-between gap-6">
                     <div className="min-w-0">
-                        <div className="text-sm font-medium">{t.inboxTwoMinuteFirst}</div>
+                        <div className="text-sm font-medium">{t.weeklyReviewIncludeContextsStep}</div>
+                        <div className="text-xs text-muted-foreground mt-1">{t.weeklyReviewIncludeContextsStepDesc}</div>
                     </div>
                     <button
                         type="button"
                         role="switch"
-                        aria-checked={inboxTwoMinuteFirst}
-                        onClick={() => updateInboxProcessing({ twoMinuteFirst: !inboxTwoMinuteFirst })}
+                        aria-checked={includeContextStep}
+                        onClick={() => updateWeeklyReviewConfig({ includeContextStep: !includeContextStep })}
                         className={cn(
                             'relative inline-flex h-5 w-9 items-center rounded-full border transition-colors',
-                            inboxTwoMinuteFirst ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
+                            includeContextStep ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
                         )}
                     >
                         <span
                             className={cn(
                                 'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
-                                inboxTwoMinuteFirst ? 'translate-x-4' : 'translate-x-1'
-                            )}
-                        />
-                    </button>
-                </div>
-                <div className="p-4 flex items-center justify-between gap-6">
-                    <div className="min-w-0">
-                        <div className="text-sm font-medium">{t.inboxProjectFirst}</div>
-                    </div>
-                    <button
-                        type="button"
-                        role="switch"
-                        aria-checked={inboxProjectFirst}
-                        onClick={() => updateInboxProcessing({ projectFirst: !inboxProjectFirst })}
-                        className={cn(
-                            'relative inline-flex h-5 w-9 items-center rounded-full border transition-colors',
-                            inboxProjectFirst ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
-                        )}
-                    >
-                        <span
-                            className={cn(
-                                'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
-                                inboxProjectFirst ? 'translate-x-4' : 'translate-x-1'
-                            )}
-                        />
-                    </button>
-                </div>
-                <div className="p-4 flex items-center justify-between gap-6">
-                    <div className="min-w-0">
-                        <div className="text-sm font-medium">{t.inboxScheduleEnabled}</div>
-                    </div>
-                    <button
-                        type="button"
-                        role="switch"
-                        aria-checked={inboxScheduleEnabled}
-                        onClick={() => updateInboxProcessing({ scheduleEnabled: !inboxScheduleEnabled })}
-                        className={cn(
-                            'relative inline-flex h-5 w-9 items-center rounded-full border transition-colors',
-                            inboxScheduleEnabled ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
-                        )}
-                    >
-                        <span
-                            className={cn(
-                                'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
-                                inboxScheduleEnabled ? 'translate-x-4' : 'translate-x-1'
+                                includeContextStep ? 'translate-x-4' : 'translate-x-1'
                             )}
                         />
                     </button>
                 </div>
             </div>
+            <details className="bg-card border border-border rounded-lg">
+                <summary className="list-none cursor-pointer p-4">
+                    <div className="flex items-center justify-between">
+                        <div className="min-w-0">
+                            <div className="text-sm font-medium">{t.inboxProcessing}</div>
+                            <div className="text-xs text-muted-foreground mt-1">{t.inboxProcessingDesc}</div>
+                        </div>
+                        <span className="text-xs text-muted-foreground">▸</span>
+                    </div>
+                </summary>
+                <div className="divide-y divide-border border-t border-border">
+                    <div className="p-4 flex items-center justify-between gap-6">
+                        <div className="min-w-0">
+                            <div className="text-sm font-medium">{t.inboxTwoMinuteFirst}</div>
+                        </div>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={inboxTwoMinuteFirst}
+                            onClick={() => updateInboxProcessing({ twoMinuteFirst: !inboxTwoMinuteFirst })}
+                            className={cn(
+                                'relative inline-flex h-5 w-9 items-center rounded-full border transition-colors',
+                                inboxTwoMinuteFirst ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
+                            )}
+                        >
+                            <span
+                                className={cn(
+                                    'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                                    inboxTwoMinuteFirst ? 'translate-x-4' : 'translate-x-1'
+                                )}
+                            />
+                        </button>
+                    </div>
+                    <div className="p-4 flex items-center justify-between gap-6">
+                        <div className="min-w-0">
+                            <div className="text-sm font-medium">{t.inboxProjectFirst}</div>
+                        </div>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={inboxProjectFirst}
+                            onClick={() => updateInboxProcessing({ projectFirst: !inboxProjectFirst })}
+                            className={cn(
+                                'relative inline-flex h-5 w-9 items-center rounded-full border transition-colors',
+                                inboxProjectFirst ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
+                            )}
+                        >
+                            <span
+                                className={cn(
+                                    'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                                    inboxProjectFirst ? 'translate-x-4' : 'translate-x-1'
+                                )}
+                            />
+                        </button>
+                    </div>
+                    <div className="p-4 flex items-center justify-between gap-6">
+                        <div className="min-w-0">
+                            <div className="text-sm font-medium">{t.inboxScheduleEnabled}</div>
+                        </div>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={inboxScheduleEnabled}
+                            onClick={() => updateInboxProcessing({ scheduleEnabled: !inboxScheduleEnabled })}
+                            className={cn(
+                                'relative inline-flex h-5 w-9 items-center rounded-full border transition-colors',
+                                inboxScheduleEnabled ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
+                            )}
+                        >
+                            <span
+                                className={cn(
+                                    'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                                    inboxScheduleEnabled ? 'translate-x-4' : 'translate-x-1'
+                                )}
+                            />
+                        </button>
+                    </div>
+                </div>
+            </details>
             <details className="bg-card border border-border rounded-lg p-4">
                 <summary className="list-none cursor-pointer">
                     <div className="flex items-center justify-between">
@@ -594,7 +585,7 @@ export function SettingsGtdPage({
                                                         moveFieldInGroup(fieldId, -1, group.fields);
                                                     }}
                                                     disabled={index === 0}
-                                                    className="text-xs px-2 py-1 rounded bg-muted/50 hover:bg-muted transition-colors disabled:opacity-40"
+                                                    className="text-xs px-2 py-1 rounded bg-muted/50 hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                                 >
                                                     ↑
                                                 </button>
@@ -605,7 +596,7 @@ export function SettingsGtdPage({
                                                         moveFieldInGroup(fieldId, 1, group.fields);
                                                     }}
                                                     disabled={index === groupOrder.length - 1}
-                                                    className="text-xs px-2 py-1 rounded bg-muted/50 hover:bg-muted transition-colors disabled:opacity-40"
+                                                    className="text-xs px-2 py-1 rounded bg-muted/50 hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                                 >
                                                     ↓
                                                 </button>

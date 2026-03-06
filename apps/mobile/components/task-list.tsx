@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { View, TextInput, FlatList, StyleSheet, TouchableOpacity, Text, RefreshControl, ScrollView, Modal, Pressable, Alert } from 'react-native';
+import { View, TextInput, FlatList, StyleSheet, TouchableOpacity, Text, RefreshControl, ScrollView, Modal, Pressable, Alert, ActivityIndicator, Keyboard } from 'react-native';
 import { router } from 'expo-router';
 import {
   useTaskStore,
@@ -13,16 +13,18 @@ import {
   createAIProvider,
   type AIProviderId,
   type TaskSortBy,
+  DEFAULT_PROJECT_COLOR,
 } from '@mindwtr/core';
 
 import { TaskEditModal } from './task-edit-modal';
 import { ErrorBoundary } from './ErrorBoundary';
+import { ListEmptyState } from './list-empty-state';
 import { SwipeableTaskItem } from './swipeable-task-item';
 import { useTheme } from '../contexts/theme-context';
 import { useLanguage } from '../contexts/language-context';
 
 import { useThemeColors } from '@/hooks/use-theme-colors';
-import { buildCopilotConfig, loadAIKey } from '../lib/ai-config';
+import { buildCopilotConfig, isAIKeyRequired, loadAIKey } from '../lib/ai-config';
 import { logError } from '../lib/app-log';
 
 export interface TaskListProps {
@@ -69,6 +71,7 @@ function TaskListComponent({
   const addProject = useTaskStore((state) => state.addProject);
   const updateTask = useTaskStore((state) => state.updateTask);
   const deleteTask = useTaskStore((state) => state.deleteTask);
+  const restoreTask = useTaskStore((state) => state.restoreTask);
   const fetchData = useTaskStore((state) => state.fetchData);
   const batchMoveTasks = useTaskStore((state) => state.batchMoveTasks);
   const batchDeleteTasks = useTaskStore((state) => state.batchDeleteTasks);
@@ -83,6 +86,7 @@ function TaskListComponent({
   const [copilotApplied, setCopilotApplied] = useState(false);
   const [copilotContext, setCopilotContext] = useState<string | undefined>(undefined);
   const [copilotTags, setCopilotTags] = useState<string[]>([]);
+  const [copilotThinking, setCopilotThinking] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -91,11 +95,14 @@ function TaskListComponent({
   const [tagModalVisible, setTagModalVisible] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [sortModalVisible, setSortModalVisible] = useState(false);
+  const [bulkActionLoading, setBulkActionLoading] = useState(false);
+  const [bulkActionLabel, setBulkActionLabel] = useState('');
   const [inputSelection, setInputSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
   const [typeaheadOpen, setTypeaheadOpen] = useState(false);
   const [typeaheadIndex, setTypeaheadIndex] = useState(0);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copilotAbortRef = useRef<AbortController | null>(null);
+  const copilotRequestIdRef = useRef(0);
 
   // Dynamic colors based on theme
   const themeColors = useThemeColors();
@@ -127,6 +134,7 @@ function TaskListComponent({
     }
     return [styles.listContent, { paddingBottom: 12 + contentPaddingBottom }];
   }, [contentPaddingBottom]);
+  const emptyMessage = emptyText || t('list.noTasks');
 
   const tasksById = useMemo(() => {
     return tasks.reduce((acc, task) => {
@@ -138,6 +146,7 @@ function TaskListComponent({
   const sortBy = (settings?.taskSortBy ?? 'default') as TaskSortBy;
   const aiEnabled = settings?.ai?.enabled === true;
   const aiProvider = (settings?.ai?.provider ?? 'openai') as AIProviderId;
+  const keyRequired = isAIKeyRequired(settings);
   const timeEstimatesEnabled = settings?.features?.timeEstimates === true;
   const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
 
@@ -178,6 +187,10 @@ function TaskListComponent({
   type ListItem =
     | { type: 'section'; id: string; title: string; count: number; muted?: boolean }
     | { type: 'task'; task: Task };
+
+  const LIST_CONTENT_VERTICAL_PADDING = 12;
+  const ESTIMATED_SECTION_HEIGHT = 32;
+  const ESTIMATED_TASK_HEIGHT = 86;
 
   const listItems = useMemo<ListItem[]>(() => {
     if (statusFilter === 'reference' && !projectId) {
@@ -258,6 +271,42 @@ function TaskListComponent({
     }
     return items;
   }, [areas, orderedTasks, projectById, projectId, projectSections, statusFilter, t]);
+  const itemHeightsRef = useRef<Record<string, number>>({});
+  const [itemLayoutVersion, setItemLayoutVersion] = useState(0);
+  const getListItemKey = useCallback((item: ListItem) => (
+    item.type === 'section' ? `section-${item.id}` : item.task.id
+  ), []);
+  const estimateItemHeight = useCallback((item: ListItem) => (
+    item.type === 'section' ? ESTIMATED_SECTION_HEIGHT : ESTIMATED_TASK_HEIGHT
+  ), []);
+  const registerItemHeight = useCallback((itemKey: string, height: number) => {
+    const rounded = Math.round(height);
+    if (!Number.isFinite(rounded) || rounded <= 0) return;
+    if (itemHeightsRef.current[itemKey] === rounded) return;
+    itemHeightsRef.current[itemKey] = rounded;
+    setItemLayoutVersion((prev) => prev + 1);
+  }, []);
+  const itemLayouts = useMemo(() => {
+    let offset = LIST_CONTENT_VERTICAL_PADDING;
+    return listItems.map((item) => {
+      const key = getListItemKey(item);
+      const length = itemHeightsRef.current[key] ?? estimateItemHeight(item);
+      const layout = { length, offset };
+      offset += length;
+      return layout;
+    });
+  }, [estimateItemHeight, getListItemKey, itemLayoutVersion, listItems]);
+  const getItemLayout = useCallback((_: ArrayLike<ListItem> | null | undefined, index: number) => {
+    const measured = itemLayouts[index];
+    if (measured) {
+      return { index, length: measured.length, offset: measured.offset };
+    }
+    return {
+      index,
+      length: ESTIMATED_TASK_HEIGHT,
+      offset: LIST_CONTENT_VERTICAL_PADDING + (ESTIMATED_TASK_HEIGHT * index),
+    };
+  }, [itemLayouts]);
 
   const contextOptions = useMemo(() => {
     const taskContexts = tasks.flatMap((task) => task.contexts || []);
@@ -343,17 +392,22 @@ function TaskListComponent({
   }, [aiProvider]);
 
   useEffect(() => {
-    if (!enableCopilot || !aiEnabled || !aiKey) {
+    if (!enableCopilot || !aiEnabled || (keyRequired && !aiKey)) {
       setCopilotSuggestion(null);
+      setCopilotThinking(false);
       return;
     }
     const title = newTaskTitle.trim();
     if (title.length < 4) {
       setCopilotSuggestion(null);
+      setCopilotThinking(false);
       return;
     }
     let cancelled = false;
     const handle = setTimeout(async () => {
+      const requestId = copilotRequestIdRef.current + 1;
+      copilotRequestIdRef.current = requestId;
+      setCopilotThinking(true);
       try {
         if (copilotAbortRef.current) copilotAbortRef.current.abort();
         const abortController = typeof AbortController === 'function' ? new AbortController() : null;
@@ -373,6 +427,10 @@ function TaskListComponent({
         if (!cancelled) {
           setCopilotSuggestion(null);
         }
+      } finally {
+        if (!cancelled && copilotRequestIdRef.current === requestId) {
+          setCopilotThinking(false);
+        }
       }
     }, 800);
     return () => {
@@ -383,7 +441,7 @@ function TaskListComponent({
         copilotAbortRef.current = null;
       }
     };
-  }, [aiEnabled, aiKey, aiProvider, contextOptions, enableCopilot, newTaskTitle, settings, statusFilter, tagOptions, timeEstimatesEnabled]);
+  }, [aiEnabled, aiKey, aiProvider, contextOptions, enableCopilot, keyRequired, newTaskTitle, settings, statusFilter, tagOptions, timeEstimatesEnabled]);
 
   useEffect(() => {
     if (!highlightTaskId) return;
@@ -413,7 +471,11 @@ function TaskListComponent({
       ? 'next'
       : (statusFilter !== 'all' ? statusFilter : 'inbox');
 
-    const { title: parsedTitle, props, projectTitle } = parseQuickAdd(newTaskTitle, projects, new Date(), areas);
+    const { title: parsedTitle, props, projectTitle, invalidDateCommands } = parseQuickAdd(newTaskTitle, projects, new Date(), areas);
+    if (invalidDateCommands && invalidDateCommands.length > 0) {
+      Alert.alert(t('common.notice'), `Invalid date command: ${invalidDateCommands.join(', ')}`);
+      return;
+    }
     const finalTitle = parsedTitle || newTaskTitle;
     if (!finalTitle.trim()) return;
 
@@ -421,7 +483,7 @@ function TaskListComponent({
     if (!props.status) initialProps.status = defaultStatus;
     if (!props.projectId && projectId) initialProps.projectId = projectId;
     if (!initialProps.projectId && projectTitle) {
-      const created = await addProject(projectTitle, '#94a3b8');
+      const created = await addProject(projectTitle, DEFAULT_PROJECT_COLOR);
       if (!created) return;
       initialProps.projectId = created.id;
     }
@@ -441,6 +503,7 @@ function TaskListComponent({
     setCopilotApplied(false);
     setCopilotContext(undefined);
     setCopilotTags([]);
+    Keyboard.dismiss();
   };
 
   const applyTypeaheadOption = useCallback(async (option: Option) => {
@@ -449,7 +512,7 @@ function TaskListComponent({
     if (option.kind === 'create') {
       const title = option.value.trim();
       if (title) {
-        await addProject(title, '#94a3b8');
+        await addProject(title, DEFAULT_PROJECT_COLOR);
       }
     }
     if (trigger.type === 'project') {
@@ -486,6 +549,17 @@ function TaskListComponent({
     setSelectionMode(false);
     setMultiSelectedIds(new Set());
   }, []);
+  const runBulkAction = useCallback(async (label: string, action: () => Promise<void>) => {
+    if (bulkActionLoading) return;
+    setBulkActionLabel(label);
+    setBulkActionLoading(true);
+    try {
+      await action();
+    } finally {
+      setBulkActionLoading(false);
+      setBulkActionLabel('');
+    }
+  }, [bulkActionLoading]);
 
   const toggleMultiSelect = useCallback((taskId: string) => {
     if (!selectionMode) setSelectionMode(true);
@@ -498,14 +572,16 @@ function TaskListComponent({
   }, [selectionMode]);
 
   const handleBatchMove = useCallback(async (newStatus: TaskStatus) => {
-    if (!hasSelection) return;
-    await batchMoveTasks(selectedIdsArray, newStatus);
-    exitSelectionMode();
-    Alert.alert(t('common.done'), `${selectedIdsArray.length} ${t('common.tasks')}`);
-  }, [batchMoveTasks, selectedIdsArray, hasSelection, exitSelectionMode, t]);
+    if (!hasSelection || bulkActionLoading) return;
+    await runBulkAction(t('bulk.moveTo'), async () => {
+      await batchMoveTasks(selectedIdsArray, newStatus);
+      exitSelectionMode();
+      Alert.alert(t('common.done'), `${selectedIdsArray.length} ${t('common.tasks')}`);
+    });
+  }, [batchMoveTasks, selectedIdsArray, hasSelection, exitSelectionMode, t, bulkActionLoading, runBulkAction]);
 
   const handleBatchDelete = useCallback(async () => {
-    if (!hasSelection) return;
+    if (!hasSelection || bulkActionLoading) return;
     Alert.alert(
       t('bulk.confirmDeleteTitle') || t('common.delete'),
       t('bulk.confirmDeleteBody') || t('list.confirmBatchDelete'),
@@ -515,30 +591,52 @@ function TaskListComponent({
           text: t('common.delete'),
           style: 'destructive',
           onPress: async () => {
-            await batchDeleteTasks(selectedIdsArray);
-            exitSelectionMode();
-            Alert.alert(t('common.done'), `${selectedIdsArray.length} ${t('common.tasks')}`);
+            const deletedIds = [...selectedIdsArray];
+            await runBulkAction(t('common.delete'), async () => {
+              await batchDeleteTasks(deletedIds);
+              exitSelectionMode();
+              Alert.alert(
+                t('common.done'),
+                `${deletedIds.length} ${t('common.tasks')}`,
+                [
+                  {
+                    text: t('trash.restoreToInbox') === 'trash.restoreToInbox' ? 'Restore' : t('trash.restoreToInbox'),
+                    onPress: () => {
+                      deletedIds.forEach((id) => {
+                        void restoreTask(id);
+                      });
+                    },
+                  },
+                  {
+                    text: t('common.cancel'),
+                    style: 'cancel',
+                  },
+                ]
+              );
+            });
           },
         },
       ]
     );
-  }, [batchDeleteTasks, selectedIdsArray, hasSelection, exitSelectionMode, t]);
+  }, [batchDeleteTasks, selectedIdsArray, hasSelection, exitSelectionMode, t, bulkActionLoading, restoreTask, runBulkAction]);
 
   const handleBatchAddTag = useCallback(async () => {
     const input = tagInput.trim();
-    if (!hasSelection || !input) return;
+    if (!hasSelection || !input || bulkActionLoading) return;
     const tag = input.startsWith('#') ? input : `#${input}`;
-    await batchUpdateTasks(selectedIdsArray.map((id) => {
-      const task = tasksById[id];
-      const existingTags = task?.tags || [];
-      const nextTags = Array.from(new Set([...existingTags, tag]));
-      return { id, updates: { tags: nextTags } };
-    }));
-    setTagInput('');
-    setTagModalVisible(false);
-    exitSelectionMode();
-    Alert.alert(t('common.done'), `${selectedIdsArray.length} ${t('common.tasks')}`);
-  }, [batchUpdateTasks, selectedIdsArray, tasksById, tagInput, hasSelection, exitSelectionMode, t]);
+    await runBulkAction(t('bulk.addTag'), async () => {
+      await batchUpdateTasks(selectedIdsArray.map((id) => {
+        const task = tasksById[id];
+        const existingTags = task?.tags || [];
+        const nextTags = Array.from(new Set([...existingTags, tag]));
+        return { id, updates: { tags: nextTags } };
+      }));
+      setTagInput('');
+      setTagModalVisible(false);
+      exitSelectionMode();
+      Alert.alert(t('common.done'), `${selectedIdsArray.length} ${t('common.tasks')}`);
+    });
+  }, [batchUpdateTasks, selectedIdsArray, tasksById, tagInput, hasSelection, exitSelectionMode, t, bulkActionLoading, runBulkAction]);
 
   const sortOptions: TaskSortBy[] = ['default', 'due', 'start', 'review', 'title', 'created', 'created-desc'];
   const hideStatusBadgeForList = statusFilter === 'next' || statusFilter === 'waiting';
@@ -574,9 +672,13 @@ function TaskListComponent({
   ]);
 
   const renderListItem = useCallback(({ item }: { item: ListItem }) => {
+    const itemKey = getListItemKey(item);
     if (item.type === 'section') {
       return (
-        <View style={styles.sectionHeader}>
+        <View
+          style={styles.sectionHeader}
+          onLayout={(event) => registerItemHeight(itemKey, event.nativeEvent.layout.height)}
+        >
           <Text style={[styles.sectionTitle, { color: item.muted ? themeColorsMemo.secondaryText : themeColorsMemo.text }]}>
             {item.title}
           </Text>
@@ -586,9 +688,12 @@ function TaskListComponent({
         </View>
       );
     }
-    return renderTask({ item: item.task });
-  }, [renderTask, themeColorsMemo.secondaryText, themeColorsMemo.text]);
-
+    return (
+      <View onLayout={(event) => registerItemHeight(itemKey, event.nativeEvent.layout.height)}>
+        {renderTask({ item: item.task })}
+      </View>
+    );
+  }, [getListItemKey, registerItemHeight, renderTask, themeColorsMemo.secondaryText, themeColorsMemo.text]);
   return (
     <View style={[styles.container, { backgroundColor: themeColorsMemo.bg }]}>
       {showHeader ? (
@@ -609,7 +714,7 @@ function TaskListComponent({
                 accessibilityRole="button"
                 accessibilityLabel={t('sort.label')}
               >
-                <Text style={[styles.sortButtonText, { color: themeColors.secondaryText }]}>
+                <Text style={[styles.sortButtonText, { color: themeColorsMemo.secondaryText }]}>
                   {t(`sort.${sortBy}`)}
                 </Text>
               </TouchableOpacity>
@@ -638,16 +743,26 @@ function TaskListComponent({
 
       {enableBulkActions && selectionMode && (
         <View style={[styles.bulkBar, { backgroundColor: themeColors.cardBg, borderBottomColor: themeColors.border }]}>
-          <Text style={[styles.bulkCount, { color: themeColors.secondaryText }]}>
-            {selectedIdsArray.length} {t('bulk.selected')}
-          </Text>
+          <View style={styles.bulkStatusRow}>
+            <Text style={[styles.bulkCount, { color: themeColors.secondaryText }]}>
+              {selectedIdsArray.length} {t('bulk.selected')}
+            </Text>
+            {bulkActionLoading && (
+              <View style={styles.bulkLoadingRow}>
+                <ActivityIndicator size="small" color={themeColors.tint} />
+                <Text style={[styles.bulkLoadingText, { color: themeColors.secondaryText }]}>
+                  {bulkActionLabel || t('common.loading')}
+                </Text>
+              </View>
+            )}
+          </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bulkMoveRow}>
             {(['inbox', 'next', 'waiting', 'someday', 'reference', 'done'] as TaskStatus[]).map((status) => (
               <TouchableOpacity
                 key={status}
                 onPress={() => handleBatchMove(status)}
-                disabled={!hasSelection}
-                style={[styles.bulkMoveButton, { backgroundColor: themeColors.filterBg, opacity: hasSelection ? 1 : 0.5 }]}
+                disabled={!hasSelection || bulkActionLoading}
+                style={[styles.bulkMoveButton, { backgroundColor: themeColors.filterBg, opacity: hasSelection && !bulkActionLoading ? 1 : 0.5 }]}
                 accessibilityRole="button"
                 accessibilityLabel={`${t('bulk.moveTo')} ${t(`status.${status}`)}`}
               >
@@ -658,8 +773,8 @@ function TaskListComponent({
           <View style={styles.bulkActions}>
             <TouchableOpacity
               onPress={() => setTagModalVisible(true)}
-              disabled={!hasSelection}
-              style={[styles.bulkActionButton, { backgroundColor: themeColors.filterBg, opacity: hasSelection ? 1 : 0.5 }]}
+              disabled={!hasSelection || bulkActionLoading}
+              style={[styles.bulkActionButton, { backgroundColor: themeColors.filterBg, opacity: hasSelection && !bulkActionLoading ? 1 : 0.5 }]}
               accessibilityRole="button"
               accessibilityLabel={t('bulk.addTag')}
             >
@@ -667,8 +782,8 @@ function TaskListComponent({
             </TouchableOpacity>
             <TouchableOpacity
               onPress={handleBatchDelete}
-              disabled={!hasSelection}
-              style={[styles.bulkActionButton, { backgroundColor: themeColors.filterBg, opacity: hasSelection ? 1 : 0.5 }]}
+              disabled={!hasSelection || bulkActionLoading}
+              style={[styles.bulkActionButton, { backgroundColor: themeColors.filterBg, opacity: hasSelection && !bulkActionLoading ? 1 : 0.5 }]}
               accessibilityRole="button"
               accessibilityLabel={t('bulk.delete')}
             >
@@ -756,6 +871,14 @@ function TaskListComponent({
               </Text>
             </TouchableOpacity>
           )}
+          {enableCopilot && aiEnabled && copilotThinking && !copilotSuggestion && !copilotApplied && (
+            <View style={[styles.copilotPill, styles.copilotLoadingRow, { borderColor: themeColors.border, backgroundColor: themeColors.inputBg }]}>
+              <ActivityIndicator size="small" color={themeColors.tint} />
+              <Text style={[styles.copilotHint, { color: themeColors.secondaryText, marginTop: 0 }]}>
+                {t('common.loading')}
+              </Text>
+            </View>
+          )}
           {enableCopilot && aiEnabled && copilotApplied && (
             <View style={[styles.copilotPill, { borderColor: themeColors.border, backgroundColor: themeColors.inputBg }]}>
               <Text style={[styles.copilotText, { color: themeColors.text }]}>
@@ -776,11 +899,12 @@ function TaskListComponent({
       {staticList ? (
         <View style={styles.staticList}>
           {listItems.length === 0 ? (
-            <View style={[styles.emptyContainer, { backgroundColor: themeColors.cardBg, borderColor: themeColors.border }]}>
-              <Text style={[styles.emptyText, { color: themeColors.text }]}>
-                {emptyText || t('list.noTasks')}
-              </Text>
-            </View>
+            <ListEmptyState
+              message={emptyMessage}
+              backgroundColor={themeColors.cardBg}
+              borderColor={themeColors.border}
+              textColor={themeColors.text}
+            />
           ) : (
             listItems.map((item) => (
               <View key={item.type === 'section' ? `section-${item.id}` : item.task.id} style={styles.staticItem}>
@@ -796,7 +920,7 @@ function TaskListComponent({
           keyExtractor={(item) => (item.type === 'section' ? `section-${item.id}` : item.task.id)}
           style={styles.list}
           contentContainerStyle={listContentStyle}
-          getItemLayout={undefined}
+          getItemLayout={getItemLayout}
           initialNumToRender={12}
           maxToRenderPerBatch={12}
           windowSize={5}
@@ -806,11 +930,12 @@ function TaskListComponent({
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
           ListEmptyComponent={
-            <View style={[styles.emptyContainer, { backgroundColor: themeColors.cardBg, borderColor: themeColors.border }]}>
-              <Text style={[styles.emptyText, { color: themeColors.text }]}>
-                {emptyText || t('list.noTasks')}
-              </Text>
-            </View>
+            <ListEmptyState
+              message={emptyMessage}
+              backgroundColor={themeColors.cardBg}
+              borderColor={themeColors.border}
+              textColor={themeColors.text}
+            />
           }
         />
       )}
@@ -980,6 +1105,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
+  bulkStatusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bulkLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  bulkLoadingText: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
   bulkMoveRow: {
     gap: 6,
     paddingVertical: 2,
@@ -1090,6 +1230,11 @@ const styles = StyleSheet.create({
   copilotHint: {
     fontSize: 11,
     marginTop: 2,
+  },
+  copilotLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   addButton: {
     width: 44,
@@ -1202,18 +1347,6 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '600',
     padding: 20,
-  },
-  emptyContainer: {
-    paddingVertical: 36,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  emptyText: {
-    fontSize: 15,
-    fontWeight: '600',
-    textAlign: 'center',
   },
   badgeContainer: {
     justifyContent: 'center',

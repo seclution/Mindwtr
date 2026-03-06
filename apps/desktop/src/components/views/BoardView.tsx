@@ -47,6 +47,7 @@ function DroppableColumn({
     tasks,
     emptyState,
     onQuickAdd,
+    dragLabel,
     compact,
 }: {
     id: TaskStatus;
@@ -54,6 +55,7 @@ function DroppableColumn({
     tasks: Task[];
     emptyState: { title: string; body: string; action: string };
     onQuickAdd: (status: TaskStatus) => void;
+    dragLabel: string;
     compact?: boolean;
 }) {
     const { setNodeRef } = useDroppable({ id });
@@ -91,7 +93,7 @@ function DroppableColumn({
                     </div>
                 ) : (
                     tasks.map((task) => (
-                        <DraggableTask key={task.id} task={task} />
+                        <DraggableTask key={task.id} task={task} dragLabel={dragLabel} />
                     ))
                 )}
             </div>
@@ -99,7 +101,7 @@ function DroppableColumn({
     );
 }
 
-function DraggableTask({ task }: { task: Task }) {
+function DraggableTask({ task, dragLabel }: { task: Task; dragLabel: string }) {
     const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
         id: task.id,
         data: { task },
@@ -111,7 +113,7 @@ function DraggableTask({ task }: { task: Task }) {
 
     if (isDragging) {
         return (
-            <div ref={setNodeRef} style={style} className="opacity-50">
+            <div ref={setNodeRef} style={style} className="opacity-50" role="listitem">
                 <TaskItem
                     task={task}
                     readOnly={task.status === 'done'}
@@ -127,7 +129,7 @@ function DraggableTask({ task }: { task: Task }) {
     }
 
     return (
-        <div ref={setNodeRef} style={style} className="touch-none">
+        <div ref={setNodeRef} style={style} className="touch-none" role="listitem">
             <TaskItem
                 task={task}
                 readOnly={task.status === 'done'}
@@ -142,8 +144,8 @@ function DraggableTask({ task }: { task: Task }) {
                         {...attributes}
                         onClick={(event) => event.stopPropagation()}
                         className="text-muted-foreground/70 hover:text-foreground p-1 rounded hover:bg-muted/50 cursor-grab active:cursor-grabbing"
-                        aria-label="Drag task"
-                        title="Drag task"
+                        aria-label={dragLabel}
+                        title={dragLabel}
                     >
                         <GripVertical className="w-4 h-4" />
                     </button>
@@ -173,6 +175,7 @@ export function BoardView() {
 
     const [activeTask, setActiveTask] = React.useState<Task | null>(null);
     const [computeSequential, setComputeSequential] = React.useState(false);
+    const [searchQuery, setSearchQuery] = React.useState('');
     const boardFilters = useUiStore((state) => state.boardFilters);
     const setBoardFilters = useUiStore((state) => state.setBoardFilters);
     const selectedProjectIds = boardFilters.selectedProjectIds;
@@ -270,15 +273,19 @@ export function BoardView() {
         [tasks, sortBy],
     );
     const filteredTasks = React.useMemo(() => {
+        const normalizedQuery = searchQuery.trim().toLowerCase();
         const areaFiltered = sortedTasks.filter((task) =>
             taskMatchesAreaFilter(task, resolvedAreaFilter, projectMap, areaById)
         );
-        if (!hasProjectFilters) return areaFiltered;
-        return areaFiltered.filter((task) => {
+        const searchFiltered = normalizedQuery
+            ? areaFiltered.filter((task) => task.title.toLowerCase().includes(normalizedQuery))
+            : areaFiltered;
+        if (!hasProjectFilters) return searchFiltered;
+        return searchFiltered.filter((task) => {
             const projectKey = task.projectId ?? NO_PROJECT_FILTER;
             return boardFilters.selectedProjectIds.includes(projectKey);
         });
-    }, [hasProjectFilters, sortedTasks, boardFilters.selectedProjectIds, resolvedAreaFilter, projectMap, areaById]);
+    }, [hasProjectFilters, sortedTasks, boardFilters.selectedProjectIds, searchQuery, resolvedAreaFilter, projectMap, areaById]);
 
     const sequentialProjectIds = React.useMemo(() => {
         return new Set(projects.filter((p) => p.isSequential && !p.deletedAt).map((p) => p.id));
@@ -300,12 +307,19 @@ export function BoardView() {
 
             const firstTaskIds: string[] = [];
             tasksByProject.forEach((tasksForProject) => {
-                const hasOrder = tasksForProject.some((task) => Number.isFinite(task.orderNum));
+                const hasOrder = tasksForProject.some((task) =>
+                    Number.isFinite(task.order) || Number.isFinite(task.orderNum)
+                );
                 let firstTaskId: string | null = null;
                 let bestKey = Number.POSITIVE_INFINITY;
                 tasksForProject.forEach((task) => {
+                    const taskOrder = Number.isFinite(task.order)
+                        ? (task.order as number)
+                        : Number.isFinite(task.orderNum)
+                            ? (task.orderNum as number)
+                            : Number.POSITIVE_INFINITY;
                     const key = hasOrder
-                        ? (Number.isFinite(task.orderNum) ? (task.orderNum as number) : Number.POSITIVE_INFINITY)
+                        ? taskOrder
                         : new Date(task.createdAt).getTime();
                     if (!firstTaskId || key < bestKey) {
                         firstTaskId = task.id;
@@ -323,8 +337,16 @@ export function BoardView() {
             const aProjectOrder = a.projectId ? (projectOrderMap.get(a.projectId) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
             const bProjectOrder = b.projectId ? (projectOrderMap.get(b.projectId) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
             if (aProjectOrder !== bProjectOrder) return aProjectOrder - bProjectOrder;
-            const aOrder = Number.isFinite(a.orderNum) ? (a.orderNum as number) : Number.POSITIVE_INFINITY;
-            const bOrder = Number.isFinite(b.orderNum) ? (b.orderNum as number) : Number.POSITIVE_INFINITY;
+            const aOrder = Number.isFinite(a.order)
+                ? (a.order as number)
+                : Number.isFinite(a.orderNum)
+                    ? (a.orderNum as number)
+                    : Number.POSITIVE_INFINITY;
+            const bOrder = Number.isFinite(b.order)
+                ? (b.order as number)
+                : Number.isFinite(b.orderNum)
+                    ? (b.orderNum as number)
+                    : Number.POSITIVE_INFINITY;
             if (aOrder !== bOrder) return aOrder - bOrder;
             const aCreated = safeParseDate(a.createdAt)?.getTime() ?? 0;
             const bCreated = safeParseDate(b.createdAt)?.getTime() ?? 0;
@@ -402,116 +424,129 @@ export function BoardView() {
 
     return (
         <ErrorBoundary>
-            <div className="h-full overflow-x-auto overflow-y-hidden">
-                <div className="px-4 pb-4">
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <h2 className="text-2xl font-bold tracking-tight">{t('board.title')}</h2>
-                        <span className="text-xs text-muted-foreground">
-                            {filteredTasks.length} {t('common.tasks')}
-                        </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        {hasProjectFilters && (
+            <div className="flex h-full min-h-0 flex-col">
+                <div className="shrink-0 px-4 pb-4">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <h2 className="text-2xl font-bold tracking-tight">{t('board.title')}</h2>
+                            <span className="text-xs text-muted-foreground">
+                                {filteredTasks.length} {t('common.tasks')}
+                            </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            {hasProjectFilters && (
+                                <button
+                                    type="button"
+                                    onClick={clearProjectFilters}
+                                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                >
+                                    {t('filters.clear')}
+                                </button>
+                            )}
                             <button
                                 type="button"
-                                onClick={clearProjectFilters}
+                                onClick={() => setBoardFilters({ open: !boardFilters.open })}
                                 className="text-xs text-muted-foreground hover:text-foreground transition-colors"
                             >
-                                {t('filters.clear')}
+                                {showFiltersPanel ? t('filters.hide') : t('filters.show')}
                             </button>
-                        )}
-                        <button
-                            type="button"
-                            onClick={() => setBoardFilters({ open: !boardFilters.open })}
-                            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                            {showFiltersPanel ? t('filters.hide') : t('filters.show')}
-                        </button>
+                        </div>
                     </div>
+                    <div className="mt-3">
+                        <input
+                            type="text"
+                            data-view-filter-input
+                            placeholder={t('common.search')}
+                            value={searchQuery}
+                            onChange={(event) => setSearchQuery(event.target.value)}
+                            className="w-full text-sm px-3 py-2 rounded border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                    </div>
+
+                    {showFiltersPanel && (
+                        <div className="mt-3 bg-card border border-border rounded-lg p-3 space-y-2">
+                            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                                <Filter className="w-4 h-4" />
+                                {t('filters.projects')}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => toggleProjectFilter(NO_PROJECT_FILTER)}
+                                    aria-pressed={selectedProjectIds.includes(NO_PROJECT_FILTER)}
+                                    className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                                        selectedProjectIds.includes(NO_PROJECT_FILTER)
+                                            ? "bg-primary text-primary-foreground"
+                                            : "bg-muted hover:bg-muted/80 text-muted-foreground"
+                                    }`}
+                                >
+                                    {t('taskEdit.noProjectOption')}
+                                </button>
+                                {sortedProjects.map((project) => {
+                                    const isActive = selectedProjectIds.includes(project.id);
+                                    const projectColor = project.areaId ? areaById.get(project.areaId)?.color : undefined;
+                                    return (
+                                        <button
+                                            key={project.id}
+                                            type="button"
+                                            onClick={() => toggleProjectFilter(project.id)}
+                                            aria-pressed={isActive}
+                                            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors flex items-center gap-2 ${
+                                                isActive
+                                                    ? "bg-primary text-primary-foreground"
+                                                    : "bg-muted hover:bg-muted/80 text-muted-foreground"
+                                            }`}
+                                        >
+                                            <span
+                                                className="w-2 h-2 rounded-full"
+                                                style={{ backgroundColor: projectColor || "#6B7280" }}
+                                            />
+                                            <span className="truncate max-w-[140px]">{project.title}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
                 </div>
 
-                {showFiltersPanel && (
-                    <div className="mt-3 bg-card border border-border rounded-lg p-3 space-y-2">
-                        <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                            <Filter className="w-4 h-4" />
-                            {t('filters.projects')}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                            <button
-                                type="button"
-                                onClick={() => toggleProjectFilter(NO_PROJECT_FILTER)}
-                                aria-pressed={selectedProjectIds.includes(NO_PROJECT_FILTER)}
-                                className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                                    selectedProjectIds.includes(NO_PROJECT_FILTER)
-                                        ? "bg-primary text-primary-foreground"
-                                        : "bg-muted hover:bg-muted/80 text-muted-foreground"
-                                }`}
-                            >
-                                {t('taskEdit.noProjectOption')}
-                            </button>
-                            {sortedProjects.map((project) => {
-                                const isActive = selectedProjectIds.includes(project.id);
-                                const projectColor = project.areaId ? areaById.get(project.areaId)?.color : undefined;
-                                return (
-                                    <button
-                                        key={project.id}
-                                        type="button"
-                                        onClick={() => toggleProjectFilter(project.id)}
-                                        aria-pressed={isActive}
-                                        className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors flex items-center gap-2 ${
-                                            isActive
-                                                ? "bg-primary text-primary-foreground"
-                                                : "bg-muted hover:bg-muted/80 text-muted-foreground"
-                                        }`}
-                                    >
-                                        <span
-                                            className="w-2 h-2 rounded-full"
-                                            style={{ backgroundColor: projectColor || "#6B7280" }}
-                                        />
-                                        <span className="truncate max-w-[140px]">{project.title}</span>
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            <div className="flex gap-4 h-full min-w-full pb-4 px-4">
-                <DndContext
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
-                    collisionDetection={closestCorners}
-                    sensors={sensors}
-                >
-                    {COLUMNS.map((col) => (
-                        <DroppableColumn
-                            key={col.id}
-                            id={col.id}
-                            label={col.label}
-                            tasks={getColumnTasks(col.id)}
-                            emptyState={getEmptyState(col.id)}
-                            onQuickAdd={openQuickAdd}
-                            compact={isCompact}
-                        />
-                    ))}
-
-                    <DragOverlay>
-                        {activeTask ? (
-                            <div className="w-80 rotate-3 cursor-grabbing">
-                                <TaskItem
-                                    task={activeTask}
-                                    showStatusSelect={false}
-                                    showProjectBadgeInActions={false}
-                                    actionsOverlay
-                                    showHoverHint={false}
+                <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden">
+                    <div className="flex gap-4 h-full min-w-full pb-4 px-4">
+                        <DndContext
+                            onDragStart={handleDragStart}
+                            onDragEnd={handleDragEnd}
+                            collisionDetection={closestCorners}
+                            sensors={sensors}
+                        >
+                            {COLUMNS.map((col) => (
+                                <DroppableColumn
+                                    key={col.id}
+                                    id={col.id}
+                                    label={col.label}
+                                    tasks={getColumnTasks(col.id)}
+                                    emptyState={getEmptyState(col.id)}
+                                    onQuickAdd={openQuickAdd}
+                                    dragLabel={t('board.dragTask') || 'Drag task'}
+                                    compact={isCompact}
                                 />
-                            </div>
-                        ) : null}
-                    </DragOverlay>
-                </DndContext>
-            </div>
+                            ))}
+
+                            <DragOverlay>
+                                {activeTask ? (
+                                    <div className="w-80 rotate-3 cursor-grabbing">
+                                        <TaskItem
+                                            task={activeTask}
+                                            showStatusSelect={false}
+                                            showProjectBadgeInActions={false}
+                                            actionsOverlay
+                                            showHoverHint={false}
+                                        />
+                                    </div>
+                                ) : null}
+                            </DragOverlay>
+                        </DndContext>
+                    </div>
+                </div>
             </div>
         </ErrorBoundary>
     );

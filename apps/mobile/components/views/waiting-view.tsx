@@ -1,5 +1,5 @@
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Platform } from 'react-native';
-import { safeParseDueDate, useTaskStore } from '@mindwtr/core';
+import { extractWaitingPerson, safeParseDueDate, useTaskStore } from '@mindwtr/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Task, TaskStatus } from '@mindwtr/core';
 import { useTheme } from '../../contexts/theme-context';
@@ -20,6 +20,7 @@ export function WaitingView() {
   const { isDark } = useTheme();
   const { t } = useLanguage();
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [selectedWaitingPerson, setSelectedWaitingPerson] = useState('');
   const router = useRouter();
 
   const tc = useThemeColors();
@@ -30,18 +31,38 @@ export function WaitingView() {
     [navBarInset],
   );
 
-  const waitingTasks = tasks
-    .filter((t) => !t.deletedAt && t.status === 'waiting')
-    .sort((a, b) => {
-      if (a.dueDate && !b.dueDate) return -1;
-      if (!a.dueDate && b.dueDate) return 1;
-      if (a.dueDate && b.dueDate) {
-        const aDue = safeParseDueDate(a.dueDate);
-        const bDue = safeParseDueDate(b.dueDate);
-        if (aDue && bDue) return aDue.getTime() - bDue.getTime();
-      }
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  const waitingTasks = useMemo(() => {
+    return tasks
+      .filter((task) => !task.deletedAt && task.status === 'waiting')
+      .sort((a, b) => {
+        if (a.dueDate && !b.dueDate) return -1;
+        if (!a.dueDate && b.dueDate) return 1;
+        if (a.dueDate && b.dueDate) {
+          const aDue = safeParseDueDate(a.dueDate);
+          const bDue = safeParseDueDate(b.dueDate);
+          if (aDue && bDue) return aDue.getTime() - bDue.getTime();
+        }
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+  }, [tasks]);
+  const waitingPeople = useMemo(() => {
+    const people = new Map<string, string>();
+    for (const task of waitingTasks) {
+      const person = extractWaitingPerson(task.description);
+      if (!person) continue;
+      const key = person.toLowerCase();
+      if (!people.has(key)) people.set(key, person);
+    }
+    return [...people.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [waitingTasks]);
+  const filteredWaitingTasks = useMemo(() => {
+    if (!selectedWaitingPerson) return waitingTasks;
+    const selected = selectedWaitingPerson.toLowerCase();
+    return waitingTasks.filter((task) => {
+      const person = extractWaitingPerson(task.description);
+      return !!person && person.toLowerCase() === selected;
     });
+  }, [selectedWaitingPerson, waitingTasks]);
   const areaById = useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
   const deferredProjects = useMemo(() => {
     return [...projects]
@@ -53,6 +74,14 @@ export function WaitingView() {
         return a.title.localeCompare(b.title);
       });
   }, [projects]);
+
+  useEffect(() => {
+    if (!selectedWaitingPerson) return;
+    const selected = selectedWaitingPerson.toLowerCase();
+    if (!waitingPeople.some((person) => person.toLowerCase() === selected)) {
+      setSelectedWaitingPerson('');
+    }
+  }, [selectedWaitingPerson, waitingPeople]);
 
   const handleStatusChange = (id: string, status: TaskStatus) => {
     updateTask(id, { status });
@@ -88,15 +117,59 @@ export function WaitingView() {
     <View style={[styles.container, { backgroundColor: tc.bg }]}>
       <View style={[styles.stats, { backgroundColor: tc.cardBg, borderBottomColor: tc.border }]}>
         <View style={styles.statItem}>
-          <Text style={styles.statValue}>{waitingTasks.length}</Text>
+          <Text style={styles.statValue}>{filteredWaitingTasks.length}</Text>
           <Text style={styles.statLabel}>{t('waiting.count')}</Text>
         </View>
         <View style={styles.statItem}>
           <Text style={styles.statValue}>
-            {waitingTasks.filter((t) => t.dueDate).length}
+            {filteredWaitingTasks.filter((task) => task.dueDate).length}
           </Text>
           <Text style={styles.statLabel}>{t('waiting.withDeadline')}</Text>
         </View>
+      </View>
+
+      <View style={[styles.filterSection, { backgroundColor: tc.cardBg, borderBottomColor: tc.border }]}>
+        <Text style={[styles.filterLabel, { color: tc.secondaryText }]}>
+          {t('process.delegateWhoLabel')}
+        </Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterChips}>
+          <TouchableOpacity
+            onPress={() => setSelectedWaitingPerson('')}
+            style={[
+              styles.filterChip,
+              { borderColor: tc.border, backgroundColor: !selectedWaitingPerson ? tc.tint : tc.filterBg },
+            ]}
+          >
+            <Text style={[styles.filterChipText, { color: !selectedWaitingPerson ? tc.onTint : tc.text }]}>
+              {t('common.all')}
+            </Text>
+          </TouchableOpacity>
+          {waitingPeople.map((person) => {
+            const isActive = selectedWaitingPerson.toLowerCase() === person.toLowerCase();
+            return (
+              <TouchableOpacity
+                key={person}
+                onPress={() => setSelectedWaitingPerson(person)}
+                style={[
+                  styles.filterChip,
+                  { borderColor: tc.border, backgroundColor: isActive ? tc.tint : tc.filterBg },
+                ]}
+              >
+                <Text style={[styles.filterChipText, { color: isActive ? tc.onTint : tc.text }]} numberOfLines={1}>
+                  {person}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+        {selectedWaitingPerson && (
+          <TouchableOpacity
+            onPress={() => setSelectedWaitingPerson('')}
+            style={[styles.clearFilterButton, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
+          >
+            <Text style={[styles.clearFilterText, { color: tc.text }]}>{t('common.clear')}</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <ScrollView style={styles.taskList} showsVerticalScrollIndicator={false} contentContainerStyle={taskListContentStyle}>
@@ -138,8 +211,8 @@ export function WaitingView() {
             })}
           </View>
         )}
-        {waitingTasks.length > 0 ? (
-          waitingTasks.map((task) => (
+        {filteredWaitingTasks.length > 0 ? (
+          filteredWaitingTasks.map((task) => (
             <SwipeableTaskItem
               key={task.id}
               task={task}
@@ -185,6 +258,42 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
     gap: 24,
+  },
+  filterSection: {
+    borderBottomWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  filterLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  filterChips: {
+    gap: 8,
+    alignItems: 'center',
+  },
+  filterChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    maxWidth: 180,
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  clearFilterButton: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  clearFilterText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   statItem: {
     alignItems: 'center',

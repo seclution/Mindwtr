@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, Calendar, Check, CheckSquare, ChevronLeft, RefreshCw, Star, X, type LucideIcon } from 'lucide-react';
+import { ArrowRight, Calendar, Check, CheckSquare, ChevronLeft, Star, X, type LucideIcon } from 'lucide-react';
 import {
     PRESET_CONTEXTS,
     isDueForReview,
@@ -20,7 +20,7 @@ import { InboxProcessor } from '../InboxProcessor';
 import { TaskItem } from '../../TaskItem';
 import { fetchExternalCalendarEvents } from '../../../lib/external-calendar-events';
 
-type DailyReviewStep = 'intro' | 'today' | 'focus' | 'inbox' | 'waiting' | 'completed';
+type DailyReviewStep = 'today' | 'focus' | 'inbox' | 'waiting' | 'completed';
 
 function isSameDay(a: Date, b: Date): boolean {
     return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -31,7 +31,7 @@ interface DailyReviewGuideModalProps {
 }
 
 export function DailyReviewGuideModal({ onClose }: DailyReviewGuideModalProps) {
-    const [currentStep, setCurrentStep] = useState<DailyReviewStep>('intro');
+    const [currentStep, setCurrentStep] = useState<DailyReviewStep>('today');
     const { tasks, projects, areas, settings, addProject, updateTask, deleteTask } = useTaskStore(
         (state) => ({
             tasks: state.tasks,
@@ -108,12 +108,17 @@ export function DailyReviewGuideModal({ onClose }: DailyReviewGuideModalProps) {
         });
         const firstIds: string[] = [];
         tasksByProject.forEach((tasksForProject: Task[]) => {
-            const hasOrder = tasksForProject.some((task) => Number.isFinite(task.orderNum));
+            const hasOrder = tasksForProject.some((task) => Number.isFinite(task.order) || Number.isFinite(task.orderNum));
             let firstTaskId: string | null = null;
             let bestKey = Number.POSITIVE_INFINITY;
             tasksForProject.forEach((task) => {
+                const taskOrder = Number.isFinite(task.order)
+                    ? (task.order as number)
+                    : Number.isFinite(task.orderNum)
+                        ? (task.orderNum as number)
+                        : Number.POSITIVE_INFINITY;
                 const key = hasOrder
-                    ? (Number.isFinite(task.orderNum) ? (task.orderNum as number) : Number.POSITIVE_INFINITY)
+                    ? taskOrder
                     : new Date(task.createdAt).getTime();
                 if (!firstTaskId || key < bestKey) {
                     firstTaskId = task.id;
@@ -228,7 +233,6 @@ export function DailyReviewGuideModal({ onClose }: DailyReviewGuideModalProps) {
     const tomorrowCalendarEvents = useMemo(() => getEventsForDay(tomorrow), [externalCalendarEvents, tomorrow]);
 
     const steps: { id: DailyReviewStep; title: string; description: string; icon: LucideIcon }[] = [
-        { id: 'intro', title: t('dailyReview.title'), description: t('dailyReview.introDesc'), icon: RefreshCw },
         { id: 'today', title: t('dailyReview.todayStep'), description: t('dailyReview.todayDesc'), icon: Calendar },
         { id: 'focus', title: t('dailyReview.focusStep'), description: t('dailyReview.focusDesc'), icon: CheckSquare },
         { id: 'inbox', title: t('dailyReview.inboxStep'), description: t('dailyReview.inboxDesc'), icon: CheckSquare },
@@ -376,23 +380,6 @@ export function DailyReviewGuideModal({ onClose }: DailyReviewGuideModalProps) {
 
     const renderStepContent = () => {
         switch (currentStep) {
-            case 'intro':
-                return (
-                    <div className="text-center space-y-6 py-12">
-                        <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-6">
-                            <RefreshCw className="w-10 h-10 text-primary" />
-                        </div>
-                        <h2 className="text-3xl font-bold">{t('dailyReview.introTitle')}</h2>
-                        <p className="text-muted-foreground text-lg max-w-md mx-auto">{t('dailyReview.introDesc')}</p>
-                        <button
-                            onClick={nextStep}
-                            className="bg-primary text-primary-foreground px-8 py-3 rounded-lg text-lg font-medium hover:bg-primary/90 transition-colors"
-                        >
-                            {t('dailyReview.start')}
-                        </button>
-                    </div>
-                );
-
             case 'today': {
                 const list = [...overdueTasks, ...dueTodayTasks];
                 return (
@@ -407,13 +394,13 @@ export function DailyReviewGuideModal({ onClose }: DailyReviewGuideModalProps) {
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                             <div className="bg-card border border-border rounded-lg p-3 space-y-2">
                                 <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                                    {safeFormatDate(today, 'MMM d')} · {t('calendar.events')}
+                                    {safeFormatDate(today, 'P')} · {t('calendar.events')}
                                 </h4>
                                 {renderCalendarEventList(todayCalendarEvents)}
                             </div>
                             <div className="bg-card border border-border rounded-lg p-3 space-y-2">
                                 <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                                    {safeFormatDate(tomorrow, 'MMM d')} · {t('calendar.events')}
+                                    {safeFormatDate(tomorrow, 'P')} · {t('calendar.events')}
                                 </h4>
                                 {renderCalendarEventList(tomorrowCalendarEvents)}
                             </div>
@@ -550,7 +537,7 @@ export function DailyReviewGuideModal({ onClose }: DailyReviewGuideModalProps) {
                         {renderStepContent()}
                     </div>
 
-                    {currentStep !== 'intro' && currentStep !== 'completed' && (
+                    {currentStep !== 'completed' && (
                         <div className="flex justify-between items-center pt-3.5 border-t border-border mt-5">
                             <button
                                 onClick={prevStep}

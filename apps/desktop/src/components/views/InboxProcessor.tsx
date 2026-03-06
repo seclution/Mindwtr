@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Play } from 'lucide-react';
-import { safeParseDate, safeFormatDate, hasTimeComponent, type AppData, type Area, type Project, type Task } from '@mindwtr/core';
+import { DEFAULT_PROJECT_COLOR, safeParseDate, safeFormatDate, hasTimeComponent, type AppData, type Area, type Project, type Task } from '@mindwtr/core';
 
 import { InboxProcessingWizard, type ProcessingStep } from '../InboxProcessingWizard';
 import { resolveAreaFilter, taskMatchesAreaFilter } from '../../lib/area-filter';
@@ -13,8 +13,8 @@ type InboxProcessorProps = {
     areas: Area[];
     settings?: AppData['settings'];
     addProject: (title: string, color: string) => Promise<Project | null>;
-    updateTask: (id: string, updates: Partial<Task>) => Promise<void>;
-    deleteTask: (id: string) => Promise<void>;
+    updateTask: (id: string, updates: Partial<Task>) => Promise<unknown>;
+    deleteTask: (id: string) => Promise<unknown>;
     allContexts: string[];
     isProcessing: boolean;
     setIsProcessing: (value: boolean) => void;
@@ -49,6 +49,7 @@ export function InboxProcessor({
     const [nextActionDraft, setNextActionDraft] = useState('');
     const [customContext, setCustomContext] = useState('');
     const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+    const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
     const [scheduleDate, setScheduleDate] = useState('');
     const [scheduleTime, setScheduleTime] = useState('');
     const [scheduleTimeDraft, setScheduleTimeDraft] = useState('');
@@ -81,6 +82,10 @@ export function InboxProcessor({
         const query = projectSearch.trim().toLowerCase();
         return projects.some((project) => project.title.toLowerCase() === query);
     }, [projects, projectSearch]);
+    const activeAreas = useMemo(
+        () => areas.filter((area) => !area.deletedAt).sort((a, b) => a.order - b.order),
+        [areas],
+    );
 
     const inboxCount = useMemo(() => (
         tasks.filter((task) => {
@@ -114,6 +119,7 @@ export function InboxProcessor({
         setNextActionDraft('');
         setCustomContext('');
         setSelectedProjectId(null);
+        setSelectedAreaId(null);
         setScheduleDate('');
         setScheduleTime('');
         setScheduleTimeDraft('');
@@ -134,6 +140,7 @@ export function InboxProcessor({
         setProjectTitleDraft(task.title);
         setNextActionDraft('');
         setSelectedProjectId(task.projectId ?? null);
+        setSelectedAreaId(task.projectId ? null : (task.areaId ?? null));
         const parsedStart = task.startTime ? safeParseDate(task.startTime) : null;
         const dateValue = parsedStart ? safeFormatDate(parsedStart, 'yyyy-MM-dd') : '';
         const timeValue = parsedStart && task.startTime && hasTimeComponent(task.startTime)
@@ -218,7 +225,23 @@ export function InboxProcessor({
         });
     }, []);
 
-    const handleActionable = () => goToStep(twoMinuteFirst ? 'decide' : 'twomin');
+    const continueFromProjectCheck = useCallback(() => {
+        goToStep(twoMinuteFirst ? 'decide' : 'twomin');
+    }, [goToStep, twoMinuteFirst]);
+
+    const handleActionable = () => goToStep('projectcheck');
+
+    const handleProjectCheckNo = useCallback(() => {
+        continueFromProjectCheck();
+    }, [continueFromProjectCheck]);
+
+    const handleProjectCheckYes = useCallback(() => {
+        setConvertToProject(true);
+        const baseTitle = processingTitle.trim() || processingTask?.title || '';
+        setProjectTitleDraft(baseTitle);
+        setNextActionDraft(baseTitle);
+        goToStep('project');
+    }, [goToStep, processingTask?.title, processingTitle]);
 
     const handleTwoMinDone = () => {
         if (processingTask) {
@@ -386,6 +409,7 @@ export function InboxProcessor({
                 contexts: selectedContexts,
                 tags: selectedTags,
                 projectId: projectId || undefined,
+                areaId: projectId ? undefined : (selectedAreaId || undefined),
                 ...(scheduleEnabled && scheduleDate
                     ? { startTime: scheduleTime ? `${scheduleDate}T${scheduleTime}` : scheduleDate }
                     : {}),
@@ -404,7 +428,7 @@ export function InboxProcessor({
             return;
         }
         const existing = projects.find((project) => project.title.toLowerCase() === projectTitle.toLowerCase());
-        const project = existing ?? await addProject(projectTitle, '#94a3b8');
+        const project = existing ?? await addProject(projectTitle, DEFAULT_PROJECT_COLOR);
         if (!project) return;
         applyProcessingEdits({
             title: nextAction,
@@ -449,6 +473,8 @@ export function InboxProcessor({
                 handleSkip={handleSkip}
                 handleNotActionable={handleNotActionable}
                 handleActionable={handleActionable}
+                handleProjectCheckNo={handleProjectCheckNo}
+                handleProjectCheckYes={handleProjectCheckYes}
                 handleTwoMinDone={handleTwoMinDone}
                 handleTwoMinNo={handleTwoMinNo}
                 handleDefer={handleDefer}
@@ -479,6 +505,7 @@ export function InboxProcessor({
                 projectSearch={projectSearch}
                 setProjectSearch={setProjectSearch}
                 projects={projects}
+                areas={activeAreas}
                 filteredProjects={filteredProjects}
                 addProject={addProject}
                 handleSetProject={handleSetProject}
@@ -488,6 +515,8 @@ export function InboxProcessor({
                 showProjectInRefine={projectFirst}
                 selectedProjectId={selectedProjectId}
                 setSelectedProjectId={setSelectedProjectId}
+                selectedAreaId={selectedAreaId}
+                setSelectedAreaId={setSelectedAreaId}
                 scheduleDate={scheduleDate}
                 scheduleTimeDraft={scheduleTimeDraft}
                 setScheduleDate={handleScheduleDateChange}

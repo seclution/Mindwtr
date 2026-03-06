@@ -28,11 +28,11 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: release-macos-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   macos:
@@ -49,13 +49,15 @@ jobs:
     runs-on: ${{ matrix.platform }}
     name: macOS Build (${{ matrix.rust_target }})
     timeout-minutes: 90
+    env:
+      VITE_DROPBOX_APP_KEY: ${{ vars.VITE_DROPBOX_APP_KEY || secrets.VITE_DROPBOX_APP_KEY }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
           targets: ${{ matrix.rust_target }}
 
@@ -73,7 +75,7 @@ jobs:
           which SetFile || true
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
         with:
           workspaces: apps/desktop/src-tauri
 
@@ -81,7 +83,7 @@ jobs:
         run: cargo install tauri-cli --version "^2.0"
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
         with:
           bun-version: "1.x"
 
@@ -89,12 +91,50 @@ jobs:
         run: bun install
 
       - name: Build App
+        timeout-minutes: 40
         run: |
+          set -euo pipefail
           cd apps/desktop
-          cargo tauri build --target ${{ matrix.rust_target }}
+
+          cleanup_dmg_mounts() {
+            # Detach stale Mindwtr DMG mounts that can make hdiutil report "Resource busy".
+            local devices
+            devices="$(hdiutil info | awk '
+              /^\/dev\// { dev=$1 }
+              /\/Volumes\/Mindwtr/ { if (dev != "") print dev }
+            ' | sort -u)"
+            if [ -n "${devices}" ]; then
+              while IFS= read -r dev; do
+                [ -n "${dev}" ] || continue
+                hdiutil detach "${dev}" -force || true
+              done <<< "${devices}"
+            fi
+          }
+
+          for attempt in 1 2 3; do
+            log_file="${RUNNER_TEMP}/tauri-macos-build-${{ matrix.rust_target }}-${attempt}.log"
+            echo "Running macOS bundle build (attempt ${attempt}/3)..."
+            if cargo tauri build --target ${{ matrix.rust_target }} 2>&1 | tee "${log_file}"; then
+              exit 0
+            fi
+
+            if grep -q "hdiutil: create failed - Resource busy" "${log_file}"; then
+              echo "Detected transient hdiutil resource-busy failure. Cleaning stale mounts and retrying..."
+              cleanup_dmg_mounts
+              sleep $((attempt * 5))
+              continue
+            fi
+
+            echo "Non-retryable macOS build failure."
+            exit 1
+          done
+
+          echo "::error::macOS bundle build failed after retries."
+          exit 1
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_ANALYTICS_HEARTBEAT_URL: ${{ secrets.ANALYTICS_HEARTBEAT_URL }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -105,6 +145,7 @@ jobs:
           DEVELOPER_DIR: ${{ env.DEVELOPER_DIR }}
 
       - name: Notarize DMG
+        timeout-minutes: 25
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -149,8 +190,9 @@ jobs:
         shell: bash
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact_name }}
           path: release-artifacts/*
           if-no-files-found: warn
+          retention-days: 28

@@ -56,13 +56,16 @@ export function SwipeableTaskItem({
     const swipeableRef = useRef<Swipeable>(null);
     const ignorePressUntil = useRef<number>(0);
     const { t, language } = useLanguage();
-    const { updateTask, projects, areas, settings, tasks } = useTaskStore();
+    const updateTask = useTaskStore((state) => state.updateTask);
+    const projects = useTaskStore((state) => state.projects);
+    const areas = useTaskStore((state) => state.areas);
+    const settings = useTaskStore((state) => state.settings);
+    const focusedCount = useTaskStore((state) => state.getDerivedState().focusedCount);
     const timeEstimatesEnabled = settings?.features?.timeEstimates === true;
-
-    const focusedCount = useMemo(
-        () => tasks.filter((taskItem) => taskItem.isFocusedToday && !taskItem.deletedAt && taskItem.status !== 'done' && taskItem.status !== 'reference').length,
-        [tasks]
-    );
+    const canShowFocusToggle = showFocusToggle
+        && task.status !== 'done'
+        && task.status !== 'reference'
+        && task.status !== 'archived';
 
     const toggleFocus = () => {
         if (selectionMode) return;
@@ -74,7 +77,11 @@ export function SwipeableTaskItem({
             Alert.alert(t('digest.focus') || 'Focus', t('agenda.maxFocusItems') || 'Max 3 focus items.');
             return;
         }
-        updateTask(task.id, { isFocusedToday: true });
+        const updates: Partial<Task> = {
+            isFocusedToday: true,
+            ...(task.status !== 'next' ? { status: 'next' } : {}),
+        };
+        updateTask(task.id, updates);
     };
 
     const areaById = useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
@@ -316,7 +323,7 @@ export function SwipeableTaskItem({
                     shadowRadius: 6,
                     elevation: 2,
                 },
-                showFocusToggle && task.isFocusedToday && !selectionMode && { borderWidth: 2, borderColor: tc.tint },
+                canShowFocusToggle && task.isFocusedToday && !selectionMode && { borderWidth: 2, borderColor: tc.tint },
                 isHighlighted && !selectionMode && { borderWidth: 2, borderColor: tc.tint },
                 selectionMode && { borderWidth: 2, borderColor: isMultiSelected ? tc.tint : tc.border }
             ]}
@@ -347,13 +354,13 @@ export function SwipeableTaskItem({
                                 style={[
                                     styles.taskTitle,
                                     { color: tc.text, writingDirection: textDirection, textAlign },
-                                    showFocusToggle && styles.taskTitleFlex,
+                                    canShowFocusToggle && styles.taskTitleFlex,
                                 ]}
                                 numberOfLines={2}
                             >
                                 {task.title}
                             </Text>
-                            {showFocusToggle && !selectionMode && (
+                            {canShowFocusToggle && !selectionMode && (
                                 <Pressable
                                     onPress={(event) => {
                                         event.stopPropagation();

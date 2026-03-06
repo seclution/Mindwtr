@@ -1,10 +1,19 @@
 import type { Language } from '../../../contexts/language-context';
+import {
+    type GlobalQuickAddShortcutSetting,
+    getGlobalQuickAddShortcutOptions,
+} from '../../../lib/global-quick-add-shortcut';
 
 type ThemeMode = 'system' | 'light' | 'dark' | 'eink' | 'nord' | 'sepia';
 type DensityMode = 'comfortable' | 'compact';
 type WeekStart = 'sunday' | 'monday';
+type DateFormatSetting = 'system' | 'dmy' | 'mdy';
 
 type Labels = {
+    lookAndFeel: string;
+    localization: string;
+    input: string;
+    windowBehavior: string;
     appearance: string;
     density: string;
     densityDesc: string;
@@ -20,8 +29,16 @@ type Labels = {
     weekStart: string;
     weekStartSunday: string;
     weekStartMonday: string;
+    dateFormat: string;
+    dateFormatSystem: string;
+    dateFormatDmy: string;
+    dateFormatMdy: string;
     keybindings: string;
     keybindingsDesc: string;
+    undoNotifications: string;
+    undoNotificationsDesc: string;
+    globalQuickAddShortcut: string;
+    globalQuickAddShortcutDesc: string;
     keybindingVim: string;
     keybindingEmacs: string;
     viewShortcuts: string;
@@ -48,8 +65,14 @@ type SettingsMainPageProps = {
     onLanguageChange: (lang: Language) => void;
     weekStart: WeekStart;
     onWeekStartChange: (weekStart: WeekStart) => void;
+    dateFormat: DateFormatSetting;
+    onDateFormatChange: (format: DateFormatSetting) => void;
     keybindingStyle: 'vim' | 'emacs';
     onKeybindingStyleChange: (style: 'vim' | 'emacs') => void;
+    globalQuickAddShortcut: GlobalQuickAddShortcutSetting;
+    onGlobalQuickAddShortcutChange: (shortcut: GlobalQuickAddShortcutSetting) => void;
+    undoNotificationsEnabled: boolean;
+    onUndoNotificationsChange: (enabled: boolean) => void;
     onOpenHelp: () => void;
     languages: LanguageOption[];
     showWindowDecorations?: boolean;
@@ -123,8 +146,14 @@ export function SettingsMainPage({
     onLanguageChange,
     weekStart,
     onWeekStartChange,
+    dateFormat,
+    onDateFormatChange,
     keybindingStyle,
     onKeybindingStyleChange,
+    globalQuickAddShortcut,
+    onGlobalQuickAddShortcutChange,
+    undoNotificationsEnabled,
+    onUndoNotificationsChange,
     onOpenHelp,
     languages,
     showWindowDecorations = false,
@@ -138,11 +167,17 @@ export function SettingsMainPage({
     onTrayVisibleChange,
 }: SettingsMainPageProps) {
     const hasWindowSection = showWindowDecorations || showCloseBehavior || showTrayToggle;
+    const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
+    const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent);
+    const globalQuickAddOptions = getGlobalQuickAddShortcutOptions({
+        isMac,
+        isWindows,
+    });
 
     return (
         <div className="space-y-5">
             {/* Look & Feel */}
-            <SectionHeader>Look &amp; Feel</SectionHeader>
+            <SectionHeader>{t.lookAndFeel}</SectionHeader>
             <SettingsCard>
                 <SettingsRow
                     title={t.appearance}
@@ -174,7 +209,7 @@ export function SettingsMainPage({
             </SettingsCard>
 
             {/* Localization */}
-            <SectionHeader>Localization</SectionHeader>
+            <SectionHeader>{t.localization}</SectionHeader>
             <SettingsCard>
                 <SettingsRow
                     title={t.language}
@@ -205,10 +240,30 @@ export function SettingsMainPage({
                         <option value="monday">{t.weekStartMonday}</option>
                     </select>
                 </SettingsRow>
+                <SettingsRow
+                    title={t.dateFormat}
+                    description={
+                        dateFormat === 'dmy'
+                            ? t.dateFormatDmy
+                            : dateFormat === 'mdy'
+                                ? t.dateFormatMdy
+                                : t.dateFormatSystem
+                    }
+                >
+                    <select
+                        value={dateFormat}
+                        onChange={(e) => onDateFormatChange(e.target.value as DateFormatSetting)}
+                        className={selectCls}
+                    >
+                        <option value="system">{t.dateFormatSystem}</option>
+                        <option value="dmy">{t.dateFormatDmy}</option>
+                        <option value="mdy">{t.dateFormatMdy}</option>
+                    </select>
+                </SettingsRow>
             </SettingsCard>
 
             {/* Input */}
-            <SectionHeader>Input</SectionHeader>
+            <SectionHeader>{t.input}</SectionHeader>
             <SettingsCard>
                 <SettingsRow title={t.keybindings} description={t.keybindingsDesc}>
                     <select
@@ -226,12 +281,31 @@ export function SettingsMainPage({
                         {t.viewShortcuts}
                     </button>
                 </SettingsRow>
+                <SettingsRow title={t.globalQuickAddShortcut} description={t.globalQuickAddShortcutDesc}>
+                    <select
+                        value={globalQuickAddShortcut}
+                        onChange={(e) => onGlobalQuickAddShortcutChange(e.target.value as GlobalQuickAddShortcutSetting)}
+                        className={selectCls}
+                    >
+                        {globalQuickAddOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                                {option.label}
+                            </option>
+                        ))}
+                    </select>
+                </SettingsRow>
+                <SettingsRow title={t.undoNotifications} description={t.undoNotificationsDesc}>
+                    <Toggle
+                        enabled={undoNotificationsEnabled}
+                        onChange={() => onUndoNotificationsChange(!undoNotificationsEnabled)}
+                    />
+                </SettingsRow>
             </SettingsCard>
 
             {/* Window Behavior */}
             {hasWindowSection && (
                 <>
-                    <SectionHeader>Window Behavior</SectionHeader>
+                    <SectionHeader>{t.windowBehavior}</SectionHeader>
                     <SettingsCard>
                         {showWindowDecorations && (
                             <SettingsRow title={t.windowDecorations} description={t.windowDecorationsDesc}>
