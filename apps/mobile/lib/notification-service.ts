@@ -1,4 +1,5 @@
 import {
+  initializeLocalNotificationChannels,
   requestLocalNotificationPermission,
   sendLocalMobileNotification,
   setLocalNotificationOpenHandler,
@@ -23,6 +24,11 @@ type NotificationPermissionResult = {
 
 export function setNotificationOpenHandler(handler: NotificationOpenHandler | null): void {
   setLocalNotificationOpenHandler(handler);
+}
+
+
+export async function initializeMobileNotificationChannels(): Promise<void> {
+  await initializeLocalNotificationChannels();
 }
 
 export async function requestNotificationPermission(): Promise<NotificationPermissionResult> {

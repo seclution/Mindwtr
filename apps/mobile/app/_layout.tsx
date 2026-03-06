@@ -26,7 +26,12 @@ import {
   sendDailyHeartbeat,
 } from '@mindwtr/core';
 import { mobileStorage } from '../lib/storage-adapter';
-import { setNotificationOpenHandler, startMobileNotifications, stopMobileNotifications } from '../lib/notification-service';
+import {
+  initializeMobileNotificationChannels,
+  setNotificationOpenHandler,
+  startMobileNotifications,
+  stopMobileNotifications,
+} from '../lib/notification-service';
 import { performMobileSync } from '../lib/sync-service';
 import { isLikelyOfflineSyncError, resolveBackend, type SyncBackend } from '../lib/sync-service-utils';
 import { SYNC_BACKEND_KEY } from '../lib/sync-constants';
@@ -218,6 +223,10 @@ function RootLayoutContent() {
     if (Platform.OS !== 'android' || isExpoGo) return;
     SplashScreen.setOptions({ duration: 0, fade: false });
   }, [isExpoGo]);
+
+  useEffect(() => {
+    initializeMobileNotificationChannels().catch(logAppError);
+  }, []);
 
   const refreshSyncCadence = useCallback(async (): Promise<AutoSyncCadence> => {
     const now = Date.now();

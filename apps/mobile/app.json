@@ -41,7 +41,8 @@
         "android.permission.WRITE_EXTERNAL_STORAGE"
       ],
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "defaultChannel": "mindwtr-default"
     },
     "web": {
       "output": "static",
