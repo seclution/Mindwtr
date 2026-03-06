@@ -42,6 +42,7 @@ type AlarmNotificationsApi = {
   deleteRepeatingAlarm: (id: AlarmId) => void;
   removeFiredNotification: (id: AlarmId) => void;
   removeAllFiredNotifications: () => void;
+  createChannel?: (id: string, name: string) => void;
   requestPermissions?: (permissions: { alert: boolean; badge: boolean; sound: boolean }) => Promise<unknown>;
 };
 
@@ -55,6 +56,7 @@ type LocalAlarmConfig = {
   title: string;
   message: string;
   fireAt: Date;
+  channel: string;
   repeatInterval?: 'daily' | 'weekly';
   hasButtons?: boolean;
   data?: Record<string, string>;
@@ -65,7 +67,12 @@ type NativeEmitterSubscription = {
 };
 
 const LOCAL_ALARM_MAP_KEY = 'mindwtr:local:alarms:v1';
-const LOCAL_ALARM_CHANNEL = 'mindwtr_reminders';
+const LOCAL_DEFAULT_CHANNEL = 'mindwtr-default';
+const LOCAL_DIGEST_CHANNEL = 'mindwtr-digest';
+const LOCAL_CHANNEL_SPECS = [
+  { id: LOCAL_DEFAULT_CHANNEL, name: 'Mindwtr' },
+  { id: LOCAL_DIGEST_CHANNEL, name: 'Digests & Reviews' },
+] as const;
 const LOCAL_NOTIFICATION_COLOR = '#3b82f6';
 const LOCAL_SMALL_ICON = 'ic_launcher';
 const LOCAL_DIGEST_MORNING_KEY = 'digest:morning';
@@ -85,6 +92,7 @@ let rescheduleTimer: ReturnType<typeof setTimeout> | null = null;
 let rescheduleQueue: Promise<void> = Promise.resolve();
 let alarmMap = new Map<string, LocalAlarmMapEntry>();
 let loadedAlarmMap = false;
+let channelsInitialized = false;
 const configByKey = new Map<string, string>();
 
 const logNotificationError = (message: string, error?: unknown) => {
@@ -272,10 +280,42 @@ function buildAlarmConfigSignature(config: LocalAlarmConfig): string {
     title: config.title,
     message: config.message,
     fireAt: config.fireAt.toISOString(),
+    channel: config.channel,
     repeatInterval: config.repeatInterval ?? 'once',
     hasButtons: config.hasButtons === true,
     data: config.data ?? {},
   });
+}
+
+function createChannelIfAvailable(api: AlarmNotificationsApi, id: string, name: string): void {
+  if (typeof api.createChannel === 'function') {
+    api.createChannel(id, name);
+    return;
+  }
+
+  const nativeModule = (NativeModules as Record<string, unknown>).RNAlarmNotification as
+    | { createChannel?: (channelId: string, channelName: string) => void }
+    | undefined;
+  if (nativeModule && typeof nativeModule.createChannel === 'function') {
+    nativeModule.createChannel(id, name);
+  }
+}
+
+export async function initializeLocalNotificationChannels(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  if (channelsInitialized) return;
+
+  const api = await loadAlarmApi();
+  if (!api) return;
+
+  try {
+    for (const channel of LOCAL_CHANNEL_SPECS) {
+      createChannelIfAvailable(api, channel.id, channel.name);
+    }
+    channelsInitialized = true;
+  } catch (error) {
+    logNotificationError('Failed to initialize Android notification channels', error);
+  }
 }
 
 async function cancelAlarmByKey(api: AlarmNotificationsApi, key: string): Promise<boolean> {
@@ -317,7 +357,7 @@ async function scheduleAlarmForKey(api: AlarmNotificationsApi, key: string, conf
   const detailsBase: Record<string, unknown> = {
     title: config.title,
     message: config.message,
-    channel: LOCAL_ALARM_CHANNEL,
+    channel: config.channel,
     small_icon: LOCAL_SMALL_ICON,
     color: LOCAL_NOTIFICATION_COLOR,
     schedule_type: config.repeatInterval ? 'repeat' : 'once',
@@ -397,6 +437,7 @@ async function runRescheduleCycle(api: AlarmNotificationsApi): Promise<void> {
       title: tr['digest.morningTitle'],
       message: tr['digest.morningBody'],
       fireAt: nextDailyTime(hour, minute),
+      channel: LOCAL_DIGEST_CHANNEL,
       repeatInterval: 'daily',
       data: { kind: 'daily-digest' },
     });
@@ -410,6 +451,7 @@ async function runRescheduleCycle(api: AlarmNotificationsApi): Promise<void> {
       title: tr['digest.eveningTitle'],
       message: tr['digest.eveningBody'],
       fireAt: nextDailyTime(hour, minute),
+      channel: LOCAL_DIGEST_CHANNEL,
       repeatInterval: 'daily',
       data: { kind: 'daily-digest' },
     });
@@ -426,6 +468,7 @@ async function runRescheduleCycle(api: AlarmNotificationsApi): Promise<void> {
       title: tr['digest.weeklyReviewTitle'],
       message: tr['digest.weeklyReviewBody'],
       fireAt: nextWeeklyTime(day, hour, minute),
+      channel: LOCAL_DIGEST_CHANNEL,
       repeatInterval: 'weekly',
       data: { kind: 'weekly-review' },
     });
@@ -443,6 +486,7 @@ async function runRescheduleCycle(api: AlarmNotificationsApi): Promise<void> {
       title: task.title,
       message: task.description || tr['digest.morningBody'],
       fireAt: next,
+      channel: LOCAL_DEFAULT_CHANNEL,
       hasButtons: true,
       data: {
         kind: 'task-reminder',
@@ -468,6 +512,7 @@ async function runRescheduleCycle(api: AlarmNotificationsApi): Promise<void> {
         title: project.title,
         message: reviewLabel,
         fireAt: reviewAt,
+        channel: LOCAL_DIGEST_CHANNEL,
         data: {
           kind: 'project-review',
           projectId: project.id,
@@ -551,7 +596,7 @@ export async function sendLocalMobileNotification(
     await api.scheduleAlarm({
       title: trimmedTitle,
       message: String(message || '').trim(),
-      channel: LOCAL_ALARM_CHANNEL,
+      channel: LOCAL_DEFAULT_CHANNEL,
       small_icon: LOCAL_SMALL_ICON,
       color: LOCAL_NOTIFICATION_COLOR,
       fire_date: api.parseDate(new Date(Date.now() + 2000)),
@@ -570,6 +615,8 @@ export async function sendLocalMobileNotification(
 export async function startLocalMobileNotifications(): Promise<void> {
   if (started) return;
   started = true;
+
+  await initializeLocalNotificationChannels();
 
   const api = await loadAlarmApi();
   if (!api) {
@@ -630,6 +677,7 @@ export async function stopLocalMobileNotifications(): Promise<void> {
   await saveAlarmMap();
 
   loadedAlarmMap = false;
+  channelsInitialized = false;
   resetRuntimeState();
   started = false;
 }

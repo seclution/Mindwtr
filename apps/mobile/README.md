@@ -402,3 +402,14 @@ bun install
 - [NativeWind Documentation](https://www.nativewind.dev/)
 - [Tailwind CSS](https://tailwindcss.com/)
 - [React Native](https://reactnative.dev/)
+
+
+## Android notification channel smoke test (manual)
+
+1. Uninstall Mindwtr from an Android 13+ device/emulator.
+2. Install and launch Mindwtr once (no reminder/digest setup yet).
+3. Open **System Settings → Apps → Mindwtr → Notifications**.
+4. Verify channels are already visible (for example **Mindwtr** and **Digests & Reviews**) and not greyed out/empty.
+5. Back in the app, enable/schedule a reminder or digest.
+6. Confirm the notification still arrives on schedule and is assigned to the expected channel.
+

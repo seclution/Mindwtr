@@ -9,6 +9,7 @@ declare module 'react-native-alarm-notification' {
     stopAlarmSound: () => void;
     removeFiredNotification: (id: number) => void;
     removeAllFiredNotifications: () => void;
+    createChannel?: (channelId: string, channelName: string) => void;
     getScheduledAlarms: () => Promise<Array<Record<string, unknown>>>;
     requestPermissions?: (permissions: { alert: boolean; badge: boolean; sound: boolean }) => Promise<unknown>;
     checkPermissions?: (callback: (permissions: unknown) => void) => void;
